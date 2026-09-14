@@ -137,5 +137,25 @@ task(category="quick", load_skills=[], run_in_background=true, prompt="Redesign 
 | 3D graphics, computer use, browser use, backend, logic, algorithms, CAPTCHA solving, multimodal, autonomous research + end-to-end implementation | \`deep\` |
 | Single-file typo, trivial config change | \`quick\` |
 
-**When in doubt about category, it is almost never \`quick\` or \`unspecified-*\`. Match the domain.**`
+**When in doubt about category, it is almost never \`quick\` or \`unspecified-*\`. Match the domain.**
+
+---
+
+### Model Tier Selection (independent of category)
+
+\`category\` / \`subagent_type\` decides WHAT KIND OF WORK. \`model_tier\` decides HOW POWERFUL A MODEL runs it. These are orthogonal. Choose the cheapest tier with a high probability of success - not the cheapest possible, and not a heavyweight tier for trivial work.
+
+| Tier | Use when | Example |
+|---|---|---|
+| \`fast\` | low-risk mechanical work: search, grep, repository mapping, finding definitions/references, reading files, tracing straightforward call chains, locating tests, basic dependency inspection, documentation lookup | \`task(subagent_type="explore", model_tier="fast")\` |
+| \`balanced\` | ordinary software engineering: contained feature work, unit tests, straightforward refactors, normal API/UI changes, config changes, unremarkable code review | \`task(category="quick", model_tier="balanced")\` |
+| \`strong\` | substantial reasoning: difficult debugging, multi-module bugs, concurrency, state synchronization, schema migrations, performance, unfamiliar interacting systems, large refactors, security-sensitive work, tasks a lower tier already failed | \`task(category="deep", model_tier="strong")\` |
+| \`master\` | high-impact, sparingly: architecture, cryptography, authz architecture, destructive infrastructure, subtle security boundaries, genuinely ambiguous design, problems STRONG repeatedly failed | \`task(subagent_type="oracle", model_tier="master")\` |
+
+Rules:
+
+- Judge complexity by ambiguity, reasoning depth, interacting-system count, risk, reversibility, security impact, context required, unfamiliarity, and prior failed attempts. File count alone is NOT sufficient.
+- Escalate after genuine reasoning failures (\`fast → balanced → strong → master\`). Do not retry the identical failed strategy indefinitely. Two substantive failures at the same tier normally warrant escalation.
+- Do not treat infrastructure errors (model not found, provider unavailable, rate limit) as proof the model's reasoning was inadequate - those follow model-resolution fallback, not tier escalation.
+- \`master\` uses the current parent/main-session model. If the main agent can do that reasoning without task isolation, prefer doing it in the parent; use a \`master\` subagent only when isolation, parallelism, independent review, or fresh context materially helps.`
 }
