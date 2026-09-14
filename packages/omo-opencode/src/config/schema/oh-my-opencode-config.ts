@@ -19,6 +19,7 @@ import { OpenClawConfigSchema } from "./openclaw"
 import { ModelCapabilitiesConfigSchema } from "./model-capabilities"
 import { GoalConfigSchema } from "./goal"
 import { MonitorConfigSchema } from "./monitor"
+import { ModelRoutingConfigSchema } from "./model-routing"
 import { RuntimeFallbackConfigSchema } from "./runtime-fallback"
 import { TeamModeConfigSchema } from "./team-mode"
 import { SkillsConfigSchema } from "./skills"
@@ -61,6 +62,12 @@ export const OhMyOpenCodeConfigSchema = z.object({
   telemetry: z.boolean().optional().describe("Enable or disable anonymous telemetry. Default: enabled when omitted. Set to false to disable."),
   /** Enable model fallback on API errors (default: false). Set to true to enable automatic model switching when model errors occur. */
   model_fallback: z.boolean().optional(),
+  /**
+   * Per-delegation model capability tiers. Lets the orchestrator choose
+   * "how powerful a model" independently of "what kind of work" (category/agent).
+   * See the model_tier argument on the task tool.
+   */
+  model_routing: ModelRoutingConfigSchema.optional(),
   agents: AgentOverridesSchema.optional(),
   categories: CategoriesConfigSchema.optional(),
   claude_code: ClaudeCodeConfigSchema.optional(),
