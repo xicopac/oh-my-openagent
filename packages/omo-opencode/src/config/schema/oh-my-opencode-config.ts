@@ -9,6 +9,7 @@ import { CategoriesConfigSchema } from "./categories"
 import { ClaudeCodeConfigSchema } from "./claude-code"
 import { CommentCheckerConfigSchema } from "./comment-checker"
 import { BuiltinCommandNameSchema } from "./commands"
+import { ContextGovernorConfigSchema } from "./context-governor"
 import { DefaultModeConfigSchema } from "./default-mode"
 import { ExperimentalConfigSchema } from "./experimental"
 import { GitMasterConfigSchema } from "./git-master"
@@ -74,6 +75,12 @@ export const OhMyOpenCodeConfigSchema = z.object({
   sisyphus_agent: SisyphusAgentConfigSchema.optional(),
   comment_checker: CommentCheckerConfigSchema.optional(),
   experimental: ExperimentalConfigSchema.optional(),
+  /**
+   * Context governor subsystem (opt-in, experimental). Reconciles user-declared
+   * absolute-cap thresholds against the model's actual context window so that
+   * compaction / audit / prepare fire at the correct provider-relative points.
+   */
+  context_governor: ContextGovernorConfigSchema.optional(),
   auto_update: z.boolean().optional(),
   skills: SkillsConfigSchema.optional(),
   goal: GoalConfigSchema.optional(),
