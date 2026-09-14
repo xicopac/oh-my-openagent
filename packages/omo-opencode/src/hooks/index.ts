@@ -55,6 +55,13 @@ export { createCompactionContextInjector } from "./compaction-context-injector";
 export { createCompactionTodoPreserverHook } from "./compaction-todo-preserver";
 export { createUnstableAgentBabysitterHook } from "./unstable-agent-babysitter";
 export { createPreemptiveCompactionHook } from "./preemptive-compaction";
+export {
+  createContextGovernorHook,
+  isCompactionBlockedByGovernor,
+  type ContextGovernorHook,
+  type ContextGovernorHookDeps,
+  type GovernorSignalBus,
+} from "./context-governor";
 export { createTasksTodowriteDisablerHook } from "./tasks-todowrite-disabler";
 export { createRuntimeFallbackHook, type RuntimeFallbackHook, type RuntimeFallbackOptions } from "./runtime-fallback";
 export { createWriteExistingFileGuardHook } from "./write-existing-file-guard";
