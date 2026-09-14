@@ -20,7 +20,7 @@ import { createRuntimeSkillsResolver, readRuntimeHostSkills } from "./runtime-sk
 export function createCoreTools(args: {
   readonly ctx: PluginContext
   readonly pluginConfig: OhMyOpenCodeConfig
-  readonly managers: Pick<Managers, "backgroundManager" | "tmuxSessionManager" | "skillMcpManager" | "modelFallbackControllerAccessor">
+  readonly managers: Pick<Managers, "backgroundManager" | "tmuxSessionManager" | "skillMcpManager" | "modelFallbackControllerAccessor" | "resourceGovernorRuntime">
   readonly skillContext: SkillContext
   readonly availableCategories: AvailableCategory[]
   readonly factories: ToolRegistryFactories
@@ -34,6 +34,7 @@ export function createCoreTools(args: {
     pluginConfig.agents,
     pluginConfig.categories,
     managers.modelFallbackControllerAccessor,
+    managers.resourceGovernorRuntime,
   )
   const isMultimodalLookerEnabled = !(pluginConfig.disabled_agents ?? []).some(
     (agent) => agent.toLowerCase() === "multimodal-looker",
@@ -56,6 +57,8 @@ export function createCoreTools(args: {
     userCategories: pluginConfig.categories,
     agentOverrides: pluginConfig.agents,
     modelRouting: pluginConfig.model_routing,
+    resourceGovernorRuntime: managers.resourceGovernorRuntime,
+    resourceGovernorDefaultChildTokens: pluginConfig.resource_governor?.delegation.default_child_tokens,
     loadCurrentModelConfig: () => {
       const current = loadPluginConfig(ctx.directory, process.env)
       return { agents: current.agents, categories: current.categories, model_routing: current.model_routing }

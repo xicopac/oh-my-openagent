@@ -1,6 +1,6 @@
 import { tool, type ToolDefinition } from "@opencode-ai/plugin"
 import { resolveModelTier } from "@oh-my-opencode/delegate-core"
-import type { DelegatedModelConfig, ToolContextWithMetadata, DelegateTaskToolOptions } from "./types"
+import type { DelegatedModelConfig, ToolContextWithMetadata, DelegateTaskToolOptions, DelegateTaskArgs } from "./types"
 import { log } from "../../shared/logger"
 import { parseModelString } from "../../shared/model-string-parser"
 import { getAvailableModelsForDelegateTask } from "./available-models"
@@ -16,11 +16,13 @@ import {
   executeBackgroundTask,
   executeSyncTask,
 } from "./executor"
+import type { ParentContext } from "./executor-types"
 import { prepareDelegateTaskArgs } from "./tool-argument-preparation"
 import { createDelegateTaskPresentation } from "./tool-description"
 import type { AvailableSkill } from "../../agents/dynamic-agent-prompt-builder"
 import { mergeNativeSkillInfos, type NativeSkillEntry } from "../skill/native-skills"
 import type { SkillInfo } from "../skill/types"
+import { authorizeChildDispatch, blockMessage, resolvedModelKey, type ChildLaunchBackstop, type ResourceGovernorRuntime } from "../../hooks/resource-governor"
 
 async function loadNativeSkillEntries(
   nativeSkills: DelegateTaskToolOptions["nativeSkills"] | undefined,
@@ -273,9 +275,64 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         return executeBackgroundTask(delegateTaskArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, fallbackChain)
       }
 
-      return executeSyncTask(delegateTaskArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, modelInfo, fallbackChain)
+      const enforcement = enforceResourceGovernor(
+        options,
+        ctx,
+        delegateTaskArgs,
+        agentToUse,
+        categoryModel,
+        parentContext,
+      )
+      if (enforcement.message !== null) return enforcement.message
+
+      try {
+        return await executeSyncTask(delegateTaskArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, modelInfo, fallbackChain, undefined, enforcement.backstop)
+      } finally {
+        if (enforcement.escrowID !== null) {
+          options.resourceGovernorRuntime?.settleChild(ctx.sessionID, enforcement.escrowID, "completed")
+        }
+      }
     },
   })
+}
+
+function enforceResourceGovernor(
+  options: DelegateTaskToolOptions,
+  ctx: ToolContextWithMetadata,
+  args: DelegateTaskArgs,
+  agentToUse: string,
+  categoryModel: DelegatedModelConfig | undefined,
+  parentContext: ParentContext,
+): { message: string | null; escrowID: string | null; backstop: ChildLaunchBackstop | undefined } {
+  const runtime = options.resourceGovernorRuntime
+  if (!runtime) return { message: null, escrowID: null, backstop: undefined }
+
+  const resolvedModelID = categoryModel?.modelID
+    ? resolvedModelKey(categoryModel.providerID, categoryModel.modelID)
+    : null
+
+  const rootModelID = parentContext.model
+    ? `${parentContext.model.providerID}/${parentContext.model.modelID}`
+    : null
+
+  const decision = authorizeChildDispatch(runtime, {
+    sessionID: ctx.sessionID,
+    role: args.category ?? args.subagent_type ?? agentToUse,
+    workerIdentity: agentToUse,
+    subtask: args.prompt,
+    resolvedModelID,
+    requestedTier: args.model_tier ?? null,
+    expectedTokens: options.resourceGovernorDefaultChildTokens ?? 600_000,
+    rootModelID,
+  })
+
+  return {
+    message: blockMessage(decision),
+    escrowID: decision.verdict === "ALLOW" ? decision.escrowID : null,
+    backstop: decision.verdict === "ALLOW" && decision.authorization
+      ? { guard: runtime.launchGuard, token: decision.authorization.token }
+      : undefined,
+  }
 }
 
 function isExplicitSyncRun(runInBackground: unknown): boolean {

@@ -4,6 +4,7 @@ import type { CategoriesConfig, GitMasterConfig, BrowserAutomationProvider, Agen
 import type { ModelTier } from "@oh-my-opencode/delegate-core"
 import type { ModelFallbackControllerAccessor } from "../../hooks/model-fallback"
 import type { LoadedSkill } from "../../features/opencode-skill-loader/types"
+import type { ResourceGovernorRuntime } from "../../hooks/resource-governor"
 import type { SessionPromptAsyncData, SessionPromptData, SessionStatusData } from "@opencode-ai/sdk"
 import type {
   AvailableCategory,
@@ -127,6 +128,10 @@ export interface DelegateTaskToolOptions {
     dirs(): string[] | Promise<string[]>
   }
   getLoadedSkills?: () => Promise<LoadedSkill[]>
+  /** Resource Governor runtime bridge; present only when resource_governor.enabled. */
+  resourceGovernorRuntime?: ResourceGovernorRuntime
+  /** Default raw-token estimate for a child when the governor needs one. */
+  resourceGovernorDefaultChildTokens?: number
 }
 
 import type { DelegatedModelConfig } from "../../shared/model-resolution-types"

@@ -19,6 +19,8 @@ import { createOrGetSession } from "./session-creator"
 import { processMessages } from "./message-processor"
 import { waitForCompletion } from "./completion-poller"
 import { getFirstFallbackModel } from "../../agents/builtin-agents/model-resolution"
+import type { ResourceGovernorRuntime } from "../../hooks/resource-governor"
+import { authorizeChildDispatch, blockMessage, resolvedModelKey, type ChildLaunchBackstop } from "../../hooks/resource-governor"
 
 function createSyncExecutorDeps(modelFallbackControllerAccessor?: ModelFallbackControllerAccessor) {
   return {
@@ -31,6 +33,34 @@ function createSyncExecutorDeps(modelFallbackControllerAccessor?: ModelFallbackC
     clearSessionFallbackChain: (sessionID: string) => {
       modelFallbackControllerAccessor?.clearSessionFallbackChain(sessionID)
     },
+  }
+}
+
+function authorizeSyncChild(
+  runtime: ResourceGovernorRuntime | undefined,
+  sessionID: string,
+  agent: string,
+  prompt: string,
+  model: DelegatedModelConfig | undefined,
+): { message: string | null; escrowID: string | null; backstop: ChildLaunchBackstop | undefined } {
+  if (!runtime) return { message: null, escrowID: null, backstop: undefined }
+  const resolvedModelID = model?.modelID ? resolvedModelKey(model.providerID, model.modelID) : null
+  const decision = authorizeChildDispatch(runtime, {
+    sessionID,
+    role: agent,
+    workerIdentity: agent,
+    subtask: prompt,
+    resolvedModelID,
+    requestedTier: null,
+    expectedTokens: 600_000,
+    rootModelID: null,
+  })
+  return {
+    message: blockMessage(decision),
+    escrowID: decision.verdict === "ALLOW" ? decision.escrowID : null,
+    backstop: decision.verdict === "ALLOW" && decision.authorization
+      ? { guard: runtime.launchGuard, token: decision.authorization.token }
+      : undefined,
   }
 }
 
@@ -114,6 +144,7 @@ export function createCallOmoAgent(
   agentOverrides?: AgentOverrides,
   userCategories?: CategoriesConfig,
   modelFallbackControllerAccessor?: ModelFallbackControllerAccessor,
+  resourceGovernorRuntime?: ResourceGovernorRuntime,
 ): ToolDefinition {
   const agentDescriptions = ALLOWED_AGENTS.map(
     (name) => `- ${name}: Specialized agent for ${name} tasks`,
@@ -191,6 +222,9 @@ export function createCallOmoAgent(
       }
 
       if (!args.session_id) {
+        const enforcement = authorizeSyncChild(resourceGovernorRuntime, toolCtx.sessionID, normalizedAgent, args.prompt, resolvedModel)
+        if (enforcement.message !== null) return enforcement.message
+
         let spawnReservation: Awaited<ReturnType<BackgroundManager["reserveSubagentSpawn"]>> | undefined
         try {
           spawnReservation = await backgroundManager.reserveSubagentSpawn(toolCtx.sessionID)
@@ -202,10 +236,15 @@ export function createCallOmoAgent(
             fallbackChain,
             spawnReservation,
             resolvedModel,
+            enforcement.backstop,
           )
         } catch (error) {
           spawnReservation?.rollback()
           return `Error: ${error instanceof Error ? error.message : String(error)}`
+        } finally {
+          if (enforcement.escrowID !== null) {
+            resourceGovernorRuntime?.settleChild(toolCtx.sessionID, enforcement.escrowID, "completed")
+          }
         }
       }
 

@@ -3,6 +3,15 @@ import type { PluginInput } from "@opencode-ai/plugin"
 import type { BackgroundTaskConfig, TmuxConfig } from "../../config/schema"
 import type { ModelFallbackControllerAccessor } from "../../hooks/model-fallback"
 import {
+  ResourceGovernorRejectedError,
+  assertAuthorizedChildLaunch,
+  resolvedModelKey,
+  type AuthorizeResult,
+  type ChildLaunchAuthorization,
+  type ChildLaunchGuard,
+  type DelegateEnforcementInput,
+} from "../../hooks/resource-governor"
+import {
   dispatchInternalPrompt,
   type PromptAsyncGateResult,
 } from "../../hooks/shared/prompt-async-gate"
@@ -242,6 +251,27 @@ export interface BackgroundManagerConfig {
   enableParentSessionNotifications?: boolean
   modelFallbackControllerAccessor?: ModelFallbackControllerAccessor
   log?: typeof log
+  /**
+   * Shared Resource Governor pre-dispatch authorization. Every child spawned
+   * through launch() (background task, unstable agent, call_omo_agent
+   * background, team-mode member) passes this exactly once before a session is
+   * created. When absent, dispatch is ungoverned (governor disabled).
+   */
+  authorizeChildDispatch?: (input: DelegateEnforcementInput) => AuthorizeResult
+  /** Raw-token estimate used when authorizing a child with no explicit budget. */
+  resourceGovernorDefaultChildTokens?: number
+  /**
+   * Settles a child escrow when the background task reaches a terminal status.
+   * Called exactly once per authorized child (idempotent); present only when a
+   * Resource Governor runtime is wired.
+   */
+  settleChildDispatch?: (sessionID: string, escrowID: string, status: "completed" | "failed" | "exhausted") => void
+  /**
+   * Fail-closed dispatch backstop. When present (governor enabled), the child
+   * session create in startTask redeems the authorization minted by
+   * authorizeChildDispatch and fails closed if it is missing or mismatched.
+   */
+  launchGuard?: ChildLaunchGuard
 }
 
 export class BackgroundManager {
@@ -286,6 +316,11 @@ export class BackgroundManager {
   private cachedCircuitBreakerSettings?: CircuitBreakerSettings
   private readonly scheduledFlushSettledCounts = new Map<string, number>()
   private readonly scheduledFlushSettledWaiters = new Map<string, Array<() => void>>()
+  private readonly authorizeChildDispatch?: (input: DelegateEnforcementInput) => AuthorizeResult
+  private readonly resourceGovernorDefaultChildTokens?: number
+  private readonly settleChildDispatch?: (sessionID: string, escrowID: string, status: "completed" | "failed" | "exhausted") => void
+  private readonly launchGuard?: ChildLaunchGuard
+  private readonly escrowByTask = new Map<string, { sessionID: string; escrowID: string; authorization?: ChildLaunchAuthorization }>()
 
   constructor(config: BackgroundManagerConfig) {
     const { pluginContext, ...options } = config
@@ -306,6 +341,10 @@ export class BackgroundManager {
     this.preStartDescendantReservations = new Set()
     this.enableParentSessionNotifications = options?.enableParentSessionNotifications ?? true
     this.modelFallbackControllerAccessor = options?.modelFallbackControllerAccessor
+    this.authorizeChildDispatch = options?.authorizeChildDispatch
+    this.resourceGovernorDefaultChildTokens = options?.resourceGovernorDefaultChildTokens
+    this.settleChildDispatch = options?.settleChildDispatch
+    this.launchGuard = options?.launchGuard
     this.logger = options?.log ?? log
     this.parentWakeNotifier = new ParentWakeNotifier(
       {
@@ -577,6 +616,38 @@ export class BackgroundManager {
     }
   }
 
+  private authorizeLaunch(input: LaunchInput): { escrowID: string | null; authorization: ChildLaunchAuthorization | null } | null {
+    const authorize = this.authorizeChildDispatch
+    if (!authorize) return null
+    const resolvedModelID = input.model?.modelID
+      ? resolvedModelKey(input.model.providerID, input.model.modelID)
+      : null
+    const rootModelID = input.parentModel?.providerID
+      ? `${input.parentModel.providerID}/${input.parentModel.modelID}`
+      : null
+    const result = authorize({
+      sessionID: input.parentSessionId,
+      role: input.agent,
+      workerIdentity: input.agent,
+      subtask: input.prompt,
+      resolvedModelID,
+      requestedTier: null,
+      expectedTokens: this.resourceGovernorDefaultChildTokens ?? 600_000,
+      rootModelID,
+    })
+    if (result.verdict !== "ALLOW") {
+      throw new ResourceGovernorRejectedError(result.message)
+    }
+    return { escrowID: result.escrowID || null, authorization: result.authorization ?? null }
+  }
+
+  private settleTaskEscrow(task: BackgroundTask, status: "completed" | "failed" | "exhausted"): void {
+    const entry = this.escrowByTask.get(task.id)
+    if (!entry) return
+    this.escrowByTask.delete(task.id)
+    this.settleChildDispatch?.(entry.sessionID, entry.escrowID, status)
+  }
+
   async launch(input: LaunchInput): Promise<BackgroundTask> {
     log("[background-agent] launch() called with:", {
       agent: input.agent,
@@ -594,6 +665,8 @@ export class BackgroundManager {
     if (!input.agent) {
       throw new Error("Agent parameter is required after sanitization")
     }
+
+    const launchAuth = this.authorizeLaunch(input)
 
     const spawnReservation = await this.reserveSubagentSpawn(input.parentSessionId)
 
@@ -631,6 +704,13 @@ export class BackgroundManager {
         category: input.category,
         cwd: input.cwd,
         onSessionCreated: input.onSessionCreated,
+      }
+      if (launchAuth) {
+        this.escrowByTask.set(task.id, {
+          sessionID: input.parentSessionId,
+          escrowID: launchAuth.escrowID ?? "",
+          authorization: launchAuth.authorization ?? undefined,
+        })
       }
       const firstAttempt = startAttempt(task, input.model)
 
@@ -779,6 +859,18 @@ export class BackgroundManager {
     const parentDirectory = parentSession?.data?.directory ?? this.directory
     const childDirectory = input.cwd ?? parentDirectory
     log(`[background-agent] Parent dir: ${parentSession?.data?.directory}, using: ${childDirectory}`)
+
+    const launchAuthorization = this.escrowByTask.get(task.id)?.authorization
+    assertAuthorizedChildLaunch(
+      this.launchGuard && launchAuthorization
+        ? { guard: this.launchGuard, token: launchAuthorization.token }
+        : undefined,
+      {
+        sessionID: input.parentSessionId,
+        workerIdentity: input.agent,
+        resolvedModelID: resolvedModelKey(input.model?.providerID, input.model?.modelID),
+      },
+    )
 
     const createResult = await this.client.session.create({
       body: {
@@ -2124,6 +2216,7 @@ The fallback retry session is now created and can be inspected directly.
       this.unregisterRootDescendant(task.rootSessionId)
     }
     this.taskHistory.record(task.parentSessionId, { id: task.id, sessionID: task.sessionId, agent: task.agent, description: task.description, status: "error", category: task.category, startedAt: task.startedAt, completedAt: task.completedAt })
+    this.settleTaskEscrow(task, "failed")
 
     if (task.concurrencyKey) {
       this.concurrencyManager.release(task.concurrencyKey)
@@ -2576,6 +2669,7 @@ The task was re-queued on a fallback model after a retryable failure.
         task.completedAt = new Date()
       }
       this.taskHistory.record(task.parentSessionId, { id: task.id, sessionID: task.sessionId, agent: task.agent, description: task.description, status: "completed", category: task.category, startedAt: task.startedAt, completedAt: task.completedAt })
+      this.settleTaskEscrow(task, "completed")
 
       if (task.rootSessionId) {
         this.unregisterRootDescendant(task.rootSessionId)
@@ -2911,6 +3005,7 @@ The task was re-queued on a fallback model after a retryable failure.
           this.unregisterRootDescendant(task.rootSessionId)
         }
         this.taskHistory.record(task.parentSessionId, { id: task.id, sessionID: task.sessionId, agent: task.agent, description: task.description, status: "error", category: task.category, startedAt: task.startedAt, completedAt: task.completedAt })
+        this.settleTaskEscrow(task, "failed")
         if (task.concurrencyKey) {
           this.concurrencyManager.release(task.concurrencyKey)
           task.concurrencyKey = undefined
@@ -2982,6 +3077,7 @@ The task was re-queued on a fallback model after a retryable failure.
       this.unregisterRootDescendant(task.rootSessionId)
     }
     this.taskHistory.record(task.parentSessionId, { id: task.id, sessionID: task.sessionId, agent: task.agent, description: task.description, status: "error", category: task.category, startedAt: task.startedAt, completedAt: task.completedAt })
+    this.settleTaskEscrow(task, "failed")
     if (task.concurrencyKey) {
       this.concurrencyManager.release(task.concurrencyKey)
       task.concurrencyKey = undefined

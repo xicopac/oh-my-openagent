@@ -3,6 +3,7 @@ import type { PluginInput } from "@opencode-ai/plugin"
 import type { DelegatedModelConfig } from "../../shared/model-resolution-types"
 import { subagentSessions, syncSubagentSessions } from "../../features/claude-code-session-state"
 import { log } from "../../shared"
+import { assertAuthorizedChildLaunch, resolvedModelKey, type ChildLaunchBackstop } from "../../hooks/resource-governor"
 
 export async function createOrGetSession(
   args: CallOmoAgentArgs,
@@ -15,6 +16,7 @@ export async function createOrGetSession(
   },
   ctx: PluginInput,
   model?: DelegatedModelConfig,
+  backstop?: ChildLaunchBackstop,
 ): Promise<{ sessionID: string; isNew: boolean }> {
   if (args.session_id) {
     log(`[call_omo_agent] Using existing session: ${args.session_id}`)
@@ -36,6 +38,12 @@ export async function createOrGetSession(
     })
     log(`[call_omo_agent] Parent session dir: ${parentSession?.data?.directory}, fallback: ${ctx.directory}`)
     const parentDirectory = parentSession?.data?.directory ?? ctx.directory
+
+    assertAuthorizedChildLaunch(backstop, {
+      sessionID: toolContext.sessionID,
+      workerIdentity: args.subagent_type,
+      resolvedModelID: resolvedModelKey(model?.providerID, model?.modelID),
+    })
 
     const createResult = await ctx.client.session.create({
       body: {

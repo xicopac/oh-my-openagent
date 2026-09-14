@@ -22,6 +22,7 @@ import { createConfigHandler } from "./plugin-handlers"
 import { log } from "./shared"
 import { markServerRunningInProcess } from "./shared/tmux/tmux-utils/server-health"
 import type { ModelFallbackControllerAccessor } from "./hooks/model-fallback"
+import { authorizeChildDispatch, createResourceGovernorRuntime, loadPricingCatalog, type ResourceGovernorRuntime } from "./hooks/resource-governor"
 
 type CreateManagersDeps = {
   BackgroundManagerClass: typeof BackgroundManager
@@ -57,6 +58,8 @@ export type Managers = {
   modelFallbackControllerAccessor: ModelFallbackControllerAccessor
   tuiStateMirror?: TuiStateMirror
   monitorManager?: MonitorManager
+  /** Shared Resource Governor runtime; present when resource_governor.enabled. */
+  resourceGovernorRuntime?: ResourceGovernorRuntime
 }
 
 export function createManagers(args: {
@@ -93,6 +96,19 @@ export function createManagers(args: {
     shouldSkipSession: (sessionId) => lookupTeamSession(sessionId) !== undefined,
   })
   const modelFallbackControllerAccessor = createModelFallbackControllerAccessor()
+  const resourceGovernorRuntime = pluginConfig.resource_governor?.enabled
+    ? createResourceGovernorRuntime({
+        config: pluginConfig.resource_governor,
+        pricing: loadPricingCatalog(),
+        activeChildCount: (sessionID) =>
+          (backgroundManager?.getTasksByParentSession(sessionID) ?? [])
+            .filter((t) => t.status === "running" || t.status === "pending")
+            .length,
+        onEvent: (sessionID, event, detail) => {
+          log(`[resource-governor] ${event}`, { sessionID, ...(detail ?? {}) })
+        },
+      })
+    : undefined
   let backgroundManager: BackgroundManager | undefined
   let tuiStateMirror: TuiStateMirror | undefined
 
@@ -194,6 +210,14 @@ export function createManagers(args: {
     },
     enableParentSessionNotifications: backgroundNotificationHookEnabled,
     modelFallbackControllerAccessor,
+    authorizeChildDispatch: resourceGovernorRuntime
+      ? (input) => authorizeChildDispatch(resourceGovernorRuntime, input)
+      : undefined,
+    resourceGovernorDefaultChildTokens: pluginConfig.resource_governor?.delegation.default_child_tokens,
+    settleChildDispatch: resourceGovernorRuntime
+      ? (sessionID, escrowID, status) => resourceGovernorRuntime.settleChild(sessionID, escrowID, status)
+      : undefined,
+    launchGuard: resourceGovernorRuntime?.launchGuard,
   })
 
   if (pluginConfig.tui?.sidebar?.enabled !== false) {
@@ -223,5 +247,6 @@ export function createManagers(args: {
     modelFallbackControllerAccessor,
     tuiStateMirror,
     monitorManager,
+    resourceGovernorRuntime,
   }
 }

@@ -11438,6 +11438,207 @@
           ],
           "additionalProperties": false
         },
+        "resource_governor": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "type": "boolean"
+            },
+            "budget_mode": {
+              "default": "normal",
+              "type": "string",
+              "enum": [
+                "economy",
+                "normal",
+                "generous"
+              ]
+            },
+            "paid": {
+              "default": {
+                "soft_usd": 1.5,
+                "hard_usd": 3
+              },
+              "type": "object",
+              "properties": {
+                "soft_usd": {
+                  "default": 1.5,
+                  "type": "number",
+                  "minimum": 0
+                },
+                "hard_usd": {
+                  "default": 3,
+                  "type": "number",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "soft_usd",
+                "hard_usd"
+              ],
+              "additionalProperties": false
+            },
+            "tokens": {
+              "default": {
+                "soft_total": 7000000,
+                "hard_total": 12000000
+              },
+              "type": "object",
+              "properties": {
+                "soft_total": {
+                  "default": 7000000,
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "hard_total": {
+                  "default": 12000000,
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "soft_total",
+                "hard_total"
+              ],
+              "additionalProperties": false
+            },
+            "delegation": {
+              "default": {
+                "max_concurrent_children": 4,
+                "default_child_tokens": 600000,
+                "duplicate_detection": true,
+                "free_first": true
+              },
+              "type": "object",
+              "properties": {
+                "max_concurrent_children": {
+                  "default": 4,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 32
+                },
+                "default_child_tokens": {
+                  "default": 600000,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "duplicate_detection": {
+                  "default": true,
+                  "type": "boolean"
+                },
+                "free_first": {
+                  "default": true,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "max_concurrent_children",
+                "default_child_tokens",
+                "duplicate_detection",
+                "free_first"
+              ],
+              "additionalProperties": false
+            },
+            "context": {
+              "default": {
+                "preferred_tokens": 150000,
+                "preferred_post_compaction_tokens": 60000,
+                "expansion_enabled": true,
+                "max_compaction_passes": 3
+              },
+              "type": "object",
+              "properties": {
+                "preferred_tokens": {
+                  "default": 150000,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "preferred_post_compaction_tokens": {
+                  "default": 60000,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "expansion_enabled": {
+                  "default": true,
+                  "type": "boolean"
+                },
+                "max_compaction_passes": {
+                  "default": 3,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 8
+                }
+              },
+              "required": [
+                "preferred_tokens",
+                "preferred_post_compaction_tokens",
+                "expansion_enabled",
+                "max_compaction_passes"
+              ],
+              "additionalProperties": false
+            },
+            "forecasting": {
+              "default": {
+                "enabled": true,
+                "persist_history": true
+              },
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "default": true,
+                  "type": "boolean"
+                },
+                "persist_history": {
+                  "default": true,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "enabled",
+                "persist_history"
+              ],
+              "additionalProperties": false
+            },
+            "consent": {
+              "default": {
+                "require_paid_escalation": true,
+                "require_hard_budget_increase": true
+              },
+              "type": "object",
+              "properties": {
+                "require_paid_escalation": {
+                  "default": true,
+                  "type": "boolean"
+                },
+                "require_hard_budget_increase": {
+                  "default": true,
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "require_paid_escalation",
+                "require_hard_budget_increase"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "enabled",
+            "budget_mode",
+            "paid",
+            "tokens",
+            "delegation",
+            "context",
+            "forecasting",
+            "consent"
+          ],
+          "additionalProperties": false
+        },
         "auto_update": {
           "type": "boolean"
         },
@@ -27202,6 +27403,207 @@
                   "capsule_full_max_bytes",
                   "twin",
                   "lease"
+                ],
+                "additionalProperties": false
+              },
+              "resource_governor": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "default": true,
+                    "type": "boolean"
+                  },
+                  "budget_mode": {
+                    "default": "normal",
+                    "type": "string",
+                    "enum": [
+                      "economy",
+                      "normal",
+                      "generous"
+                    ]
+                  },
+                  "paid": {
+                    "default": {
+                      "soft_usd": 1.5,
+                      "hard_usd": 3
+                    },
+                    "type": "object",
+                    "properties": {
+                      "soft_usd": {
+                        "default": 1.5,
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "hard_usd": {
+                        "default": 3,
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "soft_usd",
+                      "hard_usd"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "tokens": {
+                    "default": {
+                      "soft_total": 7000000,
+                      "hard_total": 12000000
+                    },
+                    "type": "object",
+                    "properties": {
+                      "soft_total": {
+                        "default": 7000000,
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "hard_total": {
+                        "default": 12000000,
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "soft_total",
+                      "hard_total"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "delegation": {
+                    "default": {
+                      "max_concurrent_children": 4,
+                      "default_child_tokens": 600000,
+                      "duplicate_detection": true,
+                      "free_first": true
+                    },
+                    "type": "object",
+                    "properties": {
+                      "max_concurrent_children": {
+                        "default": 4,
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 32
+                      },
+                      "default_child_tokens": {
+                        "default": 600000,
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      "duplicate_detection": {
+                        "default": true,
+                        "type": "boolean"
+                      },
+                      "free_first": {
+                        "default": true,
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "max_concurrent_children",
+                      "default_child_tokens",
+                      "duplicate_detection",
+                      "free_first"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "context": {
+                    "default": {
+                      "preferred_tokens": 150000,
+                      "preferred_post_compaction_tokens": 60000,
+                      "expansion_enabled": true,
+                      "max_compaction_passes": 3
+                    },
+                    "type": "object",
+                    "properties": {
+                      "preferred_tokens": {
+                        "default": 150000,
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      "preferred_post_compaction_tokens": {
+                        "default": 60000,
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      },
+                      "expansion_enabled": {
+                        "default": true,
+                        "type": "boolean"
+                      },
+                      "max_compaction_passes": {
+                        "default": 3,
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 8
+                      }
+                    },
+                    "required": [
+                      "preferred_tokens",
+                      "preferred_post_compaction_tokens",
+                      "expansion_enabled",
+                      "max_compaction_passes"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "forecasting": {
+                    "default": {
+                      "enabled": true,
+                      "persist_history": true
+                    },
+                    "type": "object",
+                    "properties": {
+                      "enabled": {
+                        "default": true,
+                        "type": "boolean"
+                      },
+                      "persist_history": {
+                        "default": true,
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "enabled",
+                      "persist_history"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "consent": {
+                    "default": {
+                      "require_paid_escalation": true,
+                      "require_hard_budget_increase": true
+                    },
+                    "type": "object",
+                    "properties": {
+                      "require_paid_escalation": {
+                        "default": true,
+                        "type": "boolean"
+                      },
+                      "require_hard_budget_increase": {
+                        "default": true,
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "require_paid_escalation",
+                      "require_hard_budget_increase"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "enabled",
+                  "budget_mode",
+                  "paid",
+                  "tokens",
+                  "delegation",
+                  "context",
+                  "forecasting",
+                  "consent"
                 ],
                 "additionalProperties": false
               },

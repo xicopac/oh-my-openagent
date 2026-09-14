@@ -1,6 +1,7 @@
 import type { OpencodeClient } from "./types"
 import type { DelegatedModelConfig } from "../../shared/model-resolution-types"
 import { QUESTION_DENIED_SESSION_PERMISSION } from "../../shared/question-denied-session-permission"
+import { assertAuthorizedChildLaunch, resolvedModelKey, type ChildLaunchBackstop } from "../../hooks/resource-governor"
 
 export async function createSyncSession(
   client: OpencodeClient,
@@ -10,10 +11,17 @@ export async function createSyncSession(
     description: string
     defaultDirectory: string
     categoryModel?: DelegatedModelConfig
-  }
+  },
+  backstop?: ChildLaunchBackstop
 ): Promise<{ ok: true; sessionID: string; parentDirectory: string } | { ok: false; error: string }> {
   const parentSession = await client.session.get({ path: { id: input.parentSessionID } }).catch(() => null)
   const parentDirectory = parentSession?.data?.directory ?? input.defaultDirectory
+
+  assertAuthorizedChildLaunch(backstop, {
+    sessionID: input.parentSessionID,
+    workerIdentity: input.agentToUse,
+    resolvedModelID: resolvedModelKey(input.categoryModel?.providerID, input.categoryModel?.modelID),
+  })
 
   const createResult = await client.session.create({
     body: {

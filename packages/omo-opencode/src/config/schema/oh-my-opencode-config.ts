@@ -21,6 +21,7 @@ import { ModelCapabilitiesConfigSchema } from "./model-capabilities"
 import { GoalConfigSchema } from "./goal"
 import { MonitorConfigSchema } from "./monitor"
 import { ModelRoutingConfigSchema } from "./model-routing"
+import { ResourceGovernorConfigSchema } from "./resource-governor"
 import { RuntimeFallbackConfigSchema } from "./runtime-fallback"
 import { TeamModeConfigSchema } from "./team-mode"
 import { SkillsConfigSchema } from "./skills"
@@ -81,6 +82,13 @@ export const OhMyOpenCodeConfigSchema = z.object({
    * compaction / audit / prepare fire at the correct provider-relative points.
    */
   context_governor: ContextGovernorConfigSchema.optional(),
+  /**
+   * Resource governor subsystem (opt-in, experimental). Treats token usage,
+   * paid spend, context growth, and delegation fan-out as scarce resources.
+   * Complements context_governor (Context Cop) with the Token/Cost Cop and
+   * Delegation Cop on one shared ledger.
+   */
+  resource_governor: ResourceGovernorConfigSchema.optional(),
   auto_update: z.boolean().optional(),
   skills: SkillsConfigSchema.optional(),
   goal: GoalConfigSchema.optional(),

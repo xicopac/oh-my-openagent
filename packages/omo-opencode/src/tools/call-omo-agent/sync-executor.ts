@@ -15,6 +15,7 @@ import { waitForCompletion } from "./completion-poller"
 import { processMessages } from "./message-processor"
 import { createOrGetSession } from "./session-creator"
 import type { CallOmoAgentArgs } from "./types"
+import type { ChildLaunchBackstop } from "../../hooks/resource-governor"
 
 type SessionWithPrompt = {
   prompt: (opts: { path: { id: string }; body: Record<string, unknown> }) => Promise<unknown>
@@ -85,13 +86,14 @@ export async function executeSync(
   fallbackChain?: FallbackEntry[],
   spawnReservation?: SpawnReservation,
   model?: DelegatedModelConfig,
+  backstop?: ChildLaunchBackstop,
 ): Promise<string> {
   let sessionID: string | undefined
   let createdSessionForExecution = false
   let appliedFallbackChain = false
 
   try {
-    const session = await deps.createOrGetSession(args, toolContext, ctx, model)
+    const session = await deps.createOrGetSession(args, toolContext, ctx, model, backstop)
     sessionID = session.sessionID
     createdSessionForExecution = session.isNew
     subagentSessions.add(sessionID)

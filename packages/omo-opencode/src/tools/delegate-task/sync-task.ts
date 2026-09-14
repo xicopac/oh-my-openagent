@@ -12,6 +12,7 @@ import { publishSyncTaskMetadata } from "./sync-task-metadata"
 import { runSyncTaskLoop } from "./sync-task-runner"
 import { cleanupSyncSessionSideEffects, registerSyncSessionSideEffects } from "./sync-session-lifecycle"
 import type { DelegatedModelConfig, DelegateTaskArgs, ToolContextWithMetadata } from "./types"
+import type { ChildLaunchBackstop } from "../../hooks/resource-governor"
 
 export async function executeSyncTask(
   args: DelegateTaskArgs,
@@ -23,7 +24,8 @@ export async function executeSyncTask(
   systemContent: string | undefined,
   modelInfo?: ModelFallbackInfo,
   fallbackChain?: FallbackEntry[],
-  deps: SyncTaskDeps = syncTaskDeps
+  deps: SyncTaskDeps = syncTaskDeps,
+  backstop?: ChildLaunchBackstop
 ): Promise<string> {
   const { client, directory, syncPollTimeoutMs } = executorCtx
   const toastManager = getTaskToastManager()
@@ -53,7 +55,7 @@ export async function executeSyncTask(
       description: args.description,
       defaultDirectory: directory,
       categoryModel,
-    })
+    }, backstop)
 
     if (!createSessionResult.ok) {
       spawnReservation?.rollback()
