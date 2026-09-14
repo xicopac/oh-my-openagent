@@ -1,6 +1,9 @@
 import { tool, type ToolDefinition } from "@opencode-ai/plugin"
+import { resolveModelTier } from "@oh-my-opencode/delegate-core"
 import type { DelegatedModelConfig, ToolContextWithMetadata, DelegateTaskToolOptions } from "./types"
 import { log } from "../../shared/logger"
+import { parseModelString } from "../../shared/model-string-parser"
+import { getAvailableModelsForDelegateTask } from "./available-models"
 import { buildSystemContent } from "./prompt-builder"
 import {
   resolveSkillContent,
@@ -76,6 +79,10 @@ const delegateTaskArgsSchema = {
     .optional()
     .describe("Continuation session id (`ses_...`) from task metadata; not a background task id (`bg_...`)."),
   command: tool.schema.string().optional().describe("The command that triggered this task"),
+  model_tier: tool.schema
+    .string()
+    .optional()
+    .describe("Capability tier for the delegated model: \"fast\", \"balanced\", \"strong\", or \"master\". Independent of category/subagent_type. \"master\" uses the parent session's current model. Overrides the category/agent's static model when configured. Omit to keep existing model resolution."),
 }
 
 export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefinition {
@@ -147,7 +154,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
       const currentModelConfig = options.loadCurrentModelConfig?.()
       const modelOptions = currentModelConfig === undefined
         ? options
-        : { ...options, userCategories: currentModelConfig.categories, agentOverrides: currentModelConfig.agents }
+        : { ...options, userCategories: currentModelConfig.categories, agentOverrides: currentModelConfig.agents, modelRouting: currentModelConfig.model_routing }
 
       let agentToUse: string
       let categoryModel: DelegatedModelConfig | undefined
@@ -157,6 +164,46 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
       let isUnstableAgent = false
       let fallbackChain: import("../../shared/model-requirements").FallbackEntry[] | undefined
       let maxPromptTokens: number | undefined
+
+      const applyModelTier = async (): Promise<void> => {
+        const tier = delegateTaskArgs.model_tier
+        if (!tier) return
+        const availableModels = await getAvailableModelsForDelegateTask(options.client)
+        const resolved = resolveModelTier({
+          tier,
+          config: modelOptions.modelRouting ?? {},
+          availableModels,
+          parentModel: inheritedModel,
+        })
+        if (!resolved) {
+          log("[delegate-task] model_tier requested but unresolved; keeping existing resolution", {
+            tier,
+            agent: agentToUse,
+            description: delegateTaskArgs.description,
+          })
+          return
+        }
+        const parsed = parseModelString(resolved.model)
+        if (!parsed) {
+          log("[delegate-task] model_tier resolved to an invalid model id; keeping existing resolution", {
+            tier,
+            model: resolved.model,
+          })
+          return
+        }
+        categoryModel = parsed
+        actualModel = resolved.model
+        modelInfo = { model: resolved.model, type: "user-defined", source: "override" }
+        log("[delegate-task] model_tier", {
+          agent: agentToUse,
+          requestedTier: tier,
+          tier: resolved.tier,
+          model: resolved.model,
+          escalated: resolved.escalated,
+          usedParentModel: resolved.usedParentModel,
+          description: delegateTaskArgs.description,
+        })
+      }
 
       if (delegateTaskArgs.category) {
         const resolution = await resolveCategoryExecution(delegateTaskArgs, modelOptions, inheritedModel, systemDefaultModel)
@@ -171,6 +218,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         isUnstableAgent = resolution.isUnstableAgent
         fallbackChain = resolution.fallbackChain
         maxPromptTokens = resolution.maxPromptTokens
+        await applyModelTier()
 
         const isRunInBackgroundExplicitlyFalse = isExplicitSyncRun(delegateTaskArgs.run_in_background)
 
@@ -206,6 +254,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         agentToUse = resolution.agentToUse
         categoryModel = resolution.categoryModel
         fallbackChain = resolution.fallbackChain
+        await applyModelTier()
       }
 
       const systemContent = buildSystemContent({

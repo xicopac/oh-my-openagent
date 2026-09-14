@@ -71,6 +71,7 @@ export function createDelegateTaskPresentation(options: DelegateTaskPresentation
   **DO NOT provide both.** If category is provided, subagent_type is ignored.
 
   - load_skills: Optional. Defaults to [] when omitted. Pass ["skill-1", "skill-2"] for skill-specific tasks.
+  - model_tier: Optional capability tier for the delegated model: "fast", "balanced", "strong", or "master". This is INDEPENDENT of category/subagent_type (which stays in charge of persona, tools, skills, permissions, and behavior). Omit it to keep the category/agent's existing model resolution. "master" resolves to the current parent/main-session model. Choose the cheapest tier with a high probability of success; escalate after genuine reasoning failures (never for infra errors like model-not-found or rate limits).
   - category: Use predefined category → Spawns Sisyphus-Junior with category config
     Available categories:
   ${categoryList}

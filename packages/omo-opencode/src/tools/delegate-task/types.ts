@@ -1,6 +1,7 @@
 import type { BackgroundManager } from "../../features/background-agent"
 import type { OhMyOpenCodeConfig } from "../../config"
-import type { CategoriesConfig, GitMasterConfig, BrowserAutomationProvider, AgentOverrides, SisyphusAgentConfig } from "../../config/schema"
+import type { CategoriesConfig, GitMasterConfig, BrowserAutomationProvider, AgentOverrides, SisyphusAgentConfig, ModelRoutingConfig } from "../../config/schema"
+import type { ModelTier } from "@oh-my-opencode/delegate-core"
 import type { ModelFallbackControllerAccessor } from "../../hooks/model-fallback"
 import type { LoadedSkill } from "../../features/opencode-skill-loader/types"
 import type { SessionPromptAsyncData, SessionPromptData, SessionStatusData } from "@opencode-ai/sdk"
@@ -64,6 +65,7 @@ export interface DelegateTaskArgs {
   task_id?: string
   command?: string
   load_skills: string[]
+  model_tier?: ModelTier
 }
 
 export interface ToolContextWithMetadata {
@@ -111,8 +113,9 @@ export interface DelegateTaskToolOptions {
   availableCategories?: AvailableCategory[]
   availableSkills?: AvailableSkill[]
   agentOverrides?: AgentOverrides
+  modelRouting?: ModelRoutingConfig
   /** Reload model-bearing config at task invocation time so edits are honored without rebuilding tools. */
-  loadCurrentModelConfig?: () => Pick<OhMyOpenCodeConfig, "agents" | "categories">
+  loadCurrentModelConfig?: () => Pick<OhMyOpenCodeConfig, "agents" | "categories" | "model_routing">
   sisyphusAgentConfig?: SisyphusAgentConfig
   modelFallbackControllerAccessor?: ModelFallbackControllerAccessor
   onSyncSessionCreated?: (event: SyncSessionCreatedEvent) => Promise<void>
