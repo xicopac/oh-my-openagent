@@ -61,6 +61,20 @@ function createDelegateTask(...args: Parameters<typeof import("./tools").createD
 		expect(runInBackgroundSchema.description).toContain("background_output")
 		expect(runInBackgroundSchema.description).not.toContain("returns task_id")
 	})
+
+	test("#given model_tier arg #when tool is created #then model_tier is an optional string", () => {
+		//#given
+		const toolDefinition = createDelegateTask({ manager: {} as never, client: {} as never, directory: "/tmp/test" })
+
+		//#when
+		const modelTierSchema = unsafeTestValue<{
+			def: { type: string; innerType: { def: { type: string } } }
+		}>(toolDefinition.args.model_tier)
+
+		//#then
+		expect(modelTierSchema.def.type).toBe("optional")
+		expect(modelTierSchema.def.innerType.def.type).toBe("string")
+	})
 })
 
 export {}
