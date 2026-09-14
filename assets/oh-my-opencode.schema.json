@@ -9077,6 +9077,227 @@
       },
       "additionalProperties": false
     },
+    "context_governor": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "prepare_at_tokens": {
+          "default": 110000,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "audit_at_tokens": {
+          "default": 135000,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "normal_limit_tokens": {
+          "default": 150000,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "target_after_compaction_tokens": {
+          "default": 60000,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "provider_relative_ratio": {
+          "default": 0.78,
+          "type": "number",
+          "minimum": 0.1,
+          "maximum": 1
+        },
+        "capsule_head_max_chars": {
+          "default": 8000,
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 9007199254740991
+        },
+        "capsule_full_max_bytes": {
+          "default": 131072,
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 9007199254740991
+        },
+        "twin": {
+          "default": {
+            "enabled": true,
+            "maintenance_tier": "balanced",
+            "validation_tier": "strong",
+            "allow_premium_validation": false,
+            "max_concurrent_wakes": 1,
+            "tool_budget": 12,
+            "sidecar_max_tokens": 48000,
+            "reseed_fraction": 0.6,
+            "audit_call_timeout_ms": 15000
+          },
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "type": "boolean"
+            },
+            "maintenance_tier": {
+              "default": "balanced",
+              "type": "string",
+              "enum": [
+                "fast",
+                "balanced",
+                "strong",
+                "master"
+              ]
+            },
+            "validation_tier": {
+              "default": "strong",
+              "type": "string",
+              "enum": [
+                "fast",
+                "balanced",
+                "strong",
+                "master"
+              ]
+            },
+            "allow_premium_validation": {
+              "default": false,
+              "type": "boolean"
+            },
+            "max_concurrent_wakes": {
+              "default": 1,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8
+            },
+            "tool_budget": {
+              "default": 12,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "sidecar_max_tokens": {
+              "default": 48000,
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 9007199254740991
+            },
+            "reseed_fraction": {
+              "default": 0.6,
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 1
+            },
+            "audit_call_timeout_ms": {
+              "default": 15000,
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "enabled",
+            "maintenance_tier",
+            "validation_tier",
+            "allow_premium_validation",
+            "max_concurrent_wakes",
+            "tool_budget",
+            "sidecar_max_tokens",
+            "reseed_fraction",
+            "audit_call_timeout_ms"
+          ],
+          "additionalProperties": false
+        },
+        "lease": {
+          "default": {
+            "enabled": true,
+            "extra_tokens": 30000,
+            "max_turns": 3,
+            "max_renewals": 1,
+            "valid_reasons": [
+              "active_evidence_comparison",
+              "atomic_reasoning_phase",
+              "imminent_safe_state_transition",
+              "simultaneous_raw_evidence_dependency",
+              "stale_capsule",
+              "twin_failure_no_capsule"
+            ]
+          },
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "type": "boolean"
+            },
+            "extra_tokens": {
+              "default": 30000,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "max_turns": {
+              "default": 3,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "max_renewals": {
+              "default": 1,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "valid_reasons": {
+              "default": [
+                "active_evidence_comparison",
+                "atomic_reasoning_phase",
+                "imminent_safe_state_transition",
+                "simultaneous_raw_evidence_dependency",
+                "stale_capsule",
+                "twin_failure_no_capsule"
+              ],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "active_evidence_comparison",
+                  "atomic_reasoning_phase",
+                  "imminent_safe_state_transition",
+                  "simultaneous_raw_evidence_dependency",
+                  "stale_capsule",
+                  "twin_failure_no_capsule"
+                ]
+              }
+            }
+          },
+          "required": [
+            "enabled",
+            "extra_tokens",
+            "max_turns",
+            "max_renewals",
+            "valid_reasons"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "enabled",
+        "prepare_at_tokens",
+        "audit_at_tokens",
+        "normal_limit_tokens",
+        "target_after_compaction_tokens",
+        "provider_relative_ratio",
+        "capsule_head_max_chars",
+        "capsule_full_max_bytes",
+        "twin",
+        "lease"
+      ],
+      "additionalProperties": false
+    },
     "auto_update": {
       "type": "boolean"
     },
