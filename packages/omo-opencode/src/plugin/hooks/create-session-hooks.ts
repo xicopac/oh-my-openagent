@@ -25,6 +25,7 @@ import {
   createHephaestusAgentsMdInjectorHook,
   createQuestionLabelTruncatorHook,
   createPreemptiveCompactionHook,
+  createContextGovernorHook,
   createRuntimeFallbackHook,
   createLegacyPluginToastHook,
 } from "../../hooks"
@@ -41,6 +42,7 @@ import { createModelFallbackTitleUpdater } from "./model-fallback-title-updater"
 
 export type SessionHooks = {
   preemptiveCompaction: ReturnType<typeof createPreemptiveCompactionHook> | null
+  contextGovernor: ReturnType<typeof createContextGovernorHook> | null
   sessionNotification: ReturnType<typeof createSessionNotification> | null
   thinkMode: ReturnType<typeof createThinkModeHook> | null
   modelFallback: ReturnType<typeof createModelFallbackHook> | null
@@ -229,8 +231,23 @@ export function createSessionHooks(args: {
     ? safeHook("legacy-plugin-toast", () => createLegacyPluginToastHook(ctx))
     : null
 
+  const contextGovernor =
+    isHookEnabled("context-governor") &&
+    pluginConfig.context_governor?.enabled !== false
+      ? safeHook("context-governor", () =>
+          createContextGovernorHook(ctx, {
+            pluginConfig,
+            modelCacheState,
+            directory: () => ctx.directory,
+            onEvent: (sessionID, event, detail) => {
+              log(`[context-governor] ${event}`, { sessionID, ...detail })
+            },
+          }))
+      : null
+
   return {
     preemptiveCompaction,
+    contextGovernor,
     sessionNotification,
     thinkMode,
     modelFallback,

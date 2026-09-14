@@ -138,7 +138,7 @@ function makeCacheStateWithLimit(limit: number): {
 const TINY_LIMIT = 20000
 
 describe("createContextGovernorHook", () => {
-  it("is a NOOP when context_governor is not configured", async () => {
+  it("is enabled by default when the context_governor key is absent", async () => {
     // given
     const ctx = createMockCtx()
     const hook = createContextGovernorHook(ctx as never, {
@@ -146,14 +146,13 @@ describe("createContextGovernorHook", () => {
       modelCacheState: makeCacheStateWithLimit(TINY_LIMIT),
       directory: () => dir,
     })
-    const sessionID = "ses_disabled_undefined"
+    const sessionID = "ses_default_enabled"
 
     // when
     await fireMessageUpdated(hook, { sessionID, input: 1500 })
-    await fireToolAfter(hook, sessionID, "call_1")
 
     // then
-    expect(ctx.client.session.summarize).not.toHaveBeenCalled()
+    expect(hook.diagnose(sessionID).enabled).toBe(true)
   })
 
   it("is a NOOP when context_governor.enabled=false", async () => {
@@ -196,7 +195,6 @@ describe("createContextGovernorHook", () => {
     expect(call?.path?.id).toBe(sessionID)
     expect(call?.body?.providerID).toBe("opencode")
     expect(call?.body?.modelID).toBe("tiny-model")
-    expect(call?.body?.auto).toBe(true)
     expect(call?.query?.directory).toBe(dir)
   })
 
@@ -321,5 +319,141 @@ describe("createContextGovernorHook", () => {
       .map((line) => JSON.parse(line) as Record<string, unknown>)
     expect(lines.some((entry) => entry.kind === "prepare")).toBe(true)
     expect(lines.some((entry) => entry.kind === "verdict")).toBe(true)
+  })
+
+  it("updates measured tokens from a message snapshot and reports them via diagnose", async () => {
+    // given
+    const ctx = createMockCtx()
+    const hook = createContextGovernorHook(ctx as never, {
+      pluginConfig: { context_governor: tinyCfg() } as never,
+      modelCacheState: makeCacheStateWithLimit(TINY_LIMIT),
+      directory: () => dir,
+    })
+    const sessionID = "ses_measure"
+
+    // when
+    await fireMessageUpdated(hook, { sessionID, input: 600 })
+
+    // then
+    const diagnostic = hook.diagnose(sessionID)
+    expect(diagnostic.enabled).toBe(true)
+    expect(diagnostic.measured_context_tokens).toBe(600)
+    expect(diagnostic.prepare_threshold).toBe(500)
+    expect(diagnostic.preferred_tokens).toBe(1000)
+    expect(diagnostic.compaction_target).toBe(250)
+  })
+
+  it("emits an assessment event with a distill decision when crossing prepare", async () => {
+    // given
+    const events: Array<{ event: string; detail: Record<string, unknown> }> = []
+    const ctx = createMockCtx()
+    const hook = createContextGovernorHook(ctx as never, {
+      pluginConfig: { context_governor: tinyCfg() } as never,
+      modelCacheState: makeCacheStateWithLimit(TINY_LIMIT),
+      directory: () => dir,
+      onEvent: (_sid, event, detail) => events.push({ event, detail }),
+    })
+    const sessionID = "ses_prepare_event"
+
+    // when
+    await fireMessageUpdated(hook, { sessionID, input: 600 })
+    await fireToolAfter(hook, sessionID, "call_1")
+
+    // then
+    expect(events.some((e) => e.event === "assessment" && e.detail.decision === "distill")).toBe(true)
+  })
+
+  it("emits enter_expansion and schedules reassessment on a lease verdict", async () => {
+    // given
+    const events: Array<{ event: string; detail: Record<string, unknown> }> = []
+    const ctx = createMockCtx()
+    const hook = createContextGovernorHook(ctx as never, {
+      pluginConfig: { context_governor: tinyCfg() } as never,
+      modelCacheState: makeCacheStateWithLimit(TINY_LIMIT),
+      directory: () => dir,
+      onEvent: (_sid, event, detail) => events.push({ event, detail }),
+    })
+    const sessionID = "ses_expansion"
+
+    // when
+    await fireMessageUpdated(hook, { sessionID, input: 900 })
+    hook.ingestVerdict(sessionID, LEASE_VERDICT)
+
+    // then
+    expect(events.some((e) => e.event === "enter_expansion")).toBe(true)
+    const expansion = events.find((e) => e.event === "enter_expansion")
+    expect(expansion?.detail.reassess).toBe(1200)
+    expect(hook.diagnose(sessionID).next_reassessment_tokens).toBe(1200)
+    expect(hook.diagnose(sessionID).latest_decision).toBe(null)
+  })
+
+  it("emits a compact event with compressible estimate on a SAFE verdict past compactAt", async () => {
+    // given
+    const events: Array<{ event: string; detail: Record<string, unknown> }> = []
+    const ctx = createMockCtx()
+    const hook = createContextGovernorHook(ctx as never, {
+      pluginConfig: { context_governor: tinyCfg() } as never,
+      modelCacheState: makeCacheStateWithLimit(TINY_LIMIT),
+      directory: () => dir,
+      onEvent: (_sid, event, detail) => events.push({ event, detail }),
+    })
+    const sessionID = "ses_compact_event"
+
+    // when
+    await fireMessageUpdated(hook, { sessionID, input: 1100 })
+    hook.ingestVerdict(sessionID, SAFE_VERDICT)
+    await fireToolAfter(hook, sessionID, "call_1")
+
+    // then
+    expect(ctx.client.session.summarize).toHaveBeenCalledTimes(1)
+    const compact = events.find((e) => e.event === "compact")
+    expect(compact).toBeDefined()
+    expect(compact?.detail.decision).toBe("compact")
+    expect(compact?.detail.compressible).toBe(850)
+    expect(hook.diagnose(sessionID).latest_decision).toBe("compact")
+  })
+
+  it("convergent compaction stops early once the post-compaction target is reached", async () => {
+    // given
+    let messagesCalls = 0
+    const ctx = {
+      client: {
+        session: {
+          messages: mock(() => {
+            messagesCalls += 1
+            const used = messagesCalls === 1 ? 1100 : 150
+            return Promise.resolve({
+              data: [
+                {
+                  info: {
+                    role: "assistant",
+                    providerID: "opencode",
+                    modelID: "tiny-model",
+                    tokens: { input: used, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                  },
+                },
+              ],
+            })
+          }),
+          summarize: mock(() => Promise.resolve({})),
+        },
+        tui: { showToast: mock(() => Promise.resolve()) },
+      },
+      directory: "/tmp/test",
+    }
+    const hook = createContextGovernorHook(ctx as never, {
+      pluginConfig: { context_governor: tinyCfg() } as never,
+      modelCacheState: makeCacheStateWithLimit(TINY_LIMIT),
+      directory: () => dir,
+    })
+    const sessionID = "ses_convergent"
+
+    // when
+    await fireMessageUpdated(hook, { sessionID, input: 1100 })
+    hook.ingestVerdict(sessionID, SAFE_VERDICT)
+    await fireToolAfter(hook, sessionID, "call_1")
+
+    // then: first measure 1100 -> compact; post-compaction measure 150 <= target 250 -> stop after one pass
+    expect(ctx.client.session.summarize).toHaveBeenCalledTimes(1)
   })
 })

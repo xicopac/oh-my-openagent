@@ -11221,7 +11221,7 @@
           "type": "object",
           "properties": {
             "enabled": {
-              "default": false,
+              "default": true,
               "type": "boolean"
             },
             "prepare_at_tokens": {
@@ -11247,6 +11247,12 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 9007199254740991
+            },
+            "max_compaction_passes": {
+              "default": 3,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5
             },
             "provider_relative_ratio": {
               "default": 0.78,
@@ -11430,6 +11436,7 @@
             "audit_at_tokens",
             "normal_limit_tokens",
             "target_after_compaction_tokens",
+            "max_compaction_passes",
             "provider_relative_ratio",
             "capsule_head_max_chars",
             "capsule_full_max_bytes",
@@ -27189,7 +27196,7 @@
                 "type": "object",
                 "properties": {
                   "enabled": {
-                    "default": false,
+                    "default": true,
                     "type": "boolean"
                   },
                   "prepare_at_tokens": {
@@ -27215,6 +27222,12 @@
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 9007199254740991
+                  },
+                  "max_compaction_passes": {
+                    "default": 3,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5
                   },
                   "provider_relative_ratio": {
                     "default": 0.78,
@@ -27398,6 +27411,7 @@
                   "audit_at_tokens",
                   "normal_limit_tokens",
                   "target_after_compaction_tokens",
+                  "max_compaction_passes",
                   "provider_relative_ratio",
                   "capsule_head_max_chars",
                   "capsule_full_max_bytes",

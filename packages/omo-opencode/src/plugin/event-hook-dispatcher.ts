@@ -45,6 +45,7 @@ export function createEventHookDispatcher(hooks: CreatedHooks, runEventHookSafel
     await runEventHookSafely("todoContinuationEnforcer", hooks.todoContinuationEnforcer?.handler, input);
     await runEventHookSafely("unstableAgentBabysitter", hooks.unstableAgentBabysitter?.event, input);
     await runEventHookSafely("preemptiveCompaction", hooks.preemptiveCompaction?.event, input);
+    await runEventHookSafely("contextGovernor", hooks.contextGovernor?.event, input);
     await runEventHookSafely("directoryAgentsInjector", hooks.directoryAgentsInjector?.event, input);
     await runEventHookSafely("directoryReadmeInjector", hooks.directoryReadmeInjector?.event, input);
     await runEventHookSafely("rulesInjector", hooks.rulesInjector?.event, input);

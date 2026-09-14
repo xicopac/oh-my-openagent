@@ -139,4 +139,78 @@ describe("createSessionHooks", () => {
     // then
     expect(result.astGrepSgProvision).not.toBeNull()
   })
+
+  it("registers the context governor by default when the key is absent", () => {
+    // given
+    const pluginConfig = unsafeTestValue<OhMyOpenCodeConfig>({})
+
+    // when
+    const result = createSessionHooks({
+      ctx: mockContext,
+      pluginConfig,
+      modelCacheState: mockModelCacheState,
+      backgroundManager: mockBackgroundManager,
+      isHookEnabled: (hookName) => hookName === "context-governor",
+      safeHookEnabled: true,
+    })
+
+    // then
+    expect(result.contextGovernor).not.toBeNull()
+  })
+
+  it("does not register the context governor when context_governor.enabled is false", () => {
+    // given
+    const pluginConfig = { context_governor: { enabled: false } } as OhMyOpenCodeConfig
+
+    // when
+    const result = createSessionHooks({
+      ctx: mockContext,
+      pluginConfig,
+      modelCacheState: mockModelCacheState,
+      backgroundManager: mockBackgroundManager,
+      isHookEnabled: (hookName) => hookName === "context-governor",
+      safeHookEnabled: true,
+    })
+
+    // then
+    expect(result.contextGovernor).toBeNull()
+  })
+
+  it("does not register the context governor when disabled_hooks includes context-governor", () => {
+    // given
+    const pluginConfig = unsafeTestValue<OhMyOpenCodeConfig>({})
+
+    // when
+    const result = createSessionHooks({
+      ctx: mockContext,
+      pluginConfig,
+      modelCacheState: mockModelCacheState,
+      backgroundManager: mockBackgroundManager,
+      isHookEnabled: (hookName) => hookName !== "context-governor",
+      safeHookEnabled: true,
+    })
+
+    // then
+    expect(result.contextGovernor).toBeNull()
+  })
+
+  it("registers the context governor exactly once (no duplicate registration)", () => {
+    // given
+    const pluginConfig = unsafeTestValue<OhMyOpenCodeConfig>({})
+
+    // when
+    const result = createSessionHooks({
+      ctx: mockContext,
+      pluginConfig,
+      modelCacheState: mockModelCacheState,
+      backgroundManager: mockBackgroundManager,
+      isHookEnabled: () => true,
+      safeHookEnabled: true,
+    })
+
+    // then
+    const governorKeys = Object.keys(result).filter((key) => key === "contextGovernor")
+    expect(governorKeys).toHaveLength(1)
+    expect(result.contextGovernor).not.toBeNull()
+  })
 })

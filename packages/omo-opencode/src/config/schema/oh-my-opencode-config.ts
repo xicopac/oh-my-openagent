@@ -77,9 +77,11 @@ export const OhMyOpenCodeConfigSchema = z.object({
   comment_checker: CommentCheckerConfigSchema.optional(),
   experimental: ExperimentalConfigSchema.optional(),
   /**
-   * Context governor subsystem (opt-in, experimental). Reconciles user-declared
-   * absolute-cap thresholds against the model's actual context window so that
-   * compaction / audit / prepare fire at the correct provider-relative points.
+   * Context governor subsystem. Reconciles user-declared absolute-cap
+   * thresholds against the model's actual context window so that compaction /
+   * audit / prepare fire at the correct provider-relative points. Enabled by
+   * default in this fork; an explicit `enabled: false` disables it without
+   * requiring the key to be present for the feature to run.
    */
   context_governor: ContextGovernorConfigSchema.optional(),
   /**

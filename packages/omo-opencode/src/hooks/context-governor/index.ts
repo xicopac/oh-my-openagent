@@ -5,8 +5,12 @@ import type { ContextLimitModelCacheState } from "@oh-my-opencode/model-core"
 import { resolveActualContextLimit } from "@oh-my-opencode/model-core"
 
 import type { OhMyOpenCodeConfig } from "../../config"
+import {
+  DEFAULT_CONTEXT_GOVERNOR_CONFIG,
+  type ContextGovernorConfig,
+} from "../../config/schema/context-governor"
 import { writeAtomicText } from "../../shared/atomic-fs"
-import { getContextWindowUsage } from "../../shared/context-window-usage"
+import { getContextWindowUsage, invalidateContextWindowUsageCache } from "../../shared/context-window-usage"
 import { resolveMessageEventSessionID, resolveSessionEventID } from "../../shared/event-session-id"
 import { log } from "../../shared/logger"
 
@@ -23,7 +27,7 @@ import {
   type LeaseRecord,
   type RetainedRange,
 } from "./lease-store"
-import { resolveEffectiveThresholds } from "./threshold-policy"
+import { resolveEffectiveThresholds, type EffectiveThresholds } from "./threshold-policy"
 import type { VerifierVerdict } from "./verdict"
 
 export { encodeSessionId } from "./capsule-store"
@@ -36,6 +40,7 @@ export type {
 
 const COMPACTION_TIMEOUT_MS = 60_000
 const CAPSULE_STALENESS_GRACE = 5
+const MIN_PASS_REDUCTION_TOKENS = 1_000
 
 declare function setTimeout(handler: () => void, timeout?: number): unknown
 declare function clearTimeout(timeoutID: unknown): void
@@ -60,6 +65,51 @@ export type GovernorSignalBus = {
 
 const NOOP_SIGNAL_BUS: GovernorSignalBus = { wake: () => {} }
 
+export type ContextGovernorEventName =
+  | "assessment"
+  | "enter_expansion"
+  | "continue_expansion"
+  | "compact"
+
+export type ContextGovernorDecisionClass =
+  | "none"
+  | "distill"
+  | "audit"
+  | "compact"
+  | "expansion"
+  | "defer"
+
+export function classifyDecision(decision: GovernorDecision): ContextGovernorDecisionClass {
+  switch (decision.kind) {
+    case "prepare":
+      return "distill"
+    case "audit":
+      return "audit"
+    case "compact":
+    case "compact_degraded":
+    case "force_compact":
+      return "compact"
+    case "defer_lease":
+    case "renew_lease":
+      return "expansion"
+    case "defer_no_capsule":
+      return "defer"
+    case "none":
+      return "none"
+  }
+}
+
+function eventNameFor(classification: ContextGovernorDecisionClass): ContextGovernorEventName {
+  switch (classification) {
+    case "compact":
+      return "compact"
+    case "expansion":
+      return "continue_expansion"
+    default:
+      return "assessment"
+  }
+}
+
 type LeaseMeta = {
   turns_since_grant: number
   tokens_since_grant: number
@@ -74,6 +124,17 @@ type GovernorSessionState = {
   verdict: VerifierVerdict | null
   lease_meta: LeaseMeta
   last_audit_error: string | null
+  lastEffective: EffectiveThresholds | null
+  entered_at_tokens: number | null
+  next_reassessment_tokens: number | null
+  turns_since_assessment: number
+  last_assessment: {
+    decision: GovernorDecision["kind"]
+    classification: ContextGovernorDecisionClass
+    reason: string
+    context_tokens: number
+    ts: string
+  } | null
 }
 
 function initialState(): GovernorSessionState {
@@ -85,6 +146,11 @@ function initialState(): GovernorSessionState {
     verdict: null,
     lease_meta: { turns_since_grant: 0, tokens_since_grant: 0, grant_usage: 0 },
     last_audit_error: null,
+    lastEffective: null,
+    entered_at_tokens: null,
+    next_reassessment_tokens: null,
+    turns_since_assessment: 0,
+    last_assessment: null,
   }
 }
 
@@ -142,6 +208,25 @@ export type ContextGovernorHookDeps = {
   directory?: () => string
   signalBus?: GovernorSignalBus
   now?: () => Date
+  onEvent?: (
+    sessionID: string,
+    event: ContextGovernorEventName,
+    detail: Record<string, unknown>,
+  ) => void
+}
+
+export type ContextGovernorDiagnostic = {
+  enabled: boolean
+  phase: GovernorPhase
+  measured_context_tokens: number | null
+  preferred_tokens: number | null
+  prepare_threshold: number | null
+  compaction_target: number | null
+  non_compressible_baseline: number | null
+  latest_assessment: GovernorSessionState["last_assessment"]
+  latest_decision: string | null
+  next_reassessment_tokens: number | null
+  turns_since_assessment: number
 }
 
 export type ContextGovernorHook = {
@@ -154,6 +239,7 @@ export type ContextGovernorHook = {
     input: { tool: string; sessionID: string; callID: string },
     output: { title: string; output: string; metadata: unknown },
   ) => Promise<void>
+  diagnose: (sessionID: string) => ContextGovernorDiagnostic
 }
 
 export function createContextGovernorHook(
@@ -164,6 +250,11 @@ export function createContextGovernorHook(
   const compactionInProgress = new Set<string>()
   const signalBus = deps.signalBus ?? NOOP_SIGNAL_BUS
   const nowFn = deps.now ?? (() => new Date())
+  const onEvent = deps.onEvent ?? (() => {})
+
+  function resolveConfig(): ContextGovernorConfig {
+    return deps.pluginConfig.context_governor ?? DEFAULT_CONTEXT_GOVERNOR_CONFIG
+  }
   const resolveDirectory = deps.directory ?? (() => (ctx as unknown as { directory: string }).directory)
   const leaseStoreCache = new Map<string, ReturnType<typeof createLeaseStore>>()
 
@@ -185,11 +276,6 @@ export function createContextGovernorHook(
     return s
   }
 
-  function isEnabled(): boolean {
-    const cfg = deps.pluginConfig.context_governor
-    return cfg?.enabled === true
-  }
-
   function isCapsuleFresh(sessionID: string, currentSeq: number): boolean {
     try {
       const capsule = readCapsule(resolveDirectory(), sessionID)
@@ -201,33 +287,51 @@ export function createContextGovernorHook(
     }
   }
 
+  async function summarizeOnce(
+    sessionID: string,
+    sessionState: GovernorSessionState,
+  ): Promise<void> {
+    const summarizePromise = ctx.client.session.summarize({
+      path: { id: sessionID },
+      body: {
+        providerID: sessionState.providerID as string,
+        modelID: sessionState.modelID as string,
+      },
+      query: { directory: resolveDirectory() },
+    })
+    await withTimeout(
+      summarizePromise,
+      COMPACTION_TIMEOUT_MS,
+      `Governor compaction summarize timed out after ${COMPACTION_TIMEOUT_MS}ms`,
+    )
+  }
+
   async function performSummarize(
     sessionID: string,
     sessionState: GovernorSessionState,
+    effective: EffectiveThresholds,
   ): Promise<void> {
     if (compactionInProgress.has(sessionID)) return
     if (!sessionState.providerID || !sessionState.modelID) return
 
+    const cfg = resolveConfig()
+    const maxPasses = cfg.max_compaction_passes ?? 3
+
     compactionInProgress.add(sessionID)
     try {
-      const summarizePromise = ctx.client.session.summarize({
-        path: { id: sessionID },
-        body: {
-          providerID: sessionState.providerID,
-          modelID: sessionState.modelID,
-          auto: true,
-        },
-        query: { directory: resolveDirectory() },
-      })
-      void summarizePromise.then(
-        () => compactionInProgress.delete(sessionID),
-        () => compactionInProgress.delete(sessionID),
-      )
-      await withTimeout(
-        summarizePromise,
-        COMPACTION_TIMEOUT_MS,
-        `Governor compaction summarize timed out after ${COMPACTION_TIMEOUT_MS}ms`,
-      )
+      let previousUsed = sessionState.lastUsedTokens
+      for (let pass = 0; pass < maxPasses; pass++) {
+        await summarizeOnce(sessionID, sessionState)
+        invalidateContextWindowUsageCache(ctx, sessionID)
+        const usage = await getContextWindowUsage(ctx, sessionID, deps.modelCacheState)
+        const after = usage?.usedTokens
+        if (typeof after !== "number") break
+        sessionState.lastUsedTokens = after
+        if (after <= effective.targetAfter) break
+        const reduction = previousUsed - after
+        if (pass > 0 && reduction < MIN_PASS_REDUCTION_TOKENS) break
+        previousUsed = after
+      }
       sessionState.phase = "idle"
     } catch (error) {
       const errorMessage = String(error)
@@ -238,6 +342,8 @@ export function createContextGovernorHook(
         modelID: sessionState.modelID,
         error: errorMessage,
       })
+    } finally {
+      compactionInProgress.delete(sessionID)
     }
   }
 
@@ -285,8 +391,7 @@ export function createContextGovernorHook(
 
     const verdict = verdictOrError
     if (verdict.verdict === "CONTEXT_LEASE_REQUIRED") {
-      const cfg = deps.pluginConfig.context_governor
-      if (!cfg) return
+      const cfg = resolveConfig()
       const store = getLeaseStore()
       const grant = store.grantLease(sessionID, {
         context_size_at_grant: sessionState.lastUsedTokens,
@@ -305,6 +410,14 @@ export function createContextGovernorHook(
           tokens_since_grant: 0,
           grant_usage: sessionState.lastUsedTokens,
         }
+        sessionState.entered_at_tokens = sessionState.lastUsedTokens
+        sessionState.next_reassessment_tokens =
+          sessionState.lastUsedTokens + cfg.lease.extra_tokens
+        onEvent(sessionID, "enter_expansion", {
+          context: sessionState.lastUsedTokens,
+          reason: verdict.reason,
+          reassess: sessionState.next_reassessment_tokens,
+        })
       }
     } else {
       sessionState.verdict = verdict
@@ -384,8 +497,8 @@ export function createContextGovernorHook(
     input: { tool: string; sessionID: string; callID: string },
     _output: { title: string; output: string; metadata: unknown },
   ): Promise<void> => {
-    const cfg = deps.pluginConfig.context_governor
-    if (!cfg || cfg.enabled !== true) return
+    const cfg = resolveConfig()
+    if (cfg.enabled !== true) return
 
     const sessionID = input.sessionID
     const sessionState = getOrInitState(sessionID)
@@ -445,6 +558,8 @@ export function createContextGovernorHook(
     }
     const decision = evaluateGovernorDecision(decisionInput)
 
+    sessionState.lastEffective = effective
+
     appendAuditLine(resolveDirectory(), sessionID, {
       ts: nowFn().toISOString(),
       session_id: sessionID,
@@ -455,6 +570,32 @@ export function createContextGovernorHook(
     })
 
     updateBlockedFlag(sessionID, decision)
+
+    sessionState.turns_since_assessment += 1
+    if (decision.kind !== "none") {
+      const classification = classifyDecision(decision)
+      sessionState.last_assessment = {
+        decision: decision.kind,
+        classification,
+        reason: decision.reason,
+        context_tokens: usedTokens,
+        ts: nowFn().toISOString(),
+      }
+      const detail: Record<string, unknown> = {
+        context: usedTokens,
+        preferred: effective.compactAt,
+        decision: classification,
+        reason: decision.reason,
+        target: effective.targetAfter,
+      }
+      if (classification === "compact") {
+        detail.compressible = Math.max(0, usedTokens - effective.targetAfter)
+      }
+      if (sessionState.next_reassessment_tokens !== null) {
+        detail.reassess = sessionState.next_reassessment_tokens
+      }
+      onEvent(sessionID, eventNameFor(classification), detail)
+    }
 
     switch (decision.kind) {
       case "none":
@@ -469,13 +610,19 @@ export function createContextGovernorHook(
         return
       case "compact":
       case "compact_degraded":
-        await performSummarize(sessionID, sessionState)
+        await performSummarize(sessionID, sessionState, effective)
+        sessionState.entered_at_tokens = null
+        sessionState.next_reassessment_tokens = null
+        sessionState.turns_since_assessment = 0
         return
       case "force_compact":
         sessionState.phase = "forcing"
-        await performSummarize(sessionID, sessionState)
+        await performSummarize(sessionID, sessionState, effective)
         if (activeLease) store.expireLease(sessionID)
         sessionState.lease_meta = { turns_since_grant: 0, tokens_since_grant: 0, grant_usage: 0 }
+        sessionState.entered_at_tokens = null
+        sessionState.next_reassessment_tokens = null
+        sessionState.turns_since_assessment = 0
         return
       case "renew_lease": {
         const outcome = store.renewLease(sessionID, {
@@ -488,6 +635,9 @@ export function createContextGovernorHook(
             tokens_since_grant: 0,
             grant_usage: usedTokens,
           }
+          sessionState.entered_at_tokens = usedTokens
+          sessionState.next_reassessment_tokens = usedTokens + cfg.lease.extra_tokens
+          sessionState.turns_since_assessment = 0
         }
         return
       }
@@ -497,9 +647,58 @@ export function createContextGovernorHook(
     }
   }
 
+  const diagnose = (sessionID: string): ContextGovernorDiagnostic => {
+    const cfg = resolveConfig()
+    const sessionState = state.get(sessionID)
+    if (!sessionState) {
+      return {
+        enabled: cfg.enabled === true,
+        phase: "idle",
+        measured_context_tokens: null,
+        preferred_tokens: null,
+        prepare_threshold: null,
+        compaction_target: null,
+        non_compressible_baseline: null,
+        latest_assessment: null,
+        latest_decision: null,
+        next_reassessment_tokens: null,
+        turns_since_assessment: 0,
+      }
+    }
+
+    const effective =
+      sessionState.lastEffective ??
+      (sessionState.providerID && sessionState.modelID
+        ? resolveEffectiveThresholds({
+            configured: cfg,
+            actualLimit: resolveActualContextLimit(
+              sessionState.providerID,
+              sessionState.modelID,
+              deps.modelCacheState,
+            ),
+          })
+        : null)
+
+    return {
+      enabled: cfg.enabled === true,
+      phase: sessionState.phase,
+      measured_context_tokens:
+        sessionState.lastUsedTokens > 0 ? sessionState.lastUsedTokens : null,
+      preferred_tokens: effective?.compactAt ?? null,
+      prepare_threshold: effective?.prepareAt ?? null,
+      compaction_target: effective?.targetAfter ?? null,
+      non_compressible_baseline: null,
+      latest_assessment: sessionState.last_assessment,
+      latest_decision: sessionState.last_assessment?.classification ?? null,
+      next_reassessment_tokens: sessionState.next_reassessment_tokens,
+      turns_since_assessment: sessionState.turns_since_assessment,
+    }
+  }
+
   return {
     event: eventHandler,
     ingestVerdict,
     "tool.execute.after": toolExecuteAfter,
+    diagnose,
   }
 }

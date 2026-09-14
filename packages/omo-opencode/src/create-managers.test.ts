@@ -359,4 +359,30 @@ describe("createManagers", () => {
     expect(tuiMirrorConstructedInputs).toHaveLength(0)
     expect(tuiMirrorStartCount).toBe(0)
   })
+
+  it("#given resource governor enabled #when managers are created with any context_governor config #then the resource governor runtime is still built", () => {
+    // given: context_governor absent, explicitly disabled, and explicitly enabled
+    const configs = [
+      { resource_governor: { enabled: true } },
+      { resource_governor: { enabled: true }, context_governor: { enabled: false } },
+      { resource_governor: { enabled: true }, context_governor: { enabled: true } },
+    ]
+
+    // when
+    const results = configs.map((cfg) =>
+      createManagers({
+        ctx: createContext("/tmp/project"),
+        pluginConfig: OhMyOpenCodeConfigSchema.parse(cfg),
+        tmuxConfig: createTmuxConfig(false),
+        modelCacheState: createModelCacheState(),
+        backgroundNotificationHookEnabled: false,
+        deps: createDeps(),
+      }),
+    )
+
+    // then
+    for (const managers of results) {
+      expect(managers.resourceGovernorRuntime).toBeDefined()
+    }
+  })
 })

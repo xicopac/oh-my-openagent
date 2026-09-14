@@ -97,6 +97,7 @@ export function createToolExecuteAfterHandler(args: {
       await hooks.toolOutputTruncator?.["tool.execute.after"]?.(hookInput, output)
       await hooks.claudeCodeHooks?.["tool.execute.after"]?.(hookInput, output)
       await hooks.preemptiveCompaction?.["tool.execute.after"]?.(hookInput, output)
+      await hooks.contextGovernor?.["tool.execute.after"]?.(hookInput, output)
       await hooks.commentChecker?.["tool.execute.after"]?.(hookInput, output)
       await hooks.directoryAgentsInjector?.["tool.execute.after"]?.(hookInput, output)
       await hooks.directoryReadmeInjector?.["tool.execute.after"]?.(hookInput, output)

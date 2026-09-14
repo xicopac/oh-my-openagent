@@ -22,7 +22,7 @@ describe("ContextGovernorConfigSchema", () => {
     const cfg = ContextGovernorConfigSchema.parse({})
 
     // then
-    expect(cfg.enabled).toBe(false)
+    expect(cfg.enabled).toBe(true)
     expect(cfg.prepare_at_tokens).toBe(110000)
     expect(cfg.audit_at_tokens).toBe(135000)
     expect(cfg.normal_limit_tokens).toBe(150000)

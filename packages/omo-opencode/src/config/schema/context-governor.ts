@@ -64,8 +64,13 @@ export const ContextGovernorLeaseConfigSchema = z
 
 export const ContextGovernorConfigSchema = z
   .object({
-    /** Master switch for the context governor subsystem (opt-in / experimental, default: false). */
-    enabled: z.boolean().default(false),
+    /**
+     * Master switch for the context governor subsystem. Our fork activates it
+     * by default (`default: true`); an explicit `enabled: false` still turns
+     * the whole subsystem off without requiring the key to be present for the
+     * feature to operate.
+     */
+    enabled: z.boolean().default(true),
     /** Absolute-cap token count that triggers pre-audit capsule preparation (default: 110000, min: 1). */
     prepare_at_tokens: z.number().int().min(1).default(110000),
     /** Absolute-cap token count that triggers the twin audit (default: 135000, min: 1). */
@@ -74,6 +79,8 @@ export const ContextGovernorConfigSchema = z
     normal_limit_tokens: z.number().int().min(1).default(150000),
     /** Post-compaction target size in tokens; the compactor aims at (but does not exceed) this value (default: 60000, min: 1). */
     target_after_compaction_tokens: z.number().int().min(1).default(60000),
+    /** Maximum summarize passes per convergent-compaction cycle; stops early when a pass stops yielding material reduction (default: 3, range: 1..5). */
+    max_compaction_passes: z.number().int().min(1).max(5).default(3),
     /** Fraction of the model's actual context window that binds when it is smaller than `normal_limit_tokens` (default: 0.78, range: 0.1..1). Reuses the existing 78% margin from preemptive-compaction-trigger. */
     provider_relative_ratio: z.number().min(0.1).max(1).default(0.78),
     /** Maximum characters for the short-form capsule head (default: 8000, min: 100). */
@@ -118,3 +125,6 @@ export const ContextGovernorConfigSchema = z
 export type ContextGovernorTwinConfig = z.infer<typeof ContextGovernorTwinConfigSchema>
 export type ContextGovernorLeaseConfig = z.infer<typeof ContextGovernorLeaseConfigSchema>
 export type ContextGovernorConfig = z.infer<typeof ContextGovernorConfigSchema>
+
+export const DEFAULT_CONTEXT_GOVERNOR_CONFIG: ContextGovernorConfig =
+  ContextGovernorConfigSchema.parse({})
