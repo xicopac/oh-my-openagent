@@ -18,6 +18,17 @@ export type WorkerCandidate = {
   capability: number
   free: boolean
   cost_usd_per_1m_input?: number
+  cost_usd_per_1m_output?: number
+  cost_usd_per_1m_cache_read?: number
+  cost_usd_per_1m_cache_write?: number
+  /** Context window (tokens) when known; omitted when unknown. */
+  context_limit?: number
+  /** True when the model accepts image/vision input. */
+  vision?: boolean
+  /** True when the model supports tool calls. */
+  tool_call?: boolean
+  /** True when the model supports reasoning/thinking. */
+  reasoning?: boolean
 }
 
 export type AttemptResult = {

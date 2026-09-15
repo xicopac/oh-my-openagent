@@ -3,6 +3,12 @@ import { log } from "../../shared/logger"
 import { isRecord } from "../../shared/record-type-guard"
 import * as connectedProvidersCache from "../../shared/connected-providers-cache"
 import type { ModelPricing, PricingCatalog } from "../../hooks/resource-governor/pricing"
+import type { ModelCapabilityInfo } from "../../features/delegation-first"
+import {
+  computeModelEnableState,
+  filterEnabledModelKeys,
+  type ModelEnableState,
+} from "../../shared/model-enable-state"
 
 type ModelListClient = OpencodeClient & {
   model: { list: () => Promise<unknown> }
@@ -35,9 +41,80 @@ function extractModelPricing(cost: unknown): ModelPricing | undefined {
 
 export { extractModelPricing as extractModelPricingForTest }
 
+/** Read the workspace enable state from OpenCode's live config (best-effort). */
+export async function getEnabledModelState(client: OpencodeClient): Promise<ModelEnableState> {
+  const cfgClient = client as OpencodeClient & { config?: { get?: () => Promise<unknown> } }
+  try {
+    const raw = await cfgClient.config?.get?.()
+    const data = isRecord(raw) && isRecord(raw.data) ? raw.data : raw
+    return computeModelEnableState(data)
+  } catch (err) {
+    log("[delegate-task] client.config.get failed; treating all models enabled", { error: String(err) })
+    return computeModelEnableState(undefined)
+  }
+}
+
+type ModelInfoResult = { models: Set<string>; pricing: PricingCatalog; modelInfo: Map<string, ModelCapabilityInfo> }
+
+function readNumber(value: unknown): number | undefined {
+  return typeof value === "number" && value > 0 ? value : undefined
+}
+
+function readVision(capabilities: Record<string, unknown> | undefined, modalities: unknown): boolean | undefined {
+  if (isRecord(capabilities)) {
+    const input = capabilities.input
+    if (isRecord(input)) {
+      const image = (input as Record<string, unknown>).image
+      if (typeof image === "boolean") return image
+    }
+  }
+  if (isRecord(modalities)) {
+    const input = modalities.input
+    if (Array.isArray(input)) return input.includes("image")
+  }
+  return undefined
+}
+
+function modelInfoFromMetadata(metadata: unknown): ModelCapabilityInfo | undefined {
+  if (!isRecord(metadata)) return undefined
+  const limit = isRecord(metadata.limit) ? metadata.limit : undefined
+  const context = readNumber(limit?.context)
+  const modalities = metadata.modalities
+  const capabilities = metadata.capabilities
+  const toolCall = typeof metadata.tool_call === "boolean" ? metadata.tool_call : (isRecord(capabilities) && typeof capabilities.toolcall === "boolean" ? capabilities.toolcall : undefined)
+  const reasoning = typeof metadata.reasoning === "boolean" ? metadata.reasoning : undefined
+  const vision = readVision(isRecord(capabilities) ? capabilities : undefined, modalities)
+  const info: ModelCapabilityInfo = {}
+  if (context !== undefined) info.context_limit = context
+  if (vision !== undefined) info.vision = vision
+  if (toolCall !== undefined) info.tool_call = toolCall
+  if (reasoning !== undefined) info.reasoning = reasoning
+  return Object.keys(info).length > 0 ? info : undefined
+}
+
 export async function getAvailableModelsForDelegateTask(client: OpencodeClient): Promise<Set<string>> {
   const { models } = await getModelsWithPricingForDelegateTask(client)
   return models
+}
+
+export async function getModelsWithPricingAndMetadataForDelegateTask(client: OpencodeClient): Promise<ModelInfoResult> {
+  const base = await getModelsWithPricingForDelegateTask(client)
+  const modelInfo = new Map<string, ModelCapabilityInfo>()
+
+  const providerModelsCache = connectedProvidersCache.readProviderModelsCache()
+  if (providerModelsCache?.models) {
+    for (const [providerID, entries] of Object.entries(providerModelsCache.models)) {
+      for (const entry of entries as Array<string | Record<string, unknown>>) {
+        if (typeof entry === "string") continue
+        const id = typeof entry.id === "string" ? entry.id : undefined
+        if (!id) continue
+        const info = modelInfoFromMetadata(entry)
+        if (info) modelInfo.set(`${providerID}/${id}`, info)
+      }
+    }
+  }
+
+  return { models: base.models, pricing: base.pricing, modelInfo }
 }
 
 /**

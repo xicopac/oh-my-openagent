@@ -19,6 +19,22 @@ import {
 } from "../../hooks/resource-governor/pricing"
 import type { EscalationTier, WorkerCandidate } from "../delegation-ladder"
 
+/** Per-model capability + context metadata used to filter and annotate candidates. */
+export type ModelCapabilityInfo = {
+  context_limit?: number
+  vision?: boolean
+  tool_call?: boolean
+  reasoning?: boolean
+}
+
+/** Capability requirements a task may impose on a candidate. */
+export type WorkerCapabilityRequirement = {
+  vision?: boolean
+  tool_call?: boolean
+  reasoning?: boolean
+  min_context?: number
+}
+
 export type BuildWorkerCandidatesInput = {
   pricing: PricingCatalog
   /** Available model ids (provider/model form), e.g. "opengateway/gpt-5". */
@@ -33,6 +49,10 @@ export type BuildWorkerCandidatesInput = {
   minCapability?: number
   /** Injected capability score per model id (0..1). Unknown ids are treated as 1.0. */
   capabilities?: ReadonlyMap<string, number>
+  /** Per-model capability/context/price metadata, merged onto each candidate. */
+  modelInfo?: ReadonlyMap<string, ModelCapabilityInfo>
+  /** Required modalities/context; candidates lacking a known capability are dropped. */
+  required?: WorkerCapabilityRequirement
 }
 
 /**
@@ -67,8 +87,30 @@ const TIER_ORDER: EscalationTier[] = ["free", "free_alt", "cheap_paid", "strong_
  * resolved model is always included even if it is not currently marked
  * available, so the single already-resolved dispatch target is never dropped.
  */
+function meetsRequirement(
+  info: ModelCapabilityInfo | undefined,
+  required: WorkerCapabilityRequirement | undefined,
+): boolean {
+  if (!required) return true
+  if (required.vision && info?.vision !== true) return false
+  if (required.tool_call && info?.tool_call !== true) return false
+  if (required.reasoning && info?.reasoning !== true) return false
+  if (required.min_context !== undefined && (info?.context_limit ?? 0) < required.min_context) return false
+  return true
+}
+
 export function buildDelegationWorkerCandidates(input: BuildWorkerCandidatesInput): WorkerCandidate[] {
-  const { pricing, available, resolvedModelID, unavailable, mainModel, minCapability, capabilities } = input
+  const {
+    pricing,
+    available,
+    resolvedModelID,
+    unavailable,
+    mainModel,
+    minCapability,
+    capabilities,
+    modelInfo,
+    required,
+  } = input
 
   const unavailableSet = unavailable ?? new Set<string>()
 
@@ -81,10 +123,11 @@ export function buildDelegationWorkerCandidates(input: BuildWorkerCandidatesInpu
   const scored = [...all].map((id) => {
     const { tier, free, cost_usd_per_1m_input } = tierForPricing(id, pricing)
     const capability = capabilities?.get(id) ?? (free ? 0.7 : 1.0)
-    return { id, tier, free, cost_usd_per_1m_input, capability }
+    const info = modelInfo?.get(id)
+    return { id, tier, free, cost_usd_per_1m_input, capability, info }
   }).filter((item) => {
-    if (minCapability === undefined) return true
-    return item.capability >= minCapability
+    if (minCapability !== undefined && item.capability < minCapability) return false
+    return meetsRequirement(item.info, required)
   })
 
   scored.sort((a, b) => {
@@ -102,21 +145,35 @@ export function buildDelegationWorkerCandidates(input: BuildWorkerCandidatesInpu
   for (const item of scored) {
     if (seen.has(item.id)) continue
     seen.add(item.id)
+    const price = lookupPricing(pricing, item.id)
+    const info = item.info
     candidates.push({
       model_id: item.id,
       tier: item.tier,
       capability: item.capability,
       free: item.free,
       ...(item.cost_usd_per_1m_input === undefined ? {} : { cost_usd_per_1m_input: item.cost_usd_per_1m_input }),
+      ...(price?.output === undefined ? {} : { cost_usd_per_1m_output: price.output }),
+      ...(price?.cache_read === undefined ? {} : { cost_usd_per_1m_cache_read: price.cache_read }),
+      ...(price?.cache_write === undefined ? {} : { cost_usd_per_1m_cache_write: price.cache_write }),
+      ...(info?.context_limit === undefined ? {} : { context_limit: info.context_limit }),
+      ...(info?.vision === undefined ? {} : { vision: info.vision }),
+      ...(info?.tool_call === undefined ? {} : { tool_call: info.tool_call }),
+      ...(info?.reasoning === undefined ? {} : { reasoning: info.reasoning }),
     })
   }
 
   if (mainModel && !unavailableSet.has(mainModel) && !seen.has(mainModel)) {
+    const info = modelInfo?.get(mainModel)
     candidates.push({
       model_id: mainModel,
       tier: "expert",
       capability: capabilities?.get(mainModel) ?? 1.0,
       free: false,
+      ...(info?.vision === undefined ? {} : { vision: info.vision }),
+      ...(info?.tool_call === undefined ? {} : { tool_call: info.tool_call }),
+      ...(info?.reasoning === undefined ? {} : { reasoning: info.reasoning }),
+      ...(info?.context_limit === undefined ? {} : { context_limit: info.context_limit }),
     })
   }
 

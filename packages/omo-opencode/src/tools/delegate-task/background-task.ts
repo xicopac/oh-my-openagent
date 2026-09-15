@@ -14,7 +14,8 @@ import { buildTaskMetadataBlock } from "../../features/tool-metadata-store/task-
 import { resolveMetadataModel } from "./resolve-metadata-model"
 import { getPersistedBackgroundTaskDescription } from "./background-task-description"
 import { buildDelegationWorkerCandidates } from "../../features/delegation-first"
-import { getModelsWithPricingForDelegateTask } from "./available-models"
+import { getModelsWithPricingAndMetadataForDelegateTask, getEnabledModelState } from "./available-models"
+import { filterEnabledModelKeys } from "../../shared/model-enable-state"
 import { resolvedModelKey } from "../../hooks/resource-governor"
 
 function registerBackgroundSessionContext(args: {
@@ -190,24 +191,30 @@ export async function executeBackgroundTask(
     if (executorCtx.delegationFirstRuntime && executorCtx.pricingCatalog) {
       let available = new Set<string>()
       let pricing = executorCtx.pricingCatalog
+      let modelInfo = new Map<string, import("../../features/delegation-first").ModelCapabilityInfo>()
       try {
-        const live = await getModelsWithPricingForDelegateTask(executorCtx.client)
+        const live = await getModelsWithPricingAndMetadataForDelegateTask(executorCtx.client)
         available = live.models
+        modelInfo = live.modelInfo
         pricing = { ...executorCtx.pricingCatalog, ...live.pricing }
       } catch {
         available = new Set()
       }
+      const enableState = await getEnabledModelState(executorCtx.client)
       const resolvedModelID = categoryModel?.modelID
         ? resolvedModelKey(categoryModel.providerID, categoryModel.modelID)
         : null
       const mainModelID = parentContext.model?.modelID
         ? resolvedModelKey(parentContext.model.providerID, parentContext.model.modelID)
         : undefined
+      const unavailable = new Set(executorCtx.delegationFirstRuntime?.unavailableModels() ?? [])
+      for (const modelKey of enableState.disabledModels) unavailable.add(modelKey)
       const workers = buildDelegationWorkerCandidates({
         pricing,
-        available,
+        available: filterEnabledModelKeys(available, enableState),
         resolvedModelID,
-        unavailable: new Set(executorCtx.delegationFirstRuntime?.unavailableModels() ?? []),
+        unavailable,
+        modelInfo,
         mainModel: mainModelID,
       })
       executorCtx.delegationFirstRuntime.retainAssignment(

@@ -3,7 +3,8 @@ import { resolveModelTier } from "@oh-my-opencode/delegate-core"
 import type { DelegatedModelConfig, ToolContextWithMetadata, DelegateTaskToolOptions, DelegateTaskArgs } from "./types"
 import { log } from "../../shared/logger"
 import { parseModelString } from "../../shared/model-string-parser"
-import { getAvailableModelsForDelegateTask, getModelsWithPricingForDelegateTask } from "./available-models"
+import { getAvailableModelsForDelegateTask, getModelsWithPricingAndMetadataForDelegateTask, getEnabledModelState } from "./available-models"
+import { filterEnabledModelKeys } from "../../shared/model-enable-state"
 import { buildSystemContent } from "./prompt-builder"
 import {
   resolveSkillContent,
@@ -376,28 +377,36 @@ async function runDelegationFirstSync(params: DelegationFirstSyncParams): Promis
 
   let available = new Set<string>()
   let pricing = options.pricingCatalog
+  let candidateModelInfo = new Map<string, import("../../features/delegation-first").ModelCapabilityInfo>()
   if (options.availableModelsOverride) {
     available = options.availableModelsOverride
   } else {
     try {
-      const live = await getModelsWithPricingForDelegateTask(options.client)
+      const live = await getModelsWithPricingAndMetadataForDelegateTask(options.client)
       available = live.models
+      candidateModelInfo = live.modelInfo
       pricing = options.pricingCatalog ? { ...options.pricingCatalog, ...live.pricing } : options.pricingCatalog
     } catch {
       available = new Set()
     }
   }
 
+  const enableState = await getEnabledModelState(options.client)
+
   const resolvedModelID = categoryModel?.modelID
     ? resolvedModelKey(categoryModel.providerID, categoryModel.modelID)
     : null
 
+  const unavailable = new Set(options.delegationFirstRuntime?.unavailableModels() ?? [])
+  for (const modelKey of enableState.disabledModels) unavailable.add(modelKey)
+
   const workers = pricing
     ? buildDelegationWorkerCandidates({
         pricing,
-        available,
+        available: filterEnabledModelKeys(available, enableState),
         resolvedModelID,
-        unavailable: new Set(options.delegationFirstRuntime?.unavailableModels() ?? []),
+        unavailable,
+        modelInfo: candidateModelInfo,
         mainModel: parentContext.model?.modelID
           ? resolvedModelKey(parentContext.model.providerID, parentContext.model.modelID)
           : undefined,

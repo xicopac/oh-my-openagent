@@ -10,6 +10,8 @@ export {
   estimatedCostUsdFor,
   tierForPricing,
   type BuildWorkerCandidatesInput,
+  type ModelCapabilityInfo,
+  type WorkerCapabilityRequirement,
 } from "./free-worker-candidates"
 export {
   recommendFailoverAction,
