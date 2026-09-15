@@ -147,6 +147,66 @@ export interface ErrorInfo {
 }
 
 /**
+ * Message patterns for a provider/model that the gateway rejects as DISABLED.
+ * "Model is disabled" is an availability failure — the model is present in the
+ * catalog but not actually usable (e.g. an `opencode/` gateway route whose
+ * underlying vendor is disabled by the user). It is NOT a reasoning failure,
+ * NOT a prompt-quality failure, and NOT a transient retry: it must be treated
+ * as terminal for the current child and the model must be marked unavailable.
+ */
+const MODEL_DISABLED_MESSAGE_PATTERNS: readonly RegExp[] = [
+	/\bmodel\s+is\s+disabled\b/i,
+	/\bmodel\s+disabled\b/i,
+	/\bmodel\s+is\s+not\s+enabled\b/i,
+	/\bmodel\s+not\s+enabled\b/i,
+	/\bmodel\s+has\s+been\s+disabled\b/i,
+	/\bdisabled\s+model\b/i,
+	/\bmodel\s+is\s+unavailable\b/i,
+]
+
+/**
+ * True when the provider/model is DISABLED. This is distinct from "not found"
+ * or "not connected": the model exists in the catalog but the route is disabled.
+ * A disabled model must never be retried and must be removed from routing.
+ */
+export function isModelDisabledError(error: ErrorInfo): boolean {
+	const text = [
+		error?.name,
+		error?.message,
+	]
+		.filter((value): value is string => typeof value === "string" && value.length > 0)
+		.join(" ")
+	if (text.length === 0) return false
+	return MODEL_DISABLED_MESSAGE_PATTERNS.some((pattern) => pattern.test(text))
+}
+
+/**
+ * True when the error is an AVAILABILITY failure (the provider/model cannot be
+ * used at all, regardless of prompt quality or transient load): a disabled
+ * model, or a model that is not found/not supported. These are catalog conflicts,
+ * not reasoning failures, so they must fail the current child hard and route
+ * subsequent work to a different candidate. They are NOT counted as one of the
+ * 2-3 quality retries.
+ */
+export function isAvailabilityError(error: ErrorInfo): boolean {
+	if (isModelDisabledError(error)) return true
+	const text = [
+		error?.name,
+		error?.message,
+	]
+		.filter((value): value is string => typeof value === "string" && value.length > 0)
+		.join(" ")
+		.toLowerCase()
+	if (text.length === 0) return false
+	return (
+		text.includes("model not found") ||
+		text.includes("model is not supported") ||
+		text.includes("model not supported") ||
+		text.includes("model_not_supported")
+	)
+}
+
+/**
  * Determines if an error is a retryable model error.
  * Returns true if it's a known retryable type OR matches retryable message patterns.
  */

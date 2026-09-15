@@ -1,6 +1,74 @@
 # OMA Resource Governor — Authoritative Report
 
-## Child Lifecycle / Stall Diagnosis and Recovery (this change)
+## Model Routing: usable-worker selection + disabled-model hard-fail (this change)
+
+**Status: COMPLETE.** Real delegation was firing but `explore` workers resolved to
+`opencode/claude-haiku-4-5`, which the `opencode` gateway rejects with `AI_APICallError: Model is
+disabled`; the child produced 0 tokens and stayed `running`. This change makes worker routing
+select *usable* models (cheapest sufficient free-first, escalating to MAIN's own model) and hard-fail
+on a disabled model by marking it unavailable and auto-dispatching the next eligible worker.
+
+### Resolver discrepancy (traced, not guessed)
+
+The inspected fallback source `packages/model-core/src/agent-model-requirements.ts` lists
+`explore`'s `claude-haiku-4-5` rung under providers `["anthropic", "github-copilot"]` — never
+`opencode` (the `model-requirements-deprecated-routing.test.ts` contract forbids Haiku via
+`opencode`). The runtime nonetheless selected `opencode/claude-haiku-4-5` because the **user's own
+config** `~/.omo/omo.jsonc` `[opencode].agents.explore.models` names `opencode/claude-haiku-4-5`
+FIRST, and the user-model override path in `resolveModelForDelegateTask` outranks the hardcoded
+chain. `opencode` is the only authenticated provider (`~/.config/opencode/auth.json` =
+`["opencode"]`), its live catalog lists `claude-haiku-4-5`, so the resolver treats it
+"available/connected" — but the gateway's underlying route is disabled, so catalog presence did not
+prove usability. Nothing re-ranked to the next usable configured model (`opencode-go/qwen3.5-plus`,
+…), nothing classified "Model is disabled", and `handleSessionErrorEvent` treated the still-alive
+shell session as transient, leaving the task `running`.
+
+### Changes
+
+- `model-core/model-error-classifier.ts`: `isModelDisabledError` + `isAvailabilityError` (availability
+  ≠ reasoning ≠ transient retry); "Model is disabled" is NOT a quality retry.
+- `delegation-first/model-availability-cache.ts` (new): bounded, expiring negative-availability cache.
+- `delegation-first/free-worker-candidates.ts`: `unavailable` filter, `mainModel` terminal rung,
+  `minCapability`/`capabilities` strength floor (free-before-paid ranking unchanged).
+- `delegation-first/availability-failover.ts` (new) + `runtime.ts` `recordModelUnavailable`: marks the
+  model unavailable, auto-dispatches the next eligible worker via the governed relaunch sink, and
+  hard-fails truthfully (`onTerminal("failed")` + cancel + `retry_chain_exhausted`) when none remains.
+- `background-agent/error-classifier.ts`: a disabled model is a TERMINAL session error (fixes the
+  zombie); `manager.ts` fires `onSubagentModelUnavailable` wired in `create-managers.ts` to
+  `recordModelUnavailable`.
+- `available-models.ts`: `getModelsWithPricingForDelegateTask` derives authoritative $0 from the live
+  `client.model.list()` cost; unknown cost is never free. Wired into both background and sync dispatch.
+
+### Availability / free-price sources
+
+- Bundled OpenGateway catalog (`opengateway-models.json`): 60 paid entries, 0 free, 0 `opencode/`.
+- Live source (fixed): `client.model.list()` per-model `cost` (USD/1M tokens; free only when input AND
+  output are 0). The catalog alone was the wrong/incomplete source for free discovery.
+
+### Escalation ladder
+
+free → stronger free → cheap paid → strong paid → MAIN's own model (appended as the terminal `expert`
+rung). A disabled model escalates forward-only to the next stronger eligible worker, never back.
+
+### Tests (all green)
+
+`model-error-classifier-disabled` (7), `model-availability-cache` (6), `free-worker-candidates` +
+`free-worker-candidates-routing` (9), `availability-failover` (3), `record-model-unavailable` (3),
+`available-models-pricing` (4). Regression: `delegation-first` 56, `delegate-task` 516,
+`background-agent` 771, `model-core` error-classifier suite — all pass. `bun run typecheck` clean;
+`bun run build` succeeds; `dist/index.js` carries `isModelDisabledError`, `selectNextEligibleWorker`,
+`createModelAvailabilityCache`, `recordModelUnavailable`, `unavailableModels`; smoke-import OK.
+
+### Live validation
+
+Deterministic candidate-A-disabled → candidate-B-dispatched is proven by
+`record-model-unavailable.test.ts` through the real `createDelegationFirstRuntime` + governed relaunch
+sink. A live `date` child (tokens > 0) was NOT run: no genuine free model is configured here (only the
+`opencode` gateway; bundled catalog has 0 $0 models), and a paid DeepSeek call is out of scope for this
+branch's validation policy. The title fallback already degrades gracefully (`session.update` wrapped
+in `.catch`); no OpenAI/Anthropic re-enable was made. Full evidence:
+`.omo/evidence/20260915-model-routing-disabled-model/README.md`.
+
 
 **Proven root cause.** Three parallel `explore` background children created successfully and
 then sat at `status=running` for ~28 minutes with no output because the runtime had **no lifecycle

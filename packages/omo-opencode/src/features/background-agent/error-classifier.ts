@@ -1,4 +1,5 @@
 import { isRecord } from "@oh-my-opencode/utils"
+import { isModelDisabledError } from "@oh-my-opencode/model-core"
 export { isRecord }
 
 export function isAbortedSessionError(error: unknown): boolean {
@@ -167,6 +168,7 @@ const TERMINAL_SESSION_ERROR_PATTERNS: readonly RegExp[] = [
 export function isTerminalSessionError(
   errorInfo: { name?: string; message?: string; statusCode?: number },
 ): boolean {
+  if (isModelDisabledError(errorInfo)) return true
   const text = [
     errorInfo?.name,
     errorInfo?.message,

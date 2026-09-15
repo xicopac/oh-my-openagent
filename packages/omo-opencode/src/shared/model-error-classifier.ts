@@ -1,6 +1,8 @@
 import {
   getNextFallback,
   hasMoreFallbacks,
+  isAvailabilityError,
+  isModelDisabledError,
   isRetryableModelError,
   selectFallbackProviderWithCache,
   shouldRetryError,
@@ -11,6 +13,8 @@ import * as connectedProvidersCache from "./connected-providers-cache"
 export type { ErrorInfo }
 export {
   isRetryableModelError,
+  isAvailabilityError,
+  isModelDisabledError,
   shouldRetryError,
   getNextFallback,
   hasMoreFallbacks,

@@ -36,6 +36,7 @@ import {
 import { resolveMessageEventSessionID, resolveSessionEventID } from "../../shared/event-session-id"
 import {
   hasMoreFallbacks,
+  isModelDisabledError,
   shouldRetryError,
 } from "../../shared/model-error-classifier"
 import { SessionCategoryRegistry } from "../../shared/session-category-registry"
@@ -237,6 +238,9 @@ export interface SubagentSessionDeletedEvent {
 
 export type OnSubagentSessionDeleted = (event: SubagentSessionDeletedEvent) => Promise<void>
 
+/** Fired when a child's provider/model is unavailable (e.g. "Model is disabled"). */
+export type OnSubagentModelUnavailable = (sessionID: string, providerModel: string, reason: string) => void
+
 const MAX_TASK_REMOVAL_RESCHEDULES = 6
 const MAX_COMPLETED_TASK_ARCHIVE_SIZE = 100
 const PARENT_WAKE_FAILURE_REQUEUE_WINDOW_MS = 5_000
@@ -247,6 +251,7 @@ export interface BackgroundManagerConfig {
   tmuxConfig?: TmuxConfig
   onSubagentSessionCreated?: OnSubagentSessionCreated
   onSubagentSessionDeleted?: OnSubagentSessionDeleted
+  onSubagentModelUnavailable?: OnSubagentModelUnavailable
   /** Fired once the provider request for a child session has been dispatched. */
   onSubagentRequestStarted?: (sessionID: string) => void
   onShutdown?: () => void | Promise<void>
@@ -294,6 +299,7 @@ export class BackgroundManager {
   private tmuxEnabled: boolean
   private onSubagentSessionCreated?: OnSubagentSessionCreated
   private onSubagentSessionDeleted?: OnSubagentSessionDeleted
+  private onSubagentModelUnavailable?: OnSubagentModelUnavailable
   private onSubagentRequestStarted?: (sessionID: string) => void
   private onShutdown?: () => void | Promise<void>
 
@@ -339,6 +345,7 @@ export class BackgroundManager {
     this.tmuxEnabled = options?.tmuxConfig?.enabled ?? false
     this.onSubagentSessionCreated = options?.onSubagentSessionCreated
     this.onSubagentSessionDeleted = options?.onSubagentSessionDeleted
+    this.onSubagentModelUnavailable = options?.onSubagentModelUnavailable
     this.onSubagentRequestStarted = options?.onSubagentRequestStarted
     this.onShutdown = options?.onShutdown
     this.rootDescendantCounts = new Map()
@@ -2163,7 +2170,7 @@ The fallback retry session is now created and can be inspected directly.
     if (isAgentNotFoundError({ message: errorInfo.message ?? "" })) {
       log("[background-agent] Handling async agent-not-found session.error:", {
         taskId: task.id,
-        errorMessage: errorInfo.message?.slice(0, 100),
+        errorMessage: errorInfo.message?.slice(0,100),
       })
       await this.interruptTaskFromAsyncPromptFailure(
         task,
@@ -2171,6 +2178,17 @@ The fallback retry session is now created and can be inspected directly.
         "agent-not-found session.error",
       )
       return
+    }
+
+    if (isModelDisabledError({ name: errorName, message: errorInfo.message ?? errorMessage })) {
+      const providerModel = task.model
+        ? `${task.model.providerID}/${task.model.modelID}`
+        : null
+      this.onSubagentModelUnavailable?.(
+        task.sessionId ?? task.parentSessionId,
+        providerModel ?? "unknown",
+        errorMessage ?? errorInfo.message ?? "model unavailable",
+      )
     }
 
     if (await this.tryFallbackRetry(task, errorInfo, "session.error")) {

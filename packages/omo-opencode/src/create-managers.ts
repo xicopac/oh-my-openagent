@@ -230,6 +230,9 @@ export function createManagers(args: {
     pluginContext: ctx,
     config: pluginConfig.background_task,
     tmuxConfig,
+    onSubagentModelUnavailable: (sessionID, providerModel, reason) => {
+        delegationFirstRuntime?.recordModelUnavailable(sessionID, providerModel, reason)
+    },
     onSubagentSessionCreated: async (event: SubagentSessionCreatedEvent) => {
         log("[create-managers] onSubagentSessionCreated callback received", {
           sessionID: event.sessionID,

@@ -47,6 +47,8 @@ import {
   type WatchdogPolicy,
 } from "../worker-supervisor"
 import { recommendFailoverAction, type RedispatchAction } from "./failover"
+import { selectNextEligibleWorker } from "./availability-failover"
+import { createModelAvailabilityCache, type ModelAvailabilityCache } from "./model-availability-cache"
 import {
   buildReplacementPrompt,
   initialLineage,
@@ -101,6 +103,14 @@ export type DelegationFirstRuntime = {
   findings(jobID: string): Finding[]
   /** Record that the provider request for `sessionID` was dispatched. */
   markRequestStarted(sessionID: string): void
+  /**
+   * Record a disabled-model (availability) failure: mark the model unavailable
+   * so concurrent/new workers skip it, then auto-dispatch the next eligible
+   * worker. Hard-fails the child when no eligible worker remains.
+   */
+  recordModelUnavailable(sessionID: string, modelKey: string, reason: string): void
+  /** Live set of models currently marked unavailable (for candidate filtering). */
+  unavailableModels(): string[]
   setRecoverySink(sink: RecoverySink): void
   /** Evaluate a timed-out stall and reclaim it (cancel + governed re-dispatch) automatically. */
   reclaimStalled(sessionID: string, providerModel: string | null, nowMs?: number): void
@@ -168,6 +178,7 @@ export function createDelegationFirstRuntime(
   })
 
   const recovery: RecoveryCoordinator = createRecoveryCoordinator()
+  const availability: ModelAvailabilityCache = createModelAvailabilityCache()
   let sink: RecoverySink | undefined
 
   const gruntOptions: GruntGuardOptions = { ...DEFAULT_GRUNT_GUARD_OPTIONS, ...cfg.grunt }
@@ -406,6 +417,81 @@ export function createDelegationFirstRuntime(
       } else {
         pendingRequestStarted.add(sessionID)
       }
+    },
+    recordModelUnavailable(sessionID, modelKey, reason) {
+      availability.markUnavailable(modelKey, reason)
+      audit?.write(sessionID, {
+        subsystem: "delegation",
+        event: "worker_model_unavailable",
+        model: modelKey,
+        reason,
+      })
+
+      const assignmentID = assignmentIDFor(sessionID)
+      const assignment = assignmentID ? assignmentsById.get(assignmentID) : undefined
+
+      if (!assignment || !sink?.relaunch) {
+        watchdog.onTerminal(sessionID, "failed")
+        void sink?.cancel?.(sessionID, reason)
+        audit?.write(sessionID, {
+          subsystem: "delegation",
+          event: "retry_chain_exhausted",
+          reason: "no_relaunch_sink_for_disabled_model",
+          assignment_id: assignmentID ?? null,
+        })
+        return
+      }
+
+      const id = assignment.assignment_id
+      const lineage = lineageByAssignment.get(id) ?? initialLineage(assignment)
+      const selection = selectNextEligibleWorker(
+        assignment.workers,
+        lineage.worker_index,
+        new Set(availability.unavailableKeys()),
+      )
+      if (selection.kind === "no_eligible_worker") {
+        watchdog.onTerminal(sessionID, "failed")
+        void sink.cancel(sessionID, reason)
+        audit?.write(sessionID, {
+          subsystem: "delegation",
+          event: "retry_chain_exhausted",
+          reason: "no_eligible_worker",
+          assignment_id: id,
+        })
+        return
+      }
+
+      const nextLineage: RetryLineage = {
+        attempt_number: lineage.attempt_number + 1,
+        worker_index: selection.index,
+        previous_workers: [...lineage.previous_workers, lineage.current_worker ?? modelKey],
+        current_worker: selection.worker.model_id,
+        failure_stage: "failed",
+        failure_stall_mode: null,
+        failure_reason: reason,
+        findings: lineage.findings,
+      }
+      lineageByAssignment.set(id, nextLineage)
+
+      const action: RedispatchAction = {
+        kind: "alternate_worker",
+        worker: selection.worker,
+        worker_index: selection.index,
+        preserveFindings: lineage.findings,
+        reason: `model unavailable (disabled): ${modelKey}`,
+      }
+      const replacementPrompt = buildReplacementPrompt(assignment, nextLineage)
+      const outcome = sink.relaunch(assignment, action, replacementPrompt)
+      if (isThenable(outcome)) {
+        void outcome.then((resolved) =>
+          applyRelaunchOutcome(sessionID, id, nextLineage.attempt_number, selection.worker.model_id, resolved),
+        )
+      } else {
+        applyRelaunchOutcome(sessionID, id, nextLineage.attempt_number, selection.worker.model_id, outcome)
+      }
+    },
+    unavailableModels() {
+      return availability.unavailableKeys()
     },
     setRecoverySink(next) {
       sink = next

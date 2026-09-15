@@ -3,7 +3,7 @@ import { resolveModelTier } from "@oh-my-opencode/delegate-core"
 import type { DelegatedModelConfig, ToolContextWithMetadata, DelegateTaskToolOptions, DelegateTaskArgs } from "./types"
 import { log } from "../../shared/logger"
 import { parseModelString } from "../../shared/model-string-parser"
-import { getAvailableModelsForDelegateTask } from "./available-models"
+import { getAvailableModelsForDelegateTask, getModelsWithPricingForDelegateTask } from "./available-models"
 import { buildSystemContent } from "./prompt-builder"
 import {
   resolveSkillContent,
@@ -375,11 +375,14 @@ async function runDelegationFirstSync(params: DelegationFirstSyncParams): Promis
   const ladder = options.delegationFirstRuntime
 
   let available = new Set<string>()
+  let pricing = options.pricingCatalog
   if (options.availableModelsOverride) {
     available = options.availableModelsOverride
   } else {
     try {
-      available = await getAvailableModelsForDelegateTask(options.client)
+      const live = await getModelsWithPricingForDelegateTask(options.client)
+      available = live.models
+      pricing = options.pricingCatalog ? { ...options.pricingCatalog, ...live.pricing } : options.pricingCatalog
     } catch {
       available = new Set()
     }
@@ -389,11 +392,15 @@ async function runDelegationFirstSync(params: DelegationFirstSyncParams): Promis
     ? resolvedModelKey(categoryModel.providerID, categoryModel.modelID)
     : null
 
-  const workers = options.pricingCatalog
+  const workers = pricing
     ? buildDelegationWorkerCandidates({
-        pricing: options.pricingCatalog,
+        pricing,
         available,
         resolvedModelID,
+        unavailable: new Set(options.delegationFirstRuntime?.unavailableModels() ?? []),
+        mainModel: parentContext.model?.modelID
+          ? resolvedModelKey(parentContext.model.providerID, parentContext.model.modelID)
+          : undefined,
       })
     : []
 

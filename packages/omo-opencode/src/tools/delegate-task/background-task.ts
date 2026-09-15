@@ -14,7 +14,7 @@ import { buildTaskMetadataBlock } from "../../features/tool-metadata-store/task-
 import { resolveMetadataModel } from "./resolve-metadata-model"
 import { getPersistedBackgroundTaskDescription } from "./background-task-description"
 import { buildDelegationWorkerCandidates } from "../../features/delegation-first"
-import { getAvailableModelsForDelegateTask } from "./available-models"
+import { getModelsWithPricingForDelegateTask } from "./available-models"
 import { resolvedModelKey } from "../../hooks/resource-governor"
 
 function registerBackgroundSessionContext(args: {
@@ -189,18 +189,26 @@ export async function executeBackgroundTask(
 
     if (executorCtx.delegationFirstRuntime && executorCtx.pricingCatalog) {
       let available = new Set<string>()
+      let pricing = executorCtx.pricingCatalog
       try {
-        available = await getAvailableModelsForDelegateTask(executorCtx.client)
+        const live = await getModelsWithPricingForDelegateTask(executorCtx.client)
+        available = live.models
+        pricing = { ...executorCtx.pricingCatalog, ...live.pricing }
       } catch {
         available = new Set()
       }
       const resolvedModelID = categoryModel?.modelID
         ? resolvedModelKey(categoryModel.providerID, categoryModel.modelID)
         : null
+      const mainModelID = parentContext.model?.modelID
+        ? resolvedModelKey(parentContext.model.providerID, parentContext.model.modelID)
+        : undefined
       const workers = buildDelegationWorkerCandidates({
-        pricing: executorCtx.pricingCatalog,
+        pricing,
         available,
         resolvedModelID,
+        unavailable: new Set(executorCtx.delegationFirstRuntime?.unavailableModels() ?? []),
+        mainModel: mainModelID,
       })
       executorCtx.delegationFirstRuntime.retainAssignment(
         {

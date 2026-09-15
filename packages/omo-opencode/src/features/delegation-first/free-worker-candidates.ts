@@ -23,8 +23,16 @@ export type BuildWorkerCandidatesInput = {
   pricing: PricingCatalog
   /** Available model ids (provider/model form), e.g. "opengateway/gpt-5". */
   available: ReadonlySet<string>
-  /** The already-resolved model (must always be present in the output). */
+  /** The already-resolved model (kept unless it is marked unavailable). */
   resolvedModelID: string | null
+  /** Models known to be unavailable (e.g. disabled); these are never dispatched. */
+  unavailable?: ReadonlySet<string>
+  /** MAIN's own model, appended as the terminal escalation rung. */
+  mainModel?: string
+  /** Minimum required capability; candidates with a known lower score are dropped. */
+  minCapability?: number
+  /** Injected capability score per model id (0..1). Unknown ids are treated as 1.0. */
+  capabilities?: ReadonlyMap<string, number>
 }
 
 /**
@@ -60,15 +68,23 @@ const TIER_ORDER: EscalationTier[] = ["free", "free_alt", "cheap_paid", "strong_
  * available, so the single already-resolved dispatch target is never dropped.
  */
 export function buildDelegationWorkerCandidates(input: BuildWorkerCandidatesInput): WorkerCandidate[] {
-  const { pricing, available, resolvedModelID } = input
+  const { pricing, available, resolvedModelID, unavailable, mainModel, minCapability, capabilities } = input
+
+  const unavailableSet = unavailable ?? new Set<string>()
 
   const all = new Set<string>()
-  if (resolvedModelID) all.add(resolvedModelID)
-  for (const id of available) all.add(id)
+  if (resolvedModelID && !unavailableSet.has(resolvedModelID)) all.add(resolvedModelID)
+  for (const id of available) {
+    if (!unavailableSet.has(id)) all.add(id)
+  }
 
   const scored = [...all].map((id) => {
     const { tier, free, cost_usd_per_1m_input } = tierForPricing(id, pricing)
-    return { id, tier, free, cost_usd_per_1m_input }
+    const capability = capabilities?.get(id) ?? (free ? 0.7 : 1.0)
+    return { id, tier, free, cost_usd_per_1m_input, capability }
+  }).filter((item) => {
+    if (minCapability === undefined) return true
+    return item.capability >= minCapability
   })
 
   scored.sort((a, b) => {
@@ -89,9 +105,18 @@ export function buildDelegationWorkerCandidates(input: BuildWorkerCandidatesInpu
     candidates.push({
       model_id: item.id,
       tier: item.tier,
-      capability: item.free ? 0.7 : 1.0,
+      capability: item.capability,
       free: item.free,
       ...(item.cost_usd_per_1m_input === undefined ? {} : { cost_usd_per_1m_input: item.cost_usd_per_1m_input }),
+    })
+  }
+
+  if (mainModel && !unavailableSet.has(mainModel) && !seen.has(mainModel)) {
+    candidates.push({
+      model_id: mainModel,
+      tier: "expert",
+      capability: capabilities?.get(mainModel) ?? 1.0,
+      free: false,
     })
   }
 
