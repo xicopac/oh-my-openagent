@@ -86,6 +86,9 @@ const RETRYABLE_MESSAGE_PATTERNS = [
   "server_error",
   "an error occurred while processing",
   "upstream request failed",
+  // Fireworks model-side decode-time overflow (transient; replay succeeds).
+  "floating point nan",
+  "detected in generation",
 ]
 
 /**

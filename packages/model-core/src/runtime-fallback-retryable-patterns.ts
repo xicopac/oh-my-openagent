@@ -13,6 +13,12 @@ export const RUNTIME_FALLBACK_RETRYABLE_ERROR_PATTERNS = [
   /cool(?:ing)?\s+down/i,
   /model.{0,20}?not.{0,10}?supported/i,
   /model_not_supported/i,
+  // Fireworks: "Floating point NaN (not-a-number) is detected in generation."
+  // This is a model-side decode-time logits overflow, NOT a request-validation
+  // error — a byte-identical replay succeeds (transient). Deliberately narrow:
+  // requires both the NaN wording AND "detected in generation" so it cannot
+  // swallow a genuine parameter-validation 400.
+  /floating[ _-]?point[ _-]?nan.{0,60}detected[ _-]?in[ _-]?generation/i,
   /service.?unavailable/i,
   /overloaded/i,
   /temporarily.?unavailable/i,

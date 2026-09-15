@@ -1,6 +1,7 @@
 import { isRecord } from "@oh-my-opencode/utils"
 import { getSessionPromptParams } from "../shared/session-prompt-params-state"
 import { getModelCapabilities, log, resolveCompatibleModelSettings } from "../shared"
+import { sanitizeNonFiniteGenerationParams } from "../shared/finite-generation-params"
 
 const SAFE_MAX_OUTPUT_TOKENS_FALLBACK = 4096
 
@@ -186,6 +187,10 @@ export function createChatParamsHandler(_args: {
       } else {
         delete output.options.thinking
       }
+    }
+
+    for (const violation of sanitizeNonFiniteGenerationParams(output)) {
+      log(`[plugin] non-finite generation param stripped at ${violation.path} (was ${violation.value})`)
     }
   }
 }
