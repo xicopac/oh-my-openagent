@@ -11632,6 +11632,88 @@
                 "require_hard_budget_increase"
               ],
               "additionalProperties": false
+            },
+            "delegation_ladder": {
+              "default": {
+                "max_attempts_per_tier": 2,
+                "max_free_attempts_total": 4,
+                "escalate_after_attempts": 2
+              },
+              "type": "object",
+              "properties": {
+                "max_attempts_per_tier": {
+                  "default": 2,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 8
+                },
+                "max_free_attempts_total": {
+                  "default": 4,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 16
+                },
+                "escalate_after_attempts": {
+                  "default": 2,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 8
+                }
+              },
+              "required": [
+                "max_attempts_per_tier",
+                "max_free_attempts_total",
+                "escalate_after_attempts"
+              ],
+              "additionalProperties": false
+            },
+            "watchdog": {
+              "default": {
+                "enabled": true,
+                "startup_grace_ms": 60000,
+                "quiet_stall_threshold_ms": 180000,
+                "wedged_threshold_ms": 300000,
+                "heartbeat_coalesce_ms": 5000
+              },
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "default": true,
+                  "type": "boolean"
+                },
+                "startup_grace_ms": {
+                  "default": 60000,
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "quiet_stall_threshold_ms": {
+                  "default": 180000,
+                  "type": "integer",
+                  "minimum": 1000,
+                  "maximum": 9007199254740991
+                },
+                "wedged_threshold_ms": {
+                  "default": 300000,
+                  "type": "integer",
+                  "minimum": 1000,
+                  "maximum": 9007199254740991
+                },
+                "heartbeat_coalesce_ms": {
+                  "default": 5000,
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "enabled",
+                "startup_grace_ms",
+                "quiet_stall_threshold_ms",
+                "wedged_threshold_ms",
+                "heartbeat_coalesce_ms"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [
@@ -11642,7 +11724,9 @@
             "delegation",
             "context",
             "forecasting",
-            "consent"
+            "consent",
+            "delegation_ladder",
+            "watchdog"
           ],
           "additionalProperties": false
         },
@@ -27607,6 +27691,88 @@
                       "require_hard_budget_increase"
                     ],
                     "additionalProperties": false
+                  },
+                  "delegation_ladder": {
+                    "default": {
+                      "max_attempts_per_tier": 2,
+                      "max_free_attempts_total": 4,
+                      "escalate_after_attempts": 2
+                    },
+                    "type": "object",
+                    "properties": {
+                      "max_attempts_per_tier": {
+                        "default": 2,
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 8
+                      },
+                      "max_free_attempts_total": {
+                        "default": 4,
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 16
+                      },
+                      "escalate_after_attempts": {
+                        "default": 2,
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 8
+                      }
+                    },
+                    "required": [
+                      "max_attempts_per_tier",
+                      "max_free_attempts_total",
+                      "escalate_after_attempts"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "watchdog": {
+                    "default": {
+                      "enabled": true,
+                      "startup_grace_ms": 60000,
+                      "quiet_stall_threshold_ms": 180000,
+                      "wedged_threshold_ms": 300000,
+                      "heartbeat_coalesce_ms": 5000
+                    },
+                    "type": "object",
+                    "properties": {
+                      "enabled": {
+                        "default": true,
+                        "type": "boolean"
+                      },
+                      "startup_grace_ms": {
+                        "default": 60000,
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "quiet_stall_threshold_ms": {
+                        "default": 180000,
+                        "type": "integer",
+                        "minimum": 1000,
+                        "maximum": 9007199254740991
+                      },
+                      "wedged_threshold_ms": {
+                        "default": 300000,
+                        "type": "integer",
+                        "minimum": 1000,
+                        "maximum": 9007199254740991
+                      },
+                      "heartbeat_coalesce_ms": {
+                        "default": 5000,
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "enabled",
+                      "startup_grace_ms",
+                      "quiet_stall_threshold_ms",
+                      "wedged_threshold_ms",
+                      "heartbeat_coalesce_ms"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "required": [
@@ -27617,7 +27783,9 @@
                   "delegation",
                   "context",
                   "forecasting",
-                  "consent"
+                  "consent",
+                  "delegation_ladder",
+                  "watchdog"
                 ],
                 "additionalProperties": false
               },
