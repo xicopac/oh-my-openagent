@@ -13,6 +13,9 @@ import { stripAgentListSortPrefix } from "../../shared/agent-display-names"
 import { buildTaskMetadataBlock } from "../../features/tool-metadata-store/task-metadata-contract"
 import { resolveMetadataModel } from "./resolve-metadata-model"
 import { getPersistedBackgroundTaskDescription } from "./background-task-description"
+import { buildDelegationWorkerCandidates } from "../../features/delegation-first"
+import { getAvailableModelsForDelegateTask } from "./available-models"
+import { resolvedModelKey } from "../../hooks/resource-governor"
 
 function registerBackgroundSessionContext(args: {
   sessionId: string
@@ -182,6 +185,45 @@ export async function executeBackgroundTask(
         category: args.category,
         modelFallbackControllerAccessor: executorCtx.modelFallbackControllerAccessor,
       })
+    }
+
+    if (executorCtx.delegationFirstRuntime && executorCtx.pricingCatalog) {
+      let available = new Set<string>()
+      try {
+        available = await getAvailableModelsForDelegateTask(executorCtx.client)
+      } catch {
+        available = new Set()
+      }
+      const resolvedModelID = categoryModel?.modelID
+        ? resolvedModelKey(categoryModel.providerID, categoryModel.modelID)
+        : null
+      const workers = buildDelegationWorkerCandidates({
+        pricing: executorCtx.pricingCatalog,
+        available,
+        resolvedModelID,
+      })
+      executorCtx.delegationFirstRuntime.retainAssignment(
+        {
+          assignment_id: task.id,
+          root_session_id: parentContext.sessionID,
+          parent_session_id: parentContext.sessionID,
+          parent_message_id: parentContext.messageID,
+          prompt: effectivePrompt,
+          description: persistedDescription,
+          agent: normalizedAgent,
+          category: args.category,
+          model: categoryModel,
+          parent_model: parentContext.model,
+          parent_agent: parentContext.agent,
+          parent_tools: getSessionTools(parentContext.sessionID),
+          fallback_chain: fallbackChain,
+          skills: args.load_skills.length > 0 ? args.load_skills : undefined,
+          skill_content: systemContent,
+          session_permission: QUESTION_DENIED_SESSION_PERMISSION,
+          workers,
+        },
+        sessionId,
+      )
     }
 
     const resolvedModel = resolveMetadataModel(categoryModel, parentContext.model)

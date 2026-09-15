@@ -67,11 +67,88 @@ succeeds; `dist/index.js` carries `child_*` milestones, `reclaimStalled`,
 **Live validation: SKIPPED.** No cheap configured provider is available in this environment and a
 paid-inference drive is out of scope. No success is fabricated.
 
-**Remaining limitations.** Retry is a journaled recommendation (`worker_retry_started` +
-`alternate_worker`/`worker_model_escalated`) plus a truthful `cancelled` terminal; a fully
-automatic *re-dispatch to a new child* still requires retaining the full `LaunchInput` in the
-delegation-first runtime (a follow-up, not a redesign). `DISPATCH_STALL` is available in the
-classifier but the background path pre-empts it with the poller's stale-task timeout.
+**Remaining limitations (at that time).** Retry was a journaled recommendation (`worker_retry_started` +
+`alternate_worker`/`worker_model_escalated`) plus a truthful `cancelled` terminal; the fully automatic
+*re-dispatch to a new child* then still required retaining the full `LaunchInput`. **This is now
+implemented** — see "Automatic Child Failover" below. `DISPATCH_STALL` was available in the classifier
+but the background path pre-empted it with the poller's stale-task timeout.
+
+## Automatic Child Failover — Re-Dispatch of Reclaimed Children (this change)
+
+**Status: COMPLETE.** The previous stall-diagnosis change reclaimed stalled children truthfully but only
+*journaled* a retry recommendation; it did not actually launch a replacement. This change closes that
+gap: a stalled child is now reclaimed AND a governed replacement child is automatically re-dispatched
+through the real launch path, with stage-aware worker selection, correlated-failure avoidance, partial
+finding preservation, and bounded retry lineage.
+
+**Replayable assignment.** `features/delegation-first/replay.ts` defines a bounded, secrets-free
+`ReplayableAssignment` (assignment id, root/parent/message ids, prompt, description, agent, category,
+model, parent model/agent/tools, fallback chain, skills, skill content, session permissions, cwd,
+unstable flag, and the ordered `WorkerCandidate` ladder) plus a `RetryLineage` (`attempt_number`,
+`worker_index`, `previous_workers`, `current_worker`, failure stage/mode/reason, `findings`). No
+transcript, output, or secret is retained. The runtime retains it at dispatch:
+`executeBackgroundTask` (`tools/delegate-task/background-task.ts`) calls
+`retainAssignment(...)` after launch, and `create-managers.ts` reuses it. The original `LaunchInput`
+shape is reused end-to-end; no parallel dispatch system is introduced.
+
+**Retry lineage.** `RetryLineage` tracks `attempt_number` (attempt 1 = original dispatch),
+`previous_workers` (model ids already tried, in order), `current_worker`, and the failure
+stage/mode/reason. Each replacement increments the attempt number and appends the failed worker, so a
+retry chain (`assignment_id`, attempt N, previous worker, current worker) is fully observable without
+conflating sessions.
+
+**Stage-aware failover.** `features/delegation-first/failover.ts` `recommendFailoverAction` maps a
+timed-out stall to `retry_worker` / `alternate_worker` / `escalate_worker` / `give_up`:
+`DISPATCH_STALL`/`PROVIDER_START_STALL` (launch failures) re-fire the same worker; `PROVIDER_RESPONSE_STALL`
+and correlated failures prefer an alternate model/provider; repeated same-worker `EXECUTION_STALL`/`TOOL_STALL`
+escalate up the ladder after `escalate_after_attempts`; the chain is bounded by
+`max_attempts_per_tier * workers.length` and `max_free_attempts_total`.
+
+**Correlated failures.** The existing `RecoveryCoordinator` `correlated` signal feeds the failover
+decision: several same-provider/model reclamations within `correlatedWindowMs` select an alternate
+target instead of blindly relaunching identical workers, preventing retry storms.
+
+**Budget handling.** A replacement is a NEW governed launch: the `relaunch` sink in
+`create-managers.ts` reconstructs the `LaunchInput` (new worker model from the failover action, original
+prompt + a compact prior-evidence block) and calls `backgroundManager.launch(...)`, which runs
+`authorizeChildDispatch` (Resource Governor) + the `ChildLaunchGuard` backstop at `session.create`.
+Previous spend stays spent; a blocked replacement returns `{ kind: "blocked" }` and is journaled
+`replacement_child_blocked` + `retry_chain_exhausted` with no silent bypass.
+
+**Result propagation.** The replacement launches with the same `parentSessionId`/`parentMessageId`, so its
+result flows down the existing parent-wake path to the original caller; the old child stays truthfully
+terminal (`cancelled`). Watchdog ownership transfers cleanly because the replacement is a distinct
+session id with fresh stage/counter state.
+
+**Audit events.** `shared/governance-audit/events.ts` `STALL_RECOVERY_AUDIT_EVENTS` now includes
+`worker_reclaimed`, `worker_retry_started` (kept for compatibility), `worker_retry_planned`,
+`worker_retry_dispatched`, `alternate_worker_selected`, `replacement_child_created`,
+`replacement_child_completed`, `replacement_child_blocked`, `retry_chain_exhausted`. Each carries
+`assignment_id`, attempt number, old/new worker and session ids, provider/model, failure stage and
+reason code; no prompt/output/secret.
+
+**Tests.** `features/delegation-first/failover.test.ts` (9) covers the decision core (stage-aware,
+correlated, bounded, exhaustion, free budget). `failover-redispatch.test.ts` (12) proves the runtime
+reclaim→relaunch path (replacement launched, original bounded assignment received, partial findings
+survive, old child terminal, fresh watchdog state + lineage, repeated same-model stall switches
+model, correlated stalls do not blind-relaunch, bounded attempts, exhausted → truthful terminal,
+budget block, no root takeover, no prompt/output in audit, no retained assignment → exhausted).
+`failover-replay.e2e.test.ts` (3) exercises the REAL governed boundary (real `createResourceGovernorRuntime`
++ `authorizeChildDispatch` + `ChildLaunchGuard`): Scenario A (provider-response stall → alternate
+auto-dispatch → complete → result path), Scenario B (three correlated stalls → non-identical retarget),
+Scenario C (hard-budget block, truthful). All green; `worker-supervisor` 49, `delegation-first` 39,
+`resource-governor` 112, `background-agent` 771, `delegate-task` 512, `create-managers` 9. `bun run
+typecheck` clean; `bun run build` succeeds; `dist/index.js` carries `recommendFailoverAction`,
+`buildReplacementPrompt`, `initialLineage`, `retainAssignment`, `noteReplacementSession`, and the eight
+new audit-event names; smoke-import succeeds with `{ id, server }`.
+
+**Remaining limitations.** `replacement_child_completed` fires when the replacement session id resolves
+(the real background path links it via the `onSessionCreated` callback; a session id not yet known at
+relaunch time is linked once the session is created). Partial-finding capture for a *background* child
+is opportunistic: a child that stalled before producing output has no findings to preserve (truthful);
+the retention API (`recordPartialFindings`) is available for paths that can surface compact anchors.
+Live free-worker validation remains SKIPPED (no configured free provider; see below), so free selection
+is proven with injected pricing, never fabricated.
 
 ## Delegation-First + Watchdog Level 1 (this change)
 

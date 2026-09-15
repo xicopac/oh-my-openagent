@@ -46,8 +46,26 @@ export const CHILD_LIFECYCLE_AUDIT_EVENTS = [
 
 export type ChildLifecycleAuditEvent = (typeof CHILD_LIFECYCLE_AUDIT_EVENTS)[number]
 
-/** Stall recovery marker written by the delegation-first reclaim path. */
-export const STALL_RECOVERY_AUDIT_EVENTS = ["worker_retry_started"] as const
+/**
+ * Stall recovery + automatic-failover markers written by the delegation-first
+ * reclaim path. `worker_reclaimed` records a truthful reclaim; the
+ * `worker_retry_*` / `alternate_worker_selected` / `replacement_child_*` /
+ * `retry_chain_exhausted` events trace the re-dispatch of a governed
+ * replacement child, and `replacement_child_blocked` records a truthful block
+ * by the Resource Governor / backstop. All metadata only: no prompt, output, or
+ * secret ever reaches the journal.
+ */
+export const STALL_RECOVERY_AUDIT_EVENTS = [
+  "worker_retry_started",
+  "worker_reclaimed",
+  "worker_retry_planned",
+  "worker_retry_dispatched",
+  "alternate_worker_selected",
+  "replacement_child_created",
+  "replacement_child_completed",
+  "replacement_child_blocked",
+  "retry_chain_exhausted",
+] as const
 
 export type StallRecoveryAuditEvent = (typeof STALL_RECOVERY_AUDIT_EVENTS)[number]
 

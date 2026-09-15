@@ -24,7 +24,14 @@ import { createGovernanceAuditWriter } from "./shared/governance-audit"
 import { markServerRunningInProcess } from "./shared/tmux/tmux-utils/server-health"
 import type { ModelFallbackControllerAccessor } from "./hooks/model-fallback"
 import { authorizeChildDispatch, createResourceGovernorRuntime, loadPricingCatalog, type ResourceGovernorRuntime } from "./hooks/resource-governor"
-import { createDelegationFirstRuntime, type DelegationFirstRuntime } from "./features/delegation-first"
+import {
+  createDelegationFirstRuntime,
+  type DelegationFirstRuntime,
+  type ReplayableAssignment,
+  type RelaunchOutcome,
+} from "./features/delegation-first"
+import type { LaunchInput } from "./features/background-agent"
+import { parseModelString } from "./shared/model-string-parser"
 
 type CreateManagersDeps = {
   BackgroundManagerClass: typeof BackgroundManager
@@ -310,6 +317,49 @@ export function createManagers(args: {
           source: "watchdog-reclaim",
           reason,
         })
+      }
+    },
+    relaunch: async (assignment, action, replacementPrompt): Promise<RelaunchOutcome> => {
+      const parsed = parseModelString(action.worker.model_id)
+      const replacementModel =
+        parsed && parsed.modelID
+          ? {
+              providerID: parsed.providerID,
+              modelID: parsed.modelID,
+              ...(parsed.variant ? { variant: parsed.variant } : {}),
+            }
+          : undefined
+
+      const input: LaunchInput = {
+        description: assignment.description ?? `auto-retry: ${assignment.agent}`,
+        prompt: replacementPrompt,
+        agent: assignment.agent,
+        parentSessionId: assignment.parent_session_id,
+        parentMessageId: assignment.parent_message_id,
+        parentModel: assignment.parent_model,
+        parentAgent: assignment.parent_agent,
+        parentTools: assignment.parent_tools,
+        model: replacementModel,
+        fallbackChain: assignment.fallback_chain,
+        skills: assignment.skills,
+        skillContent: assignment.skill_content,
+        category: assignment.category,
+        sessionPermission: assignment.session_permission,
+        cwd: assignment.cwd,
+        isUnstableAgent: assignment.is_unstable_agent,
+        onSessionCreated: (sessionID) => {
+          delegationFirstRuntime?.noteReplacementSession(assignment.assignment_id, sessionID)
+        },
+      }
+
+      try {
+        const task = await backgroundManager.launch(input)
+        return { kind: "launched", taskID: task.id, sessionID: task.sessionId }
+      } catch (error) {
+        return {
+          kind: "blocked",
+          reason: error instanceof Error ? error.message : String(error),
+        }
       }
     },
   })

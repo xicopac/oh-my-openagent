@@ -5,16 +5,19 @@
  * decisions); prompts, worker output, and transcripts never reach the journal.
  *
  * Live-runtime surface: `beginDelegation` starts the ladder (workers +
- * prompt), `attachWorkerSession` binds the real child session (once known) to
- * the watchdog, `markRequestStarted` records the provider-request milestone,
- * `recordWorkerResult` folds a worker result into the ladder, `onToolActivity`
- * accumulates root tool activity for grunt detection, `checkAllWatchdogs`
- * sweeps registered children with metadata-only checks, and `reclaimStalled`
- * drives the automatic recovery path (detect -> record -> cancel -> retry).
+ * prompt), `retainAssignment` retains a bounded replayable assignment for
+ * automatic failover, `attachWorkerSession` binds the real child session (once
+ * known) to the watchdog, `markRequestStarted` records the provider-request
+ * milestone, `recordWorkerResult` folds a worker result into the ladder,
+ * `onToolActivity` accumulates root tool activity for grunt detection,
+ * `checkAllWatchdogs` sweeps registered children with metadata-only checks, and
+ * `reclaimStalled` drives automatic recovery (detect -> record -> cancel ->
+ * stage-aware failover -> governed re-dispatch).
  */
 
 import {
   createDelegationLadder,
+  DEFAULT_DELEGATION_LADDER_CONFIG,
   type AttemptResult,
   type DelegationLadderConfig,
   type DelegationLadder,
@@ -36,12 +39,20 @@ import {
 import {
   createWatchdog,
   createRecoveryCoordinator,
+  type ChildStage,
   type RecoveryCoordinator,
   type StallTimeoutPolicy,
   type Watchdog,
   type WatchdogCheckResult,
   type WatchdogPolicy,
 } from "../worker-supervisor"
+import { recommendFailoverAction, type RedispatchAction } from "./failover"
+import {
+  buildReplacementPrompt,
+  initialLineage,
+  type ReplayableAssignment,
+  type RetryLineage,
+} from "./replay"
 import { discoverFreeModels, type PricingCatalog } from "../../hooks/resource-governor/pricing"
 import type { GovernanceAuditWriter } from "../../shared/governance-audit"
 
@@ -54,14 +65,36 @@ export type DelegationFirstConfig = {
   pricing?: PricingCatalog
 }
 
-/** Sink that reclaims a stalled child. Injected after construction because the
- * runtime is built before the BackgroundManager exists. */
+/** Result of a governed replacement-child re-dispatch. */
+export type RelaunchOutcome =
+  | { kind: "launched"; taskID: string; sessionID?: string }
+  | { kind: "blocked"; reason: string }
+
+/**
+ * Sink that reclaims a stalled child and, when a retry is worthwhile,
+ * re-dispatches a governed replacement child through the real launch path.
+ * Injected after construction because the runtime is built before the
+ * BackgroundManager exists.
+ */
 export type RecoverySink = {
   cancel: (sessionID: string, reason: string) => Promise<void> | void
+  /** Re-dispatch a replacement child from a retained assignment + failover action. */
+  relaunch?: (
+    assignment: ReplayableAssignment,
+    action: RedispatchAction,
+    replacementPrompt: string,
+  ) => Promise<RelaunchOutcome> | RelaunchOutcome
 }
 
 export type DelegationFirstRuntime = {
   beginDelegation(jobID: string, parentSessionID: string, prompt: string, workers: WorkerCandidate[]): void
+  /** Retain a bounded replayable assignment so a stalled child can be re-dispatched. */
+  retainAssignment(assignment: ReplayableAssignment, childSessionID?: string): void
+  /** Record compact partial findings for a retained assignment (preserved across retries). */
+  recordPartialFindings(assignmentOrSessionID: string, findings: Finding[]): void
+  lineage(assignmentOrSessionID: string): RetryLineage | undefined
+  /** Link a replacement child session to its assignment (fires when the session resolves). */
+  noteReplacementSession(assignmentID: string, sessionID: string): void
   attachChildSession(parentSessionID: string, childSessionID: string): void
   detachChildSession(childSessionID: string): void
   recordWorkerResult(jobID: string, result: AttemptResult): NextAction
@@ -69,7 +102,7 @@ export type DelegationFirstRuntime = {
   /** Record that the provider request for `sessionID` was dispatched. */
   markRequestStarted(sessionID: string): void
   setRecoverySink(sink: RecoverySink): void
-  /** Evaluate a timed-out stall and reclaim it (cancel + retry) automatically. */
+  /** Evaluate a timed-out stall and reclaim it (cancel + governed re-dispatch) automatically. */
   reclaimStalled(sessionID: string, providerModel: string | null, nowMs?: number): void
   watchdogActivity(sessionID: string): void
   watchdogProcessStart(sessionID: string): void
@@ -89,6 +122,10 @@ export type DelegationFirstRuntime = {
   dispose(): void
 }
 
+function isThenable(value: unknown): value is Promise<RelaunchOutcome> {
+  return typeof (value as { then?: unknown } | null | undefined)?.then === "function"
+}
+
 export function createDelegationFirstRuntime(
   audit: GovernanceAuditWriter | undefined,
   cfg: DelegationFirstConfig = {},
@@ -97,10 +134,18 @@ export function createDelegationFirstRuntime(
   const jobSession = new Map<string, string>()
   // Maps a worker session id -> jobID (watchdog worker identity).
   const sessionJob = new Map<string, string>()
+  // Retained replayable assignment by assignment id and by child session id.
+  const assignmentsById = new Map<string, ReplayableAssignment>()
+  const sessionToAssignment = new Map<string, string>()
+  const lineageByAssignment = new Map<string, RetryLineage>()
+  // Child sessions that were launched as failover replacements.
+  const replacementSessions = new Set<string>()
   // Root-session tool activity windows for post-hoc grunt detection.
   const gruntWindows = new Map<string, ToolActivityEvent[]>()
   // Sessions whose provider request was dispatched before the watchdog attached.
   const pendingRequestStarted = new Set<string>()
+
+  const ladderConfig: DelegationLadderConfig = { ...DEFAULT_DELEGATION_LADDER_CONFIG, ...cfg.ladder }
 
   const ladder: DelegationLadder = createDelegationLadder(cfg.ladder, {
     onEvent: (jobID, event, detail) => {
@@ -130,6 +175,157 @@ export function createDelegationFirstRuntime(
   const freeWorkerHint = cfg.pricing ? discoverFreeModels(cfg.pricing)[0] ?? null : null
   const gate: PreGruntGate = createPreGruntGate({ freeWorkerHint })
 
+  function assignmentIDFor(sessionID: string): string | undefined {
+    return sessionToAssignment.get(sessionID)
+  }
+
+  function applyRelaunchOutcome(
+    oldSessionID: string,
+    assignmentID: string,
+    attempt: number,
+    workerID: string,
+    outcome: RelaunchOutcome,
+  ): void {
+    const detail = {
+      assignment_id: assignmentID,
+      attempt,
+      next_worker: workerID,
+    }
+    if (outcome.kind === "launched") {
+      audit?.write(oldSessionID, {
+        subsystem: "delegation",
+        event: "worker_retry_dispatched",
+        ...detail,
+        task_id: outcome.taskID,
+        new_session_id: outcome.sessionID ?? null,
+      })
+      audit?.write(oldSessionID, {
+        subsystem: "delegation",
+        event: "replacement_child_created",
+        ...detail,
+        old_session_id: oldSessionID,
+        new_session_id: outcome.sessionID ?? null,
+      })
+      if (outcome.sessionID) {
+        replacementSessions.add(outcome.sessionID)
+        sessionToAssignment.set(outcome.sessionID, assignmentID)
+      }
+    } else {
+      audit?.write(oldSessionID, {
+        subsystem: "delegation",
+        event: "replacement_child_blocked",
+        ...detail,
+        reason: outcome.reason,
+      })
+      audit?.write(oldSessionID, {
+        subsystem: "delegation",
+        event: "retry_chain_exhausted",
+        reason: outcome.reason,
+        ...detail,
+      })
+    }
+  }
+
+  function tryRedispatch(
+    sessionID: string,
+    assignment: ReplayableAssignment,
+    stallMode: NonNullable<WatchdogCheckResult["stallMode"]>,
+    correlated: boolean,
+    stage: ChildStage,
+  ): void {
+    const lineage = lineageByAssignment.get(assignment.assignment_id) ?? initialLineage(assignment)
+    const action = recommendFailoverAction({
+      workers: assignment.workers,
+      attempt_number: lineage.attempt_number,
+      worker_index: lineage.worker_index,
+      previous_workers: lineage.previous_workers,
+      config: ladderConfig,
+      stallMode,
+      correlated,
+      findings: lineage.findings,
+    })
+
+    audit?.write(sessionID, {
+      subsystem: "delegation",
+      event: "worker_retry_planned",
+      assignment_id: assignment.assignment_id,
+      attempt: lineage.attempt_number,
+      stall_mode: stallMode,
+      correlated,
+      action: action.kind,
+      next_worker: action.kind === "give_up" ? null : action.worker.model_id,
+    })
+
+    if (action.kind === "give_up") {
+      audit?.write(sessionID, {
+        subsystem: "delegation",
+        event: "retry_chain_exhausted",
+        reason: action.reason,
+        assignment_id: assignment.assignment_id,
+        attempt: lineage.attempt_number,
+      })
+      return
+    }
+
+    if (action.kind === "alternate_worker") {
+      audit?.write(sessionID, {
+        subsystem: "delegation",
+        event: "alternate_worker_selected",
+        assignment_id: assignment.assignment_id,
+        attempt: lineage.attempt_number,
+        from: lineage.current_worker,
+        to: action.worker.model_id,
+      })
+    }
+    if (action.kind === "escalate_worker") {
+      audit?.write(sessionID, {
+        subsystem: "delegation",
+        event: "worker_model_escalated",
+        assignment_id: assignment.assignment_id,
+        attempt: lineage.attempt_number,
+        from: lineage.current_worker,
+        to: action.worker.model_id,
+        reason: action.reason,
+      })
+    }
+
+    const priorWorker = lineage.current_worker ?? assignment.workers[lineage.worker_index]?.model_id ?? "unknown"
+    const nextLineage: RetryLineage = {
+      attempt_number: lineage.attempt_number + 1,
+      worker_index: action.worker_index,
+      previous_workers: [...lineage.previous_workers, priorWorker],
+      current_worker: action.worker.model_id,
+      failure_stage: stage,
+      failure_stall_mode: stallMode,
+      failure_reason: action.reason,
+      findings: lineage.findings,
+    }
+    lineageByAssignment.set(assignment.assignment_id, nextLineage)
+
+    const replacementPrompt = buildReplacementPrompt(assignment, nextLineage)
+
+    const relaunch = sink?.relaunch
+    if (!relaunch) {
+      audit?.write(sessionID, {
+        subsystem: "delegation",
+        event: "retry_chain_exhausted",
+        reason: "no_relaunch_sink",
+        assignment_id: assignment.assignment_id,
+        attempt: nextLineage.attempt_number,
+      })
+      return
+    }
+
+    const outcome = relaunch(assignment, action, replacementPrompt)
+    if (isThenable(outcome)) {
+      void outcome.then((resolved) =>
+        applyRelaunchOutcome(sessionID, assignment.assignment_id, nextLineage.attempt_number, action.worker.model_id, resolved),
+      )
+    } else {
+      applyRelaunchOutcome(sessionID, assignment.assignment_id, nextLineage.attempt_number, action.worker.model_id, outcome)
+    }
+  }
+
   return {
     beginDelegation(jobID, parentSessionID, prompt, workers) {
       jobSession.set(jobID, parentSessionID)
@@ -141,6 +337,37 @@ export function createDelegationFirstRuntime(
       })
       ladder.start(jobID, prompt, workers)
     },
+    retainAssignment(assignment, childSessionID) {
+      assignmentsById.set(assignment.assignment_id, assignment)
+      if (!lineageByAssignment.has(assignment.assignment_id)) {
+        lineageByAssignment.set(assignment.assignment_id, initialLineage(assignment))
+      }
+      if (childSessionID) {
+        sessionToAssignment.set(childSessionID, assignment.assignment_id)
+      }
+      if (!jobSession.has(assignment.assignment_id)) {
+        jobSession.set(assignment.assignment_id, assignment.parent_session_id)
+      }
+    },
+    recordPartialFindings(assignmentOrSessionID, findings) {
+      const assignmentID =
+        assignmentsById.has(assignmentOrSessionID) ? assignmentOrSessionID : assignmentIDFor(assignmentOrSessionID)
+      if (!assignmentID) return
+      const lineage = lineageByAssignment.get(assignmentID)
+      if (!lineage) return
+      lineage.findings = [...lineage.findings, ...findings]
+      lineageByAssignment.set(assignmentID, lineage)
+    },
+    lineage(assignmentOrSessionID) {
+      const assignmentID =
+        assignmentsById.has(assignmentOrSessionID) ? assignmentOrSessionID : assignmentIDFor(assignmentOrSessionID)
+      if (!assignmentID) return undefined
+      return lineageByAssignment.get(assignmentID)
+    },
+    noteReplacementSession(assignmentID, sessionID) {
+      sessionToAssignment.set(sessionID, assignmentID)
+      replacementSessions.add(sessionID)
+    },
     attachChildSession(parentSessionID, childSessionID) {
       sessionJob.set(childSessionID, parentSessionID)
       watchdog.register(childSessionID, parentSessionID)
@@ -149,8 +376,21 @@ export function createDelegationFirstRuntime(
       }
     },
     detachChildSession(childSessionID) {
+      if (replacementSessions.has(childSessionID)) {
+        const snapshot = watchdog.snapshot(childSessionID)
+        const assignmentID = sessionToAssignment.get(childSessionID)
+        audit?.write(childSessionID, {
+          subsystem: "delegation",
+          event: "replacement_child_completed",
+          assignment_id: assignmentID ?? null,
+          stage: snapshot?.stage ?? "completed",
+          status: snapshot?.status ?? "completed",
+        })
+        replacementSessions.delete(childSessionID)
+      }
       watchdog.unregister(childSessionID)
       sessionJob.delete(childSessionID)
+      sessionToAssignment.delete(childSessionID)
       pendingRequestStarted.delete(childSessionID)
       recovery.reset(childSessionID)
     },
@@ -187,6 +427,17 @@ export function createDelegationFirstRuntime(
         provider_model: providerModel ?? null,
         parent_session_id: sessionJob.get(sessionID) ?? null,
       })
+      audit?.write(sessionID, {
+        subsystem: "delegation",
+        event: "worker_reclaimed",
+        stall_mode: result.stallMode,
+        stage: result.stage,
+        assignment_id: assignmentIDFor(sessionID) ?? null,
+      })
+
+      const assignmentID = assignmentIDFor(sessionID)
+      const assignment = assignmentID ? assignmentsById.get(assignmentID) : undefined
+
       if (decision.retry) {
         audit?.write(sessionID, {
           subsystem: "delegation",
@@ -195,7 +446,26 @@ export function createDelegationFirstRuntime(
           correlated: decision.correlated,
           alternate_worker: decision.correlated ? true : false,
         })
+        if (assignment) {
+          tryRedispatch(sessionID, assignment, result.stallMode, decision.correlated, result.stage)
+        } else {
+          audit?.write(sessionID, {
+            subsystem: "delegation",
+            event: "retry_chain_exhausted",
+            reason: "no_retained_assignment",
+            stall_mode: result.stallMode,
+          })
+        }
+      } else {
+        audit?.write(sessionID, {
+          subsystem: "delegation",
+          event: "retry_chain_exhausted",
+          reason: "same_worker_reclaim_budget_exhausted",
+          stall_mode: result.stallMode,
+          assignment_id: assignmentID ?? null,
+        })
       }
+
       // Truthful terminal: a reclaimed child is cancelled, never left running.
       watchdog.onTerminal(sessionID, "cancelled")
       void sink?.cancel(sessionID, decision.reason)
@@ -224,6 +494,8 @@ export function createDelegationFirstRuntime(
     unregisterWorker(sessionID) {
       watchdog.unregister(sessionID)
       sessionJob.delete(sessionID)
+      sessionToAssignment.delete(sessionID)
+      replacementSessions.delete(sessionID)
       pendingRequestStarted.delete(sessionID)
     },
     onToolActivity(sessionID, tool, nowMs) {
@@ -234,8 +506,6 @@ export function createDelegationFirstRuntime(
         return { grunt: false, reason: null, gruntCount: 0 }
       }
       window.push(event)
-      // Bound the retained window to the detector's window span so the map
-      // never grows unboundedly for a long-lived main session.
       const latest = event.atMs
       const keep = window.filter((e) => e.atMs >= latest - gruntOptions.windowMs)
       gruntWindows.set(sessionID, keep)
@@ -302,6 +572,10 @@ export function createDelegationFirstRuntime(
       gate.clear()
       jobSession.clear()
       sessionJob.clear()
+      assignmentsById.clear()
+      sessionToAssignment.clear()
+      lineageByAssignment.clear()
+      replacementSessions.clear()
       gruntWindows.clear()
       pendingRequestStarted.clear()
     },

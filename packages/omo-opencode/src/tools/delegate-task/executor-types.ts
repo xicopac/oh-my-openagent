@@ -1,6 +1,8 @@
 import type { BackgroundManager } from "../../features/background-agent"
 import type { CategoriesConfig, GitMasterConfig, BrowserAutomationProvider, AgentOverrides, SisyphusAgentConfig } from "../../config/schema"
 import type { ModelFallbackControllerAccessor } from "../../hooks/model-fallback"
+import type { PricingCatalog } from "../../hooks/resource-governor"
+import type { DelegationFirstRuntime } from "../../features/delegation-first"
 import type { OpencodeClient } from "./types"
 
 export interface ExecutorContext {
@@ -16,6 +18,8 @@ export interface ExecutorContext {
   modelFallbackControllerAccessor?: ModelFallbackControllerAccessor
   onSyncSessionCreated?: (event: { sessionID: string; parentID: string; title: string }) => Promise<void>
   syncPollTimeoutMs?: number
+  delegationFirstRuntime?: DelegationFirstRuntime
+  pricingCatalog?: PricingCatalog
 }
 
 export interface ParentContext {
