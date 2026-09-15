@@ -1,9 +1,9 @@
 import { tool, type ToolDefinition } from "@opencode-ai/plugin"
-import { resolveModelTier } from "@oh-my-opencode/delegate-core"
+import { MODEL_TIERS, resolveModelBand, type ModelBandCandidate, type ModelTier } from "@oh-my-opencode/delegate-core"
 import type { DelegatedModelConfig, ToolContextWithMetadata, DelegateTaskToolOptions, DelegateTaskArgs } from "./types"
 import { log } from "../../shared/logger"
 import { parseModelString } from "../../shared/model-string-parser"
-import { getAvailableModelsForDelegateTask, getModelsWithPricingAndMetadataForDelegateTask, getEnabledModelState } from "./available-models"
+import { getModelsWithPricingAndMetadataForDelegateTask, getEnabledModelState } from "./available-models"
 import { filterEnabledModelKeys } from "../../shared/model-enable-state"
 import { buildSystemContent } from "./prompt-builder"
 import {
@@ -23,8 +23,8 @@ import { createDelegateTaskPresentation } from "./tool-description"
 import type { AvailableSkill } from "../../agents/dynamic-agent-prompt-builder"
 import { mergeNativeSkillInfos, type NativeSkillEntry } from "../skill/native-skills"
 import type { SkillInfo } from "../skill/types"
-import { authorizeChildDispatch, blockMessage, resolvedModelKey, type ChildLaunchBackstop, type ResourceGovernorRuntime } from "../../hooks/resource-governor"
-import { buildDelegationWorkerCandidates } from "../../features/delegation-first"
+import { authorizeChildDispatch, blockMessage, lookupPricing, resolvedModelKey, type ChildLaunchBackstop, type ResourceGovernorRuntime } from "../../hooks/resource-governor"
+import { buildDelegationWorkerCandidates, type ModelCapabilityInfo } from "../../features/delegation-first"
 import { refineAssignment } from "../../features/delegation-ladder"
 import { judgeSyncAdequacy } from "./sync-adequacy"
 
@@ -174,12 +174,62 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
       const applyModelTier = async (): Promise<void> => {
         const tier = delegateTaskArgs.model_tier
         if (!tier) return
-        const availableModels = await getAvailableModelsForDelegateTask(options.client)
-        const resolved = resolveModelTier({
-          tier,
-          config: modelOptions.modelRouting ?? {},
-          availableModels,
-          parentModel: inheritedModel,
+
+        let available = new Set<string>()
+        let pricing = options.pricingCatalog
+        let candidateInfo = new Map<string, ModelCapabilityInfo>()
+        if (options.availableModelsOverride) {
+          available = options.availableModelsOverride
+        } else {
+          const live = await getModelsWithPricingAndMetadataForDelegateTask(options.client)
+          available = live.models
+          candidateInfo = live.modelInfo
+          pricing = options.pricingCatalog ? { ...options.pricingCatalog, ...live.pricing } : live.pricing
+        }
+
+        const enableState = await getEnabledModelState(options.client)
+        const unavailable = new Set(options.delegationFirstRuntime?.unavailableModels() ?? [])
+        for (const modelKey of enableState.disabledModels) unavailable.add(modelKey)
+
+        const enabled = filterEnabledModelKeys(available, enableState)
+        const mainModel = inheritedModel
+        const mainPricing = mainModel && pricing ? lookupPricing(pricing, mainModel) : undefined
+
+        const pinned: Partial<Record<ModelTier, string>> = {}
+        const tiers = modelOptions.modelRouting?.tiers
+        if (tiers) {
+          for (const t of MODEL_TIERS) {
+            const entry = tiers[t]
+            if (!entry) continue
+            if (t === "master") {
+              if (entry.inherit_parent === false && entry.model) pinned.master = entry.model
+            } else if (entry.model) {
+              pinned[t] = entry.model
+            }
+          }
+        }
+
+        const candidates: ModelBandCandidate[] = []
+        for (const id of enabled) {
+          if (unavailable.has(id)) continue
+          const info = candidateInfo.get(id)
+          candidates.push({
+            model: id,
+            pricing: pricing ? lookupPricing(pricing, id) : undefined,
+            ...(info?.vision === undefined ? {} : { vision: info.vision }),
+            ...(info?.tool_call === undefined ? {} : { tool_call: info.tool_call }),
+            ...(info?.reasoning === undefined ? {} : { reasoning: info.reasoning }),
+            ...(info?.context_limit === undefined ? {} : { context_limit: info.context_limit }),
+          })
+        }
+
+        const resolved = resolveModelBand({
+          requestedTier: tier,
+          candidates,
+          mainModel,
+          mainPricing,
+          pinned,
+          unavailable,
         })
         if (!resolved) {
           log("[delegate-task] model_tier requested but unresolved; keeping existing resolution", {
@@ -203,10 +253,10 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         log("[delegate-task] model_tier", {
           agent: agentToUse,
           requestedTier: tier,
-          tier: resolved.tier,
+          band: resolved.band,
           model: resolved.model,
           escalated: resolved.escalated,
-          usedParentModel: resolved.usedParentModel,
+          usedMainModel: resolved.usedMainModel,
           description: delegateTaskArgs.description,
         })
       }

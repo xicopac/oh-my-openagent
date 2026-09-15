@@ -1,5 +1,26 @@
 # OMA Resource Governor — Authoritative Report
 
+## Dynamic Economic/Capability Tier Bands (this change)
+
+**Status: COMPLETE.** Removed the static `model_routing.tiers` -> fixed-model bottleneck. A requested
+worker tier is now a POLICY/BAND resolved over the full enabled runtime pool:
+
+- `fast` -> `free` ($0 across every bucket, by strength)
+- `balanced` -> `cheap_paid` (paid, strictly cheaper than MAIN, lowest expected cost)
+- `strong` -> `strong_paid` (paid below/equal MAIN, capability-first, never auto-jumps to MAIN)
+- `master` -> `main_equiv` (MAIN's concrete model, as a child)
+
+Pure resolver `resolveModelBand` lives in `packages/delegate-core/src/model-band.ts` (replaces
+`resolveModelTier`). It is capability-first (vision/tool_call/reasoning/min_context/min_capability),
+classifies candidates relative to MAIN's own price (no hardcoded threshold), ranks free/cheap by
+economics and strong by strength, excludes disabled/negative-cached models, treats unknown pricing as
+paid-not-free, and preserves explicit `tiers.*.model` only as an override. Classifying + ranking are
+relative to MAIN's price; unknown-price models rank below known-price strong models.
+
+Live catalog validation (metadata only, $0 inference spend) over the 69-model `opencode` registry with
+MAIN=`opencode/deepseek-v4-pro`: `free -> muse-spark-1.2-contributor-free`, `cheap_paid -> gpt-5-nano`,
+`strong_paid -> gpt-5.6-luna`, `main_equiv -> deepseek-v4-pro`. All bands resolve correctly.
+
 ## Dynamic Enabled Model Pool + Capability-Aware Routing (this change)
 
 **Status: COMPLETE (live OpenCode validation SKIPPED — see below).** The candidate pool now honors the

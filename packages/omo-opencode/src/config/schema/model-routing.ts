@@ -1,17 +1,30 @@
 import { z } from "zod"
 
+/**
+ * Capability tiers double as ECONOMIC BANDS over the enabled model pool:
+ *
+ *   fast      -> free       ($0 models)
+ *   balanced  -> cheap_paid (paid, materially cheaper than MAIN)
+ *   strong    -> strong_paid (stronger paid, below/equal MAIN)
+ *   master    -> main_equiv (same concrete model as MAIN)
+ *
+ * A tier is a POLICY/BAND, not one fixed model: the runtime resolver selects a
+ * concrete model dynamically from the enabled catalog, using live pricing and
+ * capability metadata. The `model` field below is an explicit OVERRIDE (pin),
+ * honored only when set; it is NOT the default routing mechanism.
+ */
 export const MODEL_TIERS = ["fast", "balanced", "strong", "master"] as const
 export const ModelTierSchema = z.enum(MODEL_TIERS)
 
 export const ModelTierEntryConfigSchema = z.object({
-  /** Exact registered model id in "provider/model" form. The model registry is the source of truth; never a guessed id. */
+  /** Explicit model-id pin override in "provider/model" form. When set it wins for this tier; when absent the tier resolves dynamically via its economic band. */
   model: z.string().optional(),
-  /** For "master": true resolves to the parent/main session's current model. */
+  /** For "master": when false, an explicit `model` pin wins over the parent/main model. Default (omitted/true) is main_equiv -> MAIN's concrete model. */
   inherit_parent: z.boolean().optional(),
 })
 
 export const ModelRoutingConfigSchema = z.object({
-  /** Enable per-delegation model tier selection (default: enabled when the section is present). */
+  /** Enable per-delegation model tier (band) selection (default: enabled when the section is present). */
   enabled: z.boolean().optional(),
   tiers: z
     .object({
