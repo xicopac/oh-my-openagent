@@ -71,6 +71,43 @@ export const ResourceGovernorConsentConfigSchema = z
   })
   .strict()
 
+/**
+ * Bounded retry / model-escalation ladder ("delegation-first"). A weak worker
+ * result causes a better assignment, not root takeover: refine+retry the same
+ * worker up to `escalate_after_attempts`, then advance to the next worker model.
+ * Findings are preserved across attempts. Bounds are explicit so the ladder can
+ * never loop unboundedly.
+ */
+export const ResourceGovernorDelegationLadderConfigSchema = z
+  .object({
+    /** Max refine+retry attempts against the same worker model. */
+    max_attempts_per_tier: z.number().int().min(1).max(8).default(2),
+    /** Max total refine+retry attempts on free workers before paid escalation. */
+    max_free_attempts_total: z.number().int().min(1).max(16).default(4),
+    /** Attempts against a worker before the ladder advances to the next model. */
+    escalate_after_attempts: z.number().int().min(1).max(8).default(2),
+  })
+  .strict()
+
+/**
+ * Worker watchdog (Level 1) thresholds. Level 1 monitors a monotonic per-worker
+ * progress counter only — it NEVER reads output, deltas, or transcripts, and
+ * healthy monitoring makes zero model calls.
+ */
+export const ResourceGovernorWatchdogConfigSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    /** Grace from worker start before stall classification begins. */
+    startup_grace_ms: z.number().int().min(0).default(60_000),
+    /** No counter advance or activity past this duration → SUSPECTED_STALL. */
+    quiet_stall_threshold_ms: z.number().int().min(1_000).default(180_000),
+    /** A long-running process (build/test) past this is considered wedged. */
+    wedged_threshold_ms: z.number().int().min(1_000).default(300_000),
+    /** Coalesce healthy `watchdog_progress` heartbeats to at most one per this window. */
+    heartbeat_coalesce_ms: z.number().int().min(0).default(5_000),
+  })
+  .strict()
+
 export const ResourceGovernorConfigSchema = z
   .object({
     enabled: z.boolean().default(true),
@@ -94,6 +131,12 @@ export const ResourceGovernorConfigSchema = z
     consent: ResourceGovernorConsentConfigSchema.default(() =>
       ResourceGovernorConsentConfigSchema.parse({}),
     ),
+    delegation_ladder: ResourceGovernorDelegationLadderConfigSchema.default(() =>
+      ResourceGovernorDelegationLadderConfigSchema.parse({}),
+    ),
+    watchdog: ResourceGovernorWatchdogConfigSchema.default(() =>
+      ResourceGovernorWatchdogConfigSchema.parse({}),
+    ),
   })
   .strict()
   .refine((cfg) => cfg.paid.soft_usd <= cfg.paid.hard_usd, {
@@ -111,4 +154,6 @@ export type ResourceGovernorDelegationConfig = z.infer<typeof ResourceGovernorDe
 export type ResourceGovernorContextConfig = z.infer<typeof ResourceGovernorContextConfigSchema>
 export type ResourceGovernorForecastingConfig = z.infer<typeof ResourceGovernorForecastingConfigSchema>
 export type ResourceGovernorConsentConfig = z.infer<typeof ResourceGovernorConsentConfigSchema>
+export type ResourceGovernorDelegationLadderConfig = z.infer<typeof ResourceGovernorDelegationLadderConfigSchema>
+export type ResourceGovernorWatchdogConfig = z.infer<typeof ResourceGovernorWatchdogConfigSchema>
 export type ResourceGovernorConfig = z.infer<typeof ResourceGovernorConfigSchema>
