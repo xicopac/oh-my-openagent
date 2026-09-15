@@ -8,6 +8,7 @@
 
 import type { ResourceGovernorConfig } from "../../config/schema/resource-governor"
 import catalog from "../../features/opengateway-provider/opengateway-models.json"
+import type { GovernanceAuditWriter } from "../../shared/governance-audit"
 import { resolveBudgetLevels, type BudgetLevels } from "./budget"
 import { createResourceGovernor, type DelegationDecision, type DelegationRequest } from "./governor"
 import type { PricingCatalog } from "./pricing"
@@ -132,6 +133,7 @@ export function createResourceGovernorRuntime(opts: {
   pricing: PricingCatalog
   activeChildCount?: (sessionID: string) => number
   onEvent?: (sessionID: string, event: ResourceGovernorEvent, detail?: Record<string, unknown>) => void
+  audit?: GovernanceAuditWriter
 }): ResourceGovernorRuntime {
   const { config, pricing } = opts
   const levels = levelsFromConfig(config)
@@ -176,27 +178,46 @@ export function createResourceGovernorRuntime(opts: {
   }
 
   function emitDecisionEvent(sessionID: string, decision: DelegationDecision): void {
-    if (!opts.onEvent) return
+    let event: ResourceGovernorEvent | null = null
+    let detail: Record<string, unknown> = {}
     switch (decision.kind) {
       case "approved":
-        opts.onEvent(sessionID, decision.free ? "routing-free-preferred" : "cost-gate-approved", {
+        event = decision.free ? "routing-free-preferred" : "cost-gate-approved"
+        detail = {
           model: decision.seed.resolved_model,
           free: decision.free,
           expected_cost_usd: decision.seed.expected_cost_usd,
-        })
-        return
+          escrow_id: decision.seed.escrow_id,
+        }
+        break
       case "blocked":
-        opts.onEvent(sessionID, "resource-hard-limit", { condition: decision.condition, paid: decision.paid })
-        return
+        event = "resource-hard-limit"
+        detail = { condition: decision.condition, paid: decision.paid }
+        break
       case "consent_required":
-        opts.onEvent(sessionID, "cost-gate-blocked", { reason: decision.reason })
-        return
+        event = "cost-gate-blocked"
+        detail = { reason: decision.reason }
+        break
       case "duplicate":
-        opts.onEvent(sessionID, "duplicate-work-prevented", {})
-        return
+        event = "duplicate-work-prevented"
+        detail = {}
+        break
       case "declined":
         return
     }
+    if (event === null) return
+    opts.audit?.write(sessionID, { subsystem: "resource_governor", event, ...detail })
+    opts.onEvent?.(sessionID, event, detail)
+  }
+
+  function emitPlanEvent(sessionID: string, plan: TaskResourcePlan): void {
+    opts.audit?.write(sessionID, {
+      subsystem: "resource_governor",
+      event: "resource-plan-created",
+      difficulty: plan.difficulty,
+      root_tokens: plan.root_tokens,
+      hard_paid_ceiling_usd: plan.hard_paid_ceiling_usd,
+    })
   }
 
   function establishPlan(sessionID: string, expectedTokens: number): TaskResourcePlan {
@@ -207,6 +228,7 @@ export function createResourceGovernorRuntime(opts: {
       hard_paid_ceiling_usd: levels.hard_usd,
     })
     plans.set(sessionID, plan)
+    emitPlanEvent(sessionID, plan)
     return plan
   }
 
@@ -245,7 +267,18 @@ export function createResourceGovernorRuntime(opts: {
     recordRootUsage: (sessionID, usage) =>
       forSession(sessionID, rootModelFromUsage(usage)).recordRootUsage(usage),
     recordChildUsage: (sessionID, escrowID, usage) => forSession(sessionID, null).recordChildUsage(escrowID, usage),
-    settleChild: (sessionID, escrowID, status) => forSession(sessionID, null).settleChild(escrowID, status),
+    settleChild: (sessionID, escrowID, status) => {
+      const settled = forSession(sessionID, null).settleChild(escrowID, status)
+      if (settled) {
+        opts.audit?.write(sessionID, {
+          subsystem: "resource_governor",
+          event: "child-escrow-settled",
+          escrow_id: escrowID,
+          status,
+        })
+      }
+      return settled
+    },
     approveEscalation: (sessionID) => forSession(sessionID, null).approveEscalation(),
     increaseBudget: (sessionID, increase) => forSession(sessionID, null).increaseBudget(increase),
     totals: (sessionID) => forSession(sessionID, null).totals(),

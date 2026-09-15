@@ -37,6 +37,7 @@ import {
 } from "../../shared"
 import { safeCreateHook } from "../../shared/safe-create-hook"
 import { sessionExists } from "../../tools"
+import { createGovernanceAuditWriter } from "../../shared/governance-audit"
 import { isTmuxIntegrationEnabled } from "../../create-runtime-tmux-config"
 import { createModelFallbackTitleUpdater } from "./model-fallback-title-updater"
 
@@ -239,6 +240,7 @@ export function createSessionHooks(args: {
             pluginConfig,
             modelCacheState,
             directory: () => ctx.directory,
+            audit: createGovernanceAuditWriter({}),
             onEvent: (sessionID, event, detail) => {
               log(`[context-governor] ${event}`, { sessionID, ...detail })
             },

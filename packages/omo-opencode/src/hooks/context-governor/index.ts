@@ -12,6 +12,7 @@ import {
 import { writeAtomicText } from "../../shared/atomic-fs"
 import { getContextWindowUsage, invalidateContextWindowUsageCache } from "../../shared/context-window-usage"
 import { resolveMessageEventSessionID, resolveSessionEventID } from "../../shared/event-session-id"
+import type { GovernanceAuditWriter } from "../../shared/governance-audit"
 import { log } from "../../shared/logger"
 
 import { encodeSessionId, readCapsule } from "./capsule-store"
@@ -213,6 +214,7 @@ export type ContextGovernorHookDeps = {
     event: ContextGovernorEventName,
     detail: Record<string, unknown>,
   ) => void
+  audit?: GovernanceAuditWriter
 }
 
 export type ContextGovernorDiagnostic = {
@@ -227,6 +229,7 @@ export type ContextGovernorDiagnostic = {
   latest_decision: string | null
   next_reassessment_tokens: number | null
   turns_since_assessment: number
+  audit_journal_path: string | null
 }
 
 export type ContextGovernorHook = {
@@ -251,6 +254,11 @@ export function createContextGovernorHook(
   const signalBus = deps.signalBus ?? NOOP_SIGNAL_BUS
   const nowFn = deps.now ?? (() => new Date())
   const onEvent = deps.onEvent ?? (() => {})
+  const audit = deps.audit
+
+  function auditEvent(sessionID: string, event: string, fields: Record<string, unknown> = {}): void {
+    audit?.write(sessionID, { subsystem: "context_governor", event, ...fields })
+  }
 
   function resolveConfig(): ContextGovernorConfig {
     return deps.pluginConfig.context_governor ?? DEFAULT_CONTEXT_GOVERNOR_CONFIG
@@ -272,6 +280,7 @@ export function createContextGovernorHook(
     if (!s) {
       s = initialState()
       state.set(sessionID, s)
+      auditEvent(sessionID, "session_init", { enabled: resolveConfig().enabled === true })
     }
     return s
   }
@@ -318,24 +327,64 @@ export function createContextGovernorHook(
     const maxPasses = cfg.max_compaction_passes ?? 3
 
     compactionInProgress.add(sessionID)
+    const beforeTokens = sessionState.lastUsedTokens
+    auditEvent(sessionID, "compaction_started", {
+      before_tokens: beforeTokens,
+      target_tokens: effective.targetAfter,
+      max_passes: maxPasses,
+      provider: sessionState.providerID,
+      model: sessionState.modelID,
+    })
     try {
       let previousUsed = sessionState.lastUsedTokens
+      let completedPasses = 0
+      let finalTokens = previousUsed
+      let stopReason = "max_passes_reached"
       for (let pass = 0; pass < maxPasses; pass++) {
+        const passBefore = previousUsed
         await summarizeOnce(sessionID, sessionState)
         invalidateContextWindowUsageCache(ctx, sessionID)
         const usage = await getContextWindowUsage(ctx, sessionID, deps.modelCacheState)
         const after = usage?.usedTokens
-        if (typeof after !== "number") break
+        if (typeof after !== "number") {
+          stopReason = "measurement_unavailable"
+          auditEvent(sessionID, "compaction_pass", {
+            pass: pass + 1,
+            before_tokens: passBefore,
+            after_tokens: null,
+          })
+          break
+        }
         sessionState.lastUsedTokens = after
-        if (after <= effective.targetAfter) break
+        finalTokens = after
+        completedPasses += 1
+        auditEvent(sessionID, "compaction_pass", {
+          pass: pass + 1,
+          before_tokens: passBefore,
+          after_tokens: after,
+        })
+        if (after <= effective.targetAfter) {
+          stopReason = "target_reached"
+          break
+        }
         const reduction = previousUsed - after
-        if (pass > 0 && reduction < MIN_PASS_REDUCTION_TOKENS) break
+        if (pass > 0 && reduction < MIN_PASS_REDUCTION_TOKENS) {
+          stopReason = "poor_pass_value"
+          break
+        }
         previousUsed = after
       }
       sessionState.phase = "idle"
+      auditEvent(sessionID, "compaction_complete", {
+        stop_reason: stopReason,
+        reason_code: stopReason,
+        pass_count: completedPasses,
+        after_tokens: finalTokens,
+      })
     } catch (error) {
       const errorMessage = String(error)
       sessionState.last_audit_error = errorMessage
+      auditEvent(sessionID, "compaction_failed", { reason_code: "compaction_error" })
       log("[context-governor] Compaction failed", {
         sessionID,
         providerID: sessionState.providerID,
@@ -380,6 +429,7 @@ export function createContextGovernorHook(
     const dir = resolveDirectory()
 
     if ("error" in verdictOrError) {
+      auditEvent(sessionID, "twin_failure", { reason_code: "invalid_verdict" })
       appendAuditLine(dir, sessionID, {
         ts: nowFn().toISOString(),
         session_id: sessionID,
@@ -413,6 +463,12 @@ export function createContextGovernorHook(
         sessionState.entered_at_tokens = sessionState.lastUsedTokens
         sessionState.next_reassessment_tokens =
           sessionState.lastUsedTokens + cfg.lease.extra_tokens
+        auditEvent(sessionID, "enter_expansion", {
+          context_tokens: sessionState.lastUsedTokens,
+          next_reassessment_tokens: sessionState.next_reassessment_tokens,
+          reason_code: verdict.reason,
+          lease_extra_tokens: cfg.lease.extra_tokens,
+        })
         onEvent(sessionID, "enter_expansion", {
           context: sessionState.lastUsedTokens,
           reason: verdict.reason,
@@ -421,6 +477,7 @@ export function createContextGovernorHook(
       }
     } else {
       sessionState.verdict = verdict
+      auditEvent(sessionID, "classification", { verdict: verdict.verdict })
     }
 
     appendAuditLine(dir, sessionID, {
@@ -441,6 +498,11 @@ export function createContextGovernorHook(
     if (event.type === "session.deleted") {
       const sessionID = resolveSessionEventID(props)
       if (sessionID) {
+        const existing = state.get(sessionID)
+        auditEvent(sessionID, "session_shutdown", {
+          phase: existing?.phase ?? null,
+          context_tokens: existing && existing.lastUsedTokens > 0 ? existing.lastUsedTokens : null,
+        })
         state.delete(sessionID)
         blockedByGovernor.delete(sessionID)
         compactionInProgress.delete(sessionID)
@@ -452,10 +514,14 @@ export function createContextGovernorHook(
       const sessionID = resolveSessionEventID(props)
       if (sessionID) {
         const sessionState = getOrInitState(sessionID)
+        const wasExpanded = sessionState.phase === "lease_active"
         sessionState.verdict = null
         sessionState.phase = "idle"
         sessionState.lease_meta = { turns_since_grant: 0, tokens_since_grant: 0, grant_usage: 0 }
         blockedByGovernor.delete(sessionID)
+        if (wasExpanded) {
+          auditEvent(sessionID, "exit_expansion", { reason_code: "external_compaction" })
+        }
       }
       return
     }
@@ -508,6 +574,7 @@ export function createContextGovernorHook(
       usage = await getContextWindowUsage(ctx, sessionID, deps.modelCacheState)
     } catch (error) {
       sessionState.last_audit_error = String(error)
+      auditEvent(sessionID, "measurement_failure", { reason_code: "context_window_usage_error" })
       return
     }
 
@@ -594,6 +661,28 @@ export function createContextGovernorHook(
       if (sessionState.next_reassessment_tokens !== null) {
         detail.reassess = sessionState.next_reassessment_tokens
       }
+      const auditFields: Record<string, unknown> = {
+        context_tokens: usedTokens,
+        preferred_tokens: effective.compactAt,
+        prepare_at_tokens: effective.prepareAt,
+        audit_at_tokens: effective.auditAt,
+        effective_prepare_tokens: effective.prepareAt,
+        effective_target_tokens: effective.targetAfter,
+        phase: sessionState.phase,
+        decision: classification,
+        reason_code: decision.kind,
+        reason: decision.reason,
+        provider: sessionState.providerID,
+        model: sessionState.modelID,
+        turn_count: sessionState.turns_since_assessment,
+      }
+      if (classification === "compact") {
+        auditFields.compressible_tokens = Math.max(0, usedTokens - effective.targetAfter)
+      }
+      if (sessionState.next_reassessment_tokens !== null) {
+        auditFields.next_reassessment_tokens = sessionState.next_reassessment_tokens
+      }
+      auditEvent(sessionID, "assessment", auditFields)
       onEvent(sessionID, eventNameFor(classification), detail)
     }
 
@@ -618,7 +707,10 @@ export function createContextGovernorHook(
       case "force_compact":
         sessionState.phase = "forcing"
         await performSummarize(sessionID, sessionState, effective)
-        if (activeLease) store.expireLease(sessionID)
+        if (activeLease) {
+          store.expireLease(sessionID)
+          auditEvent(sessionID, "exit_expansion", { reason_code: "lease_expired_forced" })
+        }
         sessionState.lease_meta = { turns_since_grant: 0, tokens_since_grant: 0, grant_usage: 0 }
         sessionState.entered_at_tokens = null
         sessionState.next_reassessment_tokens = null
@@ -639,9 +731,20 @@ export function createContextGovernorHook(
           sessionState.next_reassessment_tokens = usedTokens + cfg.lease.extra_tokens
           sessionState.turns_since_assessment = 0
         }
+        auditEvent(sessionID, "continue_expansion", {
+          context_tokens: usedTokens,
+          next_reassessment_tokens: sessionState.next_reassessment_tokens,
+          reason_code: outcome,
+        })
         return
       }
       case "defer_lease":
+        auditEvent(sessionID, "continue_expansion", {
+          context_tokens: usedTokens,
+          next_reassessment_tokens: sessionState.next_reassessment_tokens,
+          reason_code: "lease_active",
+        })
+        return
       case "defer_no_capsule":
         return
     }
@@ -663,6 +766,7 @@ export function createContextGovernorHook(
         latest_decision: null,
         next_reassessment_tokens: null,
         turns_since_assessment: 0,
+        audit_journal_path: audit?.path(sessionID) ?? null,
       }
     }
 
@@ -692,6 +796,7 @@ export function createContextGovernorHook(
       latest_decision: sessionState.last_assessment?.classification ?? null,
       next_reassessment_tokens: sessionState.next_reassessment_tokens,
       turns_since_assessment: sessionState.turns_since_assessment,
+      audit_journal_path: audit?.path(sessionID) ?? null,
     }
   }
 

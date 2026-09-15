@@ -20,6 +20,7 @@ import * as openclawRuntimeDispatch from "./openclaw/runtime-dispatch"
 import { registerManagerForCleanup } from "./features/background-agent/process-cleanup"
 import { createConfigHandler } from "./plugin-handlers"
 import { log } from "./shared"
+import { createGovernanceAuditWriter } from "./shared/governance-audit"
 import { markServerRunningInProcess } from "./shared/tmux/tmux-utils/server-health"
 import type { ModelFallbackControllerAccessor } from "./hooks/model-fallback"
 import { authorizeChildDispatch, createResourceGovernorRuntime, loadPricingCatalog, type ResourceGovernorRuntime } from "./hooks/resource-governor"
@@ -96,6 +97,9 @@ export function createManagers(args: {
     shouldSkipSession: (sessionId) => lookupTeamSession(sessionId) !== undefined,
   })
   const modelFallbackControllerAccessor = createModelFallbackControllerAccessor()
+  const governanceAudit = pluginConfig.resource_governor?.enabled
+    ? createGovernanceAuditWriter({})
+    : undefined
   const resourceGovernorRuntime = pluginConfig.resource_governor?.enabled
     ? createResourceGovernorRuntime({
         config: pluginConfig.resource_governor,
@@ -104,6 +108,7 @@ export function createManagers(args: {
           (backgroundManager?.getTasksByParentSession(sessionID) ?? [])
             .filter((t) => t.status === "running" || t.status === "pending")
             .length,
+        audit: governanceAudit,
         onEvent: (sessionID, event, detail) => {
           log(`[resource-governor] ${event}`, { sessionID, ...(detail ?? {}) })
         },

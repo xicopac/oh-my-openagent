@@ -49,6 +49,69 @@ Full evidence: `.omo/evidence/20260915-context-governor-wiring/` (README.md + ca
 validation output). No paid-model E2E was run (per task constraint); validation used lowered
 thresholds in an isolated in-process client.
 
+## Governance Audit Journal — persistent zero-token runtime record
+
+**Status: the Context Governor and Resource Governor now persist a durable, zero-model-token
+audit journal of every runtime decision.** Commit `feat(governance): persist zero-token runtime
+audit journal` (pending).
+
+Before this change the governors acted but left no durable record: the Context Governor's
+decision lines (`wakes.ndjson`) and lease/verdict entries land under the *project*
+`.omo/context-twin/`, which does not survive OpenCode restart cleanly and is not OMA-owned
+runtime state. The new journal is a single source of truth for governance decisions, stored
+outside the repository and outside the OpenCode data dir.
+
+- **Location:** `~/.omo/governance/<base64url(session-id)>/events.jsonl` (one newline-delimited
+  JSON object per event). Directory segment is base64url-encoded so a raw session id can never
+  be a path segment (traversal/reserved-char defense); the raw id is still recorded verbatim in
+  every `session_id` field. Overridable via `OMO_GOVERNANCE_DIR` (QA sandboxes / tooling) or an
+  explicit `root` option (tests / DI).
+- **Zero model tokens, no secrets:** events are serialized directly from runtime values handed to
+  `write`; the writer makes no model call and never asks an agent to report its own state. A
+  defensive sanitizer strips sensitive top-level keys (`prompt`, `messages`, `output`, `content`,
+  `text`, `transcript`, `response`, `api_key`, `secret`, `password`, `authorization`, `auth`,
+  `credentials`, `reasoning`, `chain_of_thought`, `cot`, etc.) before any line reaches disk.
+- **Deterministic TS/Node file I/O:** `appendFileSync` (O_APPEND) + per-session serialized promise
+  queues (no interleaved/corrupted lines across parallel workers); directories `0700`, files
+  `0600`; a writer failure is log-and-drop (never throws into a live session).
+- **Retention bounds:** age / session-count / per-file byte caps (defaults `max_age_days=30`,
+  `max_sessions=100`, `max_file_bytes=5 MiB`) swept once per writer construction; targets only
+  data under the governance root.
+
+Events persisted:
+
+- **Context Governor** (`subsystem: "context_governor"`): `session_init`, `assessment`
+  (with `context_tokens`, `preferred_tokens`, `effective_target_tokens`, `decision` =
+  `none|distill|audit|compact|expansion|defer`, `reason_code` = decision kind), `enter_expansion` /
+  `continue_expansion` / `exit_expansion`, `classification`, `twin_failure`, `measurement_failure`,
+  `compaction_started` / `compaction_pass` (per-pass `before_tokens`/`after_tokens`) /
+  `compaction_complete` (`stop_reason`, `pass_count`, `after_tokens`) / `compaction_failed`, and
+  `session_shutdown`.
+- **Resource Governor** (`subsystem: "resource_governor"`): `resource-plan-created`,
+  `routing-free-preferred`, `cost-gate-approved`, `resource-hard-limit`, `cost-gate-blocked`,
+  `duplicate-work-prevented`, `child-escrow-settled`. (`declined` intentionally emits nothing.)
+
+Wiring:
+
+- New module `packages/omo-opencode/src/shared/governance-audit/` (`paths.ts`, `retention.ts`,
+  `audit-writer.ts`, `index.ts`), barrel-exported from `shared/index.ts`.
+- `create-session-hooks.ts` passes `audit: createGovernanceAuditWriter({})` into the Context
+  Governor hook; `create-managers.ts` builds one writer (gated on `resource_governor.enabled`) and
+  passes it into the Resource Governor runtime. Two writer instances share one stateless
+  append-only facade, so they are equivalent.
+- `context-governor/index.ts` gained an optional `audit` dep plus an `auditEvent(...)` helper and
+  an `audit_journal_path` field in the live diagnostic. `resource-governor/runtime.ts` gained
+  `emitPlanEvent` + `audit` on `emitDecisionEvent`/`settleChild`.
+
+Tests (all green): `audit-writer.test.ts` (writer, path, permissions, retention, sanitization,
+order, resume, non-throw) + `audit-journal.test.ts` (governor-level: assessment, enter/continue
+expansion, compact + effective target, multi-pass `compaction_pass`, convergence stop reason,
+cross-instance resume, privacy, lifecycle, diagnostic path, behavior-unchanged without `audit`).
+`tsgo --noEmit` clean; `bun run build` succeeds; `dist/index.js` contains the module.
+
+No paid-model inference was made (per task constraint). Validation used lowered thresholds in an
+isolated in-process client against the real hook code.
+
 ## Implementation Summary
 
 **Overall status: enforcement complete across every child-launch surface; Subagent Supervisor (Part 7) implemented and tested. Accounting observation hooks, consent UI, and forecast/HUD wiring remain partial.**
