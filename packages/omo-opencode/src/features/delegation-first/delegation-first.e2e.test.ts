@@ -81,10 +81,11 @@ describe("delegation-first mocked E2E (deterministic, no paid call)", () => {
       const workerSession = "ses-worker-discovery"
 
       // given: MAIN delegates repo discovery to the cheapest sufficient (free) worker.
-      rt.beginDelegation("job-discovery", parent, workerSession, "find auth middleware and token refresh flow", [
+      rt.beginDelegation("job-discovery", parent, "find auth middleware and token refresh flow", [
         freeWorker("free-explore"),
         paidWorker("cheap-specialist"),
       ])
+      rt.attachChildSession(parent, workerSession)
 
       // the watchdog polls progress counters only (no output, no transcript).
       rt.watchdogActivity(workerSession)
@@ -102,21 +103,16 @@ describe("delegation-first mocked E2E (deterministic, no paid call)", () => {
       expect(rt.recordWorkerResult("job-discovery", adequateResult()).kind).toBe("done")
 
       // MAIN verifies the critical anchor with one selective read: not grunt.
-      const selective = rt.flagGrunt(parent, [
-        { tool: "read", atMs: 1 },
-        { tool: "read", atMs: 2 },
-      ])
+      rt.onToolActivity(parent, "read", 1)
+      const selective = rt.onToolActivity(parent, "read", 2)
       expect(selective.grunt).toBe(false)
 
       // a broad search/read crawl WITHOUT delegation IS flagged as root grunt work.
-      const broad = rt.flagGrunt(parent, [
-        { tool: "grep", atMs: 1 },
-        { tool: "read", atMs: 2 },
-        { tool: "grep", atMs: 3 },
-        { tool: "read", atMs: 4 },
-        { tool: "grep", atMs: 5 },
-        { tool: "read", atMs: 6 },
-      ])
+      let broad = rt.onToolActivity(parent, "grep", 3)
+      broad = rt.onToolActivity(parent, "read", 4)
+      broad = rt.onToolActivity(parent, "grep", 5)
+      broad = rt.onToolActivity(parent, "read", 6)
+      broad = rt.onToolActivity(parent, "grep", 7)
       expect(broad.grunt).toBe(true)
 
       await audit.flush()
@@ -148,11 +144,12 @@ describe("delegation-first mocked E2E (deterministic, no paid call)", () => {
       const parent = "ses-main-2"
       const workerSession = "ses-worker-2"
 
-      rt.beginDelegation("job-escalate", parent, workerSession, "trace the auth fallback chain", [
+      rt.beginDelegation("job-escalate", parent, "trace the auth fallback chain", [
         freeWorker("free-explore"),
         freeWorker("free-explore-stronger", "free_alt"),
         paidWorker("cheap-specialist"),
       ])
+      rt.attachChildSession(parent, workerSession)
 
       // two inadequate attempts against the free worker.
       expect(rt.recordWorkerResult("job-escalate", weakResult()).kind).toBe("retry_refined")
@@ -169,11 +166,29 @@ describe("delegation-first mocked E2E (deterministic, no paid call)", () => {
       expect(rt.findings("job-escalate").length).toBeGreaterThan(0)
 
       // the root still has no direct crawl of its own (the ladder owns the decision).
-      expect(rt.flagGrunt(parent, [{ tool: "read", atMs: 1 }]).grunt).toBe(false)
+      expect(rt.onToolActivity(parent, "read", 1).grunt).toBe(false)
 
       await audit.flush()
       const events = eventsOf(readJournalLines(root), "job-escalate")
       expect(events).toContain("worker_model_escalated")
+    })
+  })
+
+  test("watchdog checkAll sweeps every registered child without reading output", async () => {
+    await runScenario(async (rt, audit, root) => {
+      rt.beginDelegation("job-a", "parent", "task a", [freeWorker("free-a")])
+      rt.beginDelegation("job-b", "parent", "task b", [freeWorker("free-b")])
+      rt.attachChildSession("parent", "child-a")
+      rt.attachChildSession("parent", "child-b")
+
+      rt.watchdogActivity("child-a")
+
+      const results = rt.checkAllWatchdogs(10_000)
+      expect(results.length).toBe(2)
+      const byID = new Map(results.map((r) => [r.sessionID, r.result]))
+      expect(byID.get("child-a")?.health).toBe("HEALTHY")
+      // child-b saw no activity -> still within startup grace -> STARTING.
+      expect(["STARTING", "HEALTHY"] as string[]).toContain(byID.get("child-b")?.health)
     })
   })
 })

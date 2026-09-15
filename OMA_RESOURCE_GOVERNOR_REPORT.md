@@ -2,10 +2,14 @@
 
 ## Delegation-First + Watchdog Level 1 (this change)
 
-**Status: delegation-first runtime (retry/escalation ladder + metadata-only Level-1 watchdog +
-root grunt-guard) is built as pure, tested feature modules, composed over the existing zero-token
-Governance Audit Journal; config schema + audit-event catalog + Sisyphus prompt note landed. The
-runtime is NOT yet wired into live child dispatch (no paid-model call, no live-session observer).**
+**Status (updated 2026-09-15): delegation-first is now LIVE-WIRED into the real OpenCode child
+dispatch path.** The `delegation-first` runtime (retry/escalation ladder + metadata-only Level-1
+watchdog + root grunt-guard) is composed over the zero-token Governance Audit Journal and is now
+attached to managers, the `task` tool sync dispatch path, the plugin `event` hook (watchdog
+activity feed), and the `tool.execute.after` grunt-guard feed. Retry/refine, model escalation, and
+free-first worker selection now run for real child launches; the watchdog observes real child
+session lifecycles metadata-only. No paid-model inference was made during validation (catalog has
+0 free models; dispatch validity was proven with injected free candidates).
 
 Scope (`.omo/plans/20260915-delegation-first-watchdog.md`): extend, not replace, the Resource
 Governor / Context Governor / Worker Supervisor / audit journal / dynamic routing work. The chosen
@@ -62,6 +66,48 @@ feed — that remains the same live-wiring gap already listed under "Known Limit
 (free-first *re-selection* at dispatch; per-child result observation; end-of-run HUD). This change
 delivers the decision core + scaffolding + deterministic proof, not a live-session observer. No
 paid-model inference was made.
+
+## Delegation-First Live-Wiring (2026-09-15 — this change)
+
+**Status: COMPLETE.** The previously-unwired delegation-first runtime, ladder, watchdog, and
+grunt-guard are now connected to the real OpenCode execution path. Plan:
+`.omo/plans/20260915-delegation-live-wiring.md`; evidence:
+`.omo/evidence/20260915-delegation-live-wiring/evidence.txt`.
+
+Wiring points (all landed on `feature/dynamic-subagent-model-routing`):
+
+- **Managers**: `create-managers.ts` now constructs `delegationFirstRuntime` from the
+  resource-governor `delegation_ladder` + `watchdog` config, computes `pricingCatalog` once,
+  starts a periodic `checkAllWatchdogs` sweep (`stopWatchdogSweep`), and attaches/detaches the
+  watchdog on `onSubagentSessionCreated` / `onSubagentSessionDeleted`. Cleanup on shutdown.
+- **Task tool**: `tools/delegate-task/tools.ts` sync path now runs `runDelegationFirstSync` when a
+  `delegationFirstRuntime` is present. New `sync-adequacy.ts` (`judgeSyncAdequacy`) provides
+  deterministic empty/truncated/failure detection. `types.ts` accepts `delegationFirstRuntime?` +
+  `pricingCatalog?`.
+- **Free-first selection**: `features/delegation-first/free-worker-candidates.ts`
+  (`buildDelegationWorkerCandidates`) orders workers free-before-paid/cheapest-first and always
+  retains the resolved model; unknown-price models are never classified free.
+- **Watchdog feed**: `plugin/event.ts` feeds per-child-session progress events into
+  `onToolActivity`; `plugin/tool-execute-after.ts` feeds root tool activity into the grunt-guard
+  detector for non-subagent sessions.
+- **Event catalog**: audit events include `delegation_first_selected`, `worker_attempt_inadequate`,
+  `worker_prompt_refined`, `worker_model_escalated`, `worker_worker_done` (+ watchdog
+  `*_start/end/terminal/health`).
+
+Verification (all green): `tsgo --noEmit -p packages/omo-opencode/tsconfig.json` clean; 50 feature
+tests (`delegation-first` incl. new `free-worker-candidates.test.ts`, `delegation-ladder`,
+`worker-supervisor`, `grunt-guard`), 695 delegate-task/resource-governor/config/audit tests, 48
+plugin/manager tests; new `delegation-first-integration.test.ts` (2 tests) proves the real
+`task` tool reaches delegation-first, refines a weak result, escalates the model, and preserves
+findings with zero worker output reaching the journal. `bun run build` succeeds; `dist/index.js`
+contains `buildDelegationWorkerCandidates`, `createDelegationFirstRuntime`, `runDelegationFirstSync`,
+`judgeSyncAdequacy`, `checkAllWatchdogs`, `onToolActivity`, `delegation_first_selected`,
+`worker_model_escalated`; smoke-import of `dist/index.js` succeeds.
+
+**Known pre-existing flakiness (not introduced here):** `sync-poll-timeout.test.ts` and the
+`resource-governor-integration.test.ts` "blocked child" case flake under full-suite CPU load
+(observed identically on a clean tree via `git stash`). Both pass in isolation and in the first
+combined run.
 
 ## Context Governor — Live Runtime Wiring (this change)
 

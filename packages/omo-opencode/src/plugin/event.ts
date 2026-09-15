@@ -26,7 +26,24 @@ import type { EventInput, FirstMessageVariantGate, PluginEventContext } from "./
 
 export { extractErrorMessage } from "./event-error-utils";
 
-export function createEventHandler(args: {
+function isChildProgressEvent(type: string): boolean {
+  if (type === "message.updated") return true
+  if (type.startsWith("message.part.")) return true
+  if (type.startsWith("session.next.")) return true
+  return type.startsWith("step.")
+}
+
+function sessionIDForProgressEvent(props: Record<string, unknown> | undefined): string | undefined {
+  if (!props) return undefined
+  const direct = props.sessionID
+  if (typeof direct === "string") return direct
+  const part = props.part
+  if (part !== null && typeof part === "object") {
+    const nested = (part as Record<string, unknown>).sessionID
+    if (typeof nested === "string") return nested
+  }
+  return resolveSessionEventID(props) ?? undefined
+}export function createEventHandler(args: {
   ctx: PluginContext;
   pluginConfig: OhMyOpenCodeConfig;
   firstMessageVariantGate: FirstMessageVariantGate;
@@ -134,6 +151,13 @@ export function createEventHandler(args: {
     const { event } = input;
     managers.tuiStateMirror?.onEvent(event);
     const props = event.properties as Record<string, unknown> | undefined;
+
+    if (managers.delegationFirstRuntime && isChildProgressEvent(event.type)) {
+      const sessionID = sessionIDForProgressEvent(props);
+      if (sessionID) {
+        managers.delegationFirstRuntime.watchdogActivity(sessionID);
+      }
+    }
 
     if (tmuxIntegrationEnabled && TMUX_ACTIVITY_EVENT_TYPES.has(event.type)) {
       managers.tmuxSessionManager.onEvent?.(event as { type: string; properties?: Record<string, unknown> });

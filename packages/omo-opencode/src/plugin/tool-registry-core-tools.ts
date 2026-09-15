@@ -20,7 +20,7 @@ import { createRuntimeSkillsResolver, readRuntimeHostSkills } from "./runtime-sk
 export function createCoreTools(args: {
   readonly ctx: PluginContext
   readonly pluginConfig: OhMyOpenCodeConfig
-  readonly managers: Pick<Managers, "backgroundManager" | "tmuxSessionManager" | "skillMcpManager" | "modelFallbackControllerAccessor" | "resourceGovernorRuntime">
+  readonly managers: Pick<Managers, "backgroundManager" | "tmuxSessionManager" | "skillMcpManager" | "modelFallbackControllerAccessor" | "resourceGovernorRuntime" | "delegationFirstRuntime" | "pricingCatalog">
   readonly skillContext: SkillContext
   readonly availableCategories: AvailableCategory[]
   readonly factories: ToolRegistryFactories
@@ -59,6 +59,8 @@ export function createCoreTools(args: {
     modelRouting: pluginConfig.model_routing,
     resourceGovernorRuntime: managers.resourceGovernorRuntime,
     resourceGovernorDefaultChildTokens: pluginConfig.resource_governor?.delegation.default_child_tokens,
+    delegationFirstRuntime: managers.delegationFirstRuntime,
+    pricingCatalog: managers.pricingCatalog,
     loadCurrentModelConfig: () => {
       const current = loadPluginConfig(ctx.directory, process.env)
       return { agents: current.agents, categories: current.categories, model_routing: current.model_routing }
@@ -81,6 +83,7 @@ export function createCoreTools(args: {
         parentID: event.parentID,
         title: event.title,
       })
+      managers.delegationFirstRuntime?.attachChildSession(event.parentID, event.sessionID)
       await managers.tmuxSessionManager.onSessionCreated({
         type: "session.created",
         properties: {

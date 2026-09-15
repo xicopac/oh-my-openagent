@@ -24,6 +24,7 @@ import { createGovernanceAuditWriter } from "./shared/governance-audit"
 import { markServerRunningInProcess } from "./shared/tmux/tmux-utils/server-health"
 import type { ModelFallbackControllerAccessor } from "./hooks/model-fallback"
 import { authorizeChildDispatch, createResourceGovernorRuntime, loadPricingCatalog, type ResourceGovernorRuntime } from "./hooks/resource-governor"
+import { createDelegationFirstRuntime, type DelegationFirstRuntime } from "./features/delegation-first"
 
 type CreateManagersDeps = {
   BackgroundManagerClass: typeof BackgroundManager
@@ -61,6 +62,12 @@ export type Managers = {
   monitorManager?: MonitorManager
   /** Shared Resource Governor runtime; present when resource_governor.enabled. */
   resourceGovernorRuntime?: ResourceGovernorRuntime
+  /** Delegation-first (ladder + watchdog + grunt guard) runtime; lives over the audit journal. */
+  delegationFirstRuntime?: DelegationFirstRuntime
+  /** Stops the periodic watchdog sweep timer (if started). */
+  stopWatchdogSweep?: () => void
+  /** Live OpenGateway pricing catalog (shared by the governor and delegation-first selection). */
+  pricingCatalog?: ReturnType<typeof loadPricingCatalog>
 }
 
 export function createManagers(args: {
@@ -100,10 +107,11 @@ export function createManagers(args: {
   const governanceAudit = pluginConfig.resource_governor?.enabled
     ? createGovernanceAuditWriter({})
     : undefined
+  const pricingCatalog = loadPricingCatalog()
   const resourceGovernorRuntime = pluginConfig.resource_governor?.enabled
     ? createResourceGovernorRuntime({
         config: pluginConfig.resource_governor,
-        pricing: loadPricingCatalog(),
+        pricing: pricingCatalog,
         activeChildCount: (sessionID) =>
           (backgroundManager?.getTasksByParentSession(sessionID) ?? [])
             .filter((t) => t.status === "running" || t.status === "pending")
@@ -114,6 +122,45 @@ export function createManagers(args: {
         },
       })
     : undefined
+
+  const delegationLadderCfg = pluginConfig.resource_governor?.delegation_ladder
+  const watchdogCfg = pluginConfig.resource_governor?.watchdog
+  const delegationFirstRuntime = pluginConfig.resource_governor?.enabled
+    ? createDelegationFirstRuntime(governanceAudit, {
+        ladder: delegationLadderCfg
+          ? {
+            max_attempts_per_tier: delegationLadderCfg.max_attempts_per_tier,
+            max_free_attempts_total: delegationLadderCfg.max_free_attempts_total,
+            escalate_after_attempts: delegationLadderCfg.escalate_after_attempts,
+          }
+          : undefined,
+        watchdog: watchdogCfg
+          ? {
+            startupGraceMs: watchdogCfg.startup_grace_ms,
+            quietStallThresholdMs: watchdogCfg.quiet_stall_threshold_ms,
+            wedgedThresholdMs: watchdogCfg.wedged_threshold_ms,
+          }
+          : undefined,
+      })
+    : undefined
+
+  // Periodic metadata-only watchdog sweep. Each check reads progress counters
+  // only and makes zero model calls, so the sweep is effectively free.
+  let stopWatchdogSweep: (() => void) | undefined
+  if (delegationFirstRuntime && watchdogCfg?.enabled !== false) {
+    const sweepIntervalMs = Math.max(watchdogCfg?.quiet_stall_threshold_ms ?? 180_000, 5_000) / 6
+    const timer = setInterval(() => {
+      try {
+        delegationFirstRuntime.checkAllWatchdogs()
+      } catch (error) {
+        log("[create-managers] watchdog sweep error:", { error })
+      }
+    }, sweepIntervalMs)
+    if (typeof timer.unref === "function") timer.unref()
+    stopWatchdogSweep = () => {
+      clearInterval(timer)
+    }
+  }
   let backgroundManager: BackgroundManager | undefined
   let tuiStateMirror: TuiStateMirror | undefined
 
@@ -139,6 +186,7 @@ export function createManagers(args: {
   deps.registerManagerForCleanupFn({
     shutdown: async () => {
       tuiStateMirror?.stop()
+      stopWatchdogSweep?.()
       await cleanupTeamModeRuns().catch((error) => {
         log("[create-managers] team-mode cleanup error during process shutdown:", error)
       })
@@ -161,6 +209,8 @@ export function createManagers(args: {
           parentID: event.parentID,
           title: event.title,
         })
+
+        delegationFirstRuntime?.attachChildSession(event.parentID, event.sessionID)
 
         await tmuxSessionManager.onSessionCreated({
           type: "session.created",
@@ -192,6 +242,9 @@ export function createManagers(args: {
         sessionID: event.sessionID,
       })
 
+      delegationFirstRuntime?.watchdogTerminal(event.sessionID)
+      delegationFirstRuntime?.detachChildSession(event.sessionID)
+
       await tmuxSessionManager.onSessionDeleted(event).catch((error) => {
         log("[create-managers] onSubagentSessionDeleted callback error:", {
           sessionID: event.sessionID,
@@ -203,6 +256,7 @@ export function createManagers(args: {
     },
     onShutdown: async () => {
       tuiStateMirror?.stop()
+      stopWatchdogSweep?.()
       await cleanupTeamModeRuns().catch((error) => {
         log("[create-managers] team-mode cleanup error during shutdown:", error)
       })
@@ -253,5 +307,8 @@ export function createManagers(args: {
     tuiStateMirror,
     monitorManager,
     resourceGovernorRuntime,
+    delegationFirstRuntime,
+    stopWatchdogSweep,
+    pricingCatalog,
   }
 }

@@ -5,6 +5,8 @@ import type { ModelTier } from "@oh-my-opencode/delegate-core"
 import type { ModelFallbackControllerAccessor } from "../../hooks/model-fallback"
 import type { LoadedSkill } from "../../features/opencode-skill-loader/types"
 import type { ResourceGovernorRuntime } from "../../hooks/resource-governor"
+import type { PricingCatalog } from "../../hooks/resource-governor"
+import type { DelegationFirstRuntime } from "../../features/delegation-first"
 import type { SessionPromptAsyncData, SessionPromptData, SessionStatusData } from "@opencode-ai/sdk"
 import type {
   AvailableCategory,
@@ -132,6 +134,10 @@ export interface DelegateTaskToolOptions {
   resourceGovernorRuntime?: ResourceGovernorRuntime
   /** Default raw-token estimate for a child when the governor needs one. */
   resourceGovernorDefaultChildTokens?: number
+  /** Delegation-first runtime (ladder + watchdog + grunt guard); present with the governor. */
+  delegationFirstRuntime?: DelegationFirstRuntime
+  /** Live pricing catalog used to derive free-first worker candidates. */
+  pricingCatalog?: PricingCatalog
 }
 
 import type { DelegatedModelConfig } from "../../shared/model-resolution-types"

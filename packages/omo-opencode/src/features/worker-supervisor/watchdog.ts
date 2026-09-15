@@ -27,11 +27,14 @@ export type WatchdogEventName =
 
 export type Watchdog = {
   register(sessionID: string, workerID: string): void
+  unregister(sessionID: string): void
+  sessions(): string[]
   onActivity(sessionID: string): void
   onProcessStart(sessionID: string): void
   onProcessEnd(sessionID: string): void
   onTerminal(sessionID: string): void
   check(sessionID: string, nowMs?: number): Level1Result
+  checkAll(nowMs?: number): Array<{ sessionID: string; result: Level1Result }>
   snapshot(sessionID: string): WatchdogMetadata | undefined
   dispose(): void
 }
@@ -77,6 +80,12 @@ export function createWatchdog(policy: Partial<WatchdogPolicy> = {}, opts: Watch
         longProcessStartedAtMs: 0,
         lastHealth: null,
       })
+    },
+    unregister(sessionID) {
+      states.delete(sessionID)
+    },
+    sessions() {
+      return [...states.keys()]
     },
     onActivity(sessionID) {
       const state = stateFor(sessionID)
@@ -137,6 +146,34 @@ export function createWatchdog(policy: Partial<WatchdogPolicy> = {}, opts: Watch
       const state = stateFor(sessionID)
       if (!state) return undefined
       return buildMetadata(state, sessionID, clock())
+    },
+    checkAll(nowMs) {
+      const now = nowMs ?? clock()
+      const out: Array<{ sessionID: string; result: Level1Result }> = []
+      for (const sessionID of states.keys()) {
+        const state = states.get(sessionID)
+        if (!state) continue
+        const meta = buildMetadata(state, sessionID, now)
+        const result = classifyLevel1(meta, resolved)
+        const previousHealth = state.lastHealth
+        state.previousProgressCounter = state.progressCounter
+        if (previousHealth !== result.health) {
+          const event = eventFor(result.health, result.advanced, previousHealth)
+          if (event) {
+            onEvent?.(sessionID, event, {
+              worker_id: state.workerID,
+              session_id: sessionID,
+              progress_counter: state.progressCounter,
+              previous_progress_counter: state.previousProgressCounter,
+              last_change_at_ms: state.lastChangeAtMs,
+              health: result.health,
+            })
+          }
+        }
+        state.lastHealth = result.health
+        out.push({ sessionID, result })
+      }
+      return out
     },
     dispose() {
       states.clear()

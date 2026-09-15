@@ -23,6 +23,9 @@ import type { AvailableSkill } from "../../agents/dynamic-agent-prompt-builder"
 import { mergeNativeSkillInfos, type NativeSkillEntry } from "../skill/native-skills"
 import type { SkillInfo } from "../skill/types"
 import { authorizeChildDispatch, blockMessage, resolvedModelKey, type ChildLaunchBackstop, type ResourceGovernorRuntime } from "../../hooks/resource-governor"
+import { buildDelegationWorkerCandidates } from "../../features/delegation-first"
+import { refineAssignment } from "../../features/delegation-ladder"
+import { judgeSyncAdequacy } from "./sync-adequacy"
 
 async function loadNativeSkillEntries(
   nativeSkills: DelegateTaskToolOptions["nativeSkills"] | undefined,
@@ -275,6 +278,20 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         return executeBackgroundTask(delegateTaskArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, fallbackChain)
       }
 
+      if (options.delegationFirstRuntime) {
+        return runDelegationFirstSync({
+          options,
+          ctx,
+          args: delegateTaskArgs,
+          parentContext,
+          agentToUse,
+          categoryModel,
+          systemContent,
+          modelInfo,
+          fallbackChain,
+        })
+      }
+
       const enforcement = enforceResourceGovernor(
         options,
         ctx,
@@ -337,4 +354,127 @@ function enforceResourceGovernor(
 
 function isExplicitSyncRun(runInBackground: unknown): boolean {
   return runInBackground === false || runInBackground === "false"
+}
+
+const MAX_DELEGATION_FIRST_ATTEMPTS = 4
+
+type DelegationFirstSyncParams = {
+  options: DelegateTaskToolOptions
+  ctx: ToolContextWithMetadata
+  args: DelegateTaskArgs
+  parentContext: ParentContext
+  agentToUse: string
+  categoryModel: DelegatedModelConfig | undefined
+  systemContent: string | undefined
+  modelInfo?: import("../../features/task-toast-manager/types").ModelFallbackInfo
+  fallbackChain?: import("../../shared/model-requirements").FallbackEntry[]
+}
+
+async function runDelegationFirstSync(params: DelegationFirstSyncParams): Promise<string> {
+  const { options, ctx, args, parentContext, agentToUse, categoryModel, systemContent, modelInfo, fallbackChain } = params
+  const ladder = options.delegationFirstRuntime
+
+  let available = new Set<string>()
+  if (options.availableModelsOverride) {
+    available = options.availableModelsOverride
+  } else {
+    try {
+      available = await getAvailableModelsForDelegateTask(options.client)
+    } catch {
+      available = new Set()
+    }
+  }
+
+  const resolvedModelID = categoryModel?.modelID
+    ? resolvedModelKey(categoryModel.providerID, categoryModel.modelID)
+    : null
+
+  const workers = options.pricingCatalog
+    ? buildDelegationWorkerCandidates({
+        pricing: options.pricingCatalog,
+        available,
+        resolvedModelID,
+      })
+    : []
+
+  const jobID = `df-${ctx.callID ?? ctx.callId ?? ctx.call_id ?? Math.random().toString(36).slice(2, 10)}`
+
+  if (ladder && workers.length > 0) {
+    ladder.beginDelegation(jobID, ctx.sessionID, args.prompt, workers)
+  }
+
+  let currentModel = categoryModel
+  let currentPrompt = args.prompt
+  let lastResult = ""
+  let lastAdequacy = null as ReturnType<typeof judgeSyncAdequacy> | null
+
+  for (let attempt = 0; attempt < MAX_DELEGATION_FIRST_ATTEMPTS; attempt++) {
+    const enforcement = enforceResourceGovernor(
+      options,
+      ctx,
+      { ...args, prompt: currentPrompt },
+      agentToUse,
+      currentModel,
+      parentContext,
+    )
+    if (enforcement.message !== null) {
+      return enforcement.message
+    }
+
+    const result = await executeSyncTask(
+      { ...args, prompt: currentPrompt },
+      ctx,
+      options,
+      parentContext,
+      agentToUse,
+      currentModel,
+      systemContent,
+      modelInfo,
+      fallbackChain,
+      undefined,
+      enforcement.backstop,
+    )
+    lastResult = result
+
+    if (enforcement.escrowID !== null) {
+      options.resourceGovernorRuntime?.settleChild(ctx.sessionID, enforcement.escrowID, "completed")
+    }
+
+    if (!ladder || workers.length === 0) return result
+
+    const adequacy = judgeSyncAdequacy(result)
+    lastAdequacy = adequacy
+    const action = ladder.recordWorkerResult(jobID, adequacy)
+
+    if (action.kind === "done" || action.kind === "give_up") break
+
+    if (action.kind === "retry_refined") {
+      currentPrompt = action.refinedPrompt
+      continue
+    }
+
+    if (action.kind === "escalate") {
+      const parsed = parseModelString(action.worker.model_id)
+      const hasDifferentModel =
+        parsed !== undefined &&
+        typeof parsed.modelID === "string" &&
+        typeof parsed.providerID === "string" &&
+        (!currentModel || resolvedModelKey(parsed.providerID, parsed.modelID) !== resolvedModelKey(currentModel.providerID, currentModel.modelID))
+
+      if (hasDifferentModel && parsed) {
+        currentModel = {
+          providerID: parsed.providerID,
+          modelID: parsed.modelID,
+          ...(parsed.variant ? { variant: parsed.variant } : {}),
+        }
+      }
+
+      currentPrompt = lastAdequacy
+        ? refineAssignment(args.prompt, lastAdequacy)
+        : args.prompt
+      continue
+    }
+  }
+
+  return lastResult
 }

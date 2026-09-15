@@ -2,6 +2,8 @@ import { recoverToolMetadata } from "../features/tool-metadata-store"
 import type { CreatedHooks } from "../create-hooks"
 import { log as defaultLog } from "../shared/logger"
 import type { PluginContext } from "./types"
+import type { DelegationFirstRuntime } from "../features/delegation-first"
+import { subagentSessions } from "../features/claude-code-session-state"
 
 const METADATA_LINKED_TOOLS = new Set([
   "background_output",
@@ -43,11 +45,12 @@ export function createToolExecuteAfterHandler(args: {
   ctx: PluginContext
   hooks: CreatedHooks
   log?: typeof defaultLog
+  delegationFirstRuntime?: DelegationFirstRuntime
 }): (
   input: ToolExecuteAfterInput,
   output: ToolExecuteAfterOutput | undefined,
 ) => Promise<void> {
-  const { hooks } = args
+  const { hooks, delegationFirstRuntime } = args
   const log = args.log ?? defaultLog
 
   // OpenCode injects tool call ids into execute() context and after-hook input via undocumented runtime fields.
@@ -57,6 +60,9 @@ export function createToolExecuteAfterHandler(args: {
     input: ToolExecuteAfterInput,
     output: ToolExecuteAfterOutput | undefined,
   ): Promise<void> => {
+    if (delegationFirstRuntime && !subagentSessions.has(input.sessionID)) {
+      delegationFirstRuntime.onToolActivity(input.sessionID, input.tool)
+    }
     if (!output) return
 
     const hookInput = {
