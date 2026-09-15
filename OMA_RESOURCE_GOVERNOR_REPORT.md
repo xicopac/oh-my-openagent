@@ -109,6 +109,68 @@ contains `buildDelegationWorkerCandidates`, `createDelegationFirstRuntime`, `run
 (observed identically on a clean tree via `git stash`). Both pass in isolation and in the first
 combined run.
 
+## Early Delegation / Pre-Grunt Gate (2026-09-15)
+
+**Status: COMPLETE.** The previously post-hoc root grunt-guard (advisory `root_direct_exception`
+from `tool.execute.after`) is now a live EARLY gate on the real `tool.execute.before` path. Commit
+`feat(delegation): enforce early free-worker delegation`.
+
+**Problem addressed:** the delegation machinery existed but real Sisyphus still crawled the repo
+itself before delegating (TUI showed `A(0; $0.00)` while MAIN read Android files, grepped methods,
+and listed server routes/migrations). The guard only warned after the crawl had already happened.
+
+**Runtime interception point:** `plugin/tool-execute-before.ts` now calls
+`delegationFirstRuntime.preGruntCheck(sessionID, tool, hint, contextPressure)` for every root
+(non-subagent) tool call. When the gate classifies the call as broad delegable exploration it
+`throw`s a steering message, which surfaces to MAIN as a tool error that instructs it to delegate
+to a free worker (`task` with `subagent_type "explore"`/`"librarian"`) and consume the returned
+file/symbol/anchors. The existing `task`/`call_omo_agent` path (unchanged) is what actually
+dispatches the worker; the gate only stops/redirects.
+
+**Allowed root exceptions (never blocked):** any tool outside the search/read set — git status / one
+narrow grep / one small known-file read / edit / write / `session_list` / `session_info` /
+official orchestration calls. An anchored `read` carrying numeric `offset` + `limit` is treated as
+selective verification and allowed (recorded as `selective_root_verification`).
+
+**Trigger policy (conservative, fires early):** a rolling per-session window of search/read tool
+activity is classified by three signals, any of which blocks:
+
+- cross-module exploration (>= 2 module roots and >= 3 grunt ops),
+- search -> read -> search sweep (>= 2 distinct targets),
+- weighted grunt count >= threshold (default 4; context pressure lowers it by up to 2).
+
+A delegation tool (`task`/`call_omo_agent`) resets the window and emits
+`early_delegation_dispatched`. Context Governor pressure (from
+`hooks.contextGovernor.diagnose().measured_context_tokens`) strengthens the bias without waiting
+for a large root budget. Unknown-price models are never hinted free.
+
+**Live dispatch behavior:** the gate does not spawn a second framework — it records
+`root_grunt_pattern_detected` + `early_delegation_required` (with `free_worker_hint` derived from
+the OpenGateway pricing catalog via `discoverFreeModels`) and steers MAIN into the existing `task`
+tool, which already runs free-first worker selection (`buildDelegationWorkerCandidates`).
+
+**Tests:** new `grunt-guard/gate.test.ts` (10) + `delegation-first/pre-grunt-gate.test.ts` (3) prove:
+one tiny lookup allowed; one anchored read allowed; broad search/read triggers; cross-module
+triggers; the gate acts before many ops accumulate (threshold 4, not 10-20); the gate invokes the
+existing runtime; a free worker is hinted first; a worker result/next delegation resets the gate;
+MAIN can selectively verify anchors; high context pressure strengthens delegation; a low-context
+fresh task still delegates via search->read->search; unknown-price is never free. Existing
+`delegation-first` e2e, `delegation-ladder`, `worker-supervisor`, and `grunt-guard` regressions stay
+green; watchdog remains metadata-only; Resource Governor backstop and disabled providers remain
+enforced (unchanged, covered by existing suites).
+
+**Runtime evidence:** `.omo/evidence/20260915-early-delegation-gate/evidence.txt`. No paid-model
+inference was made (the catalog has 0 free models live; free selection was proven with injected
+pricing). `tsgo --noEmit` clean; `bun run build` succeeds; `dist/index.js` contains
+`preGruntCheck`, `createPreGruntGate`, `evaluateEarlyDelegation`, `analyzeGruntSignals`, and the four
+new audit-event names; `dist/index.js` smoke-imports with `{ id, server }`.
+
+**Limitations:** the gate steers via a tool-error message — it cannot force a model call; a
+pathological model could ignore the steering and keep retrying. Broad exploration is therefore
+redirected, not hardware-prohibited. The post-hoc `root_direct_exception` feed (unchanged) still
+records every completed crawl for observability. OpenCode TUI is not modified; real child execution
+(not any write to OpenCode accounting) is what makes `A` non-zero.
+
 ## Context Governor — Live Runtime Wiring (this change)
 
 **Status: Context Governor is now default-enabled and wired into the live normal-session hook path.**

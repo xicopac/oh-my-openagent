@@ -141,6 +141,7 @@ export function createManagers(args: {
             wedgedThresholdMs: watchdogCfg.wedged_threshold_ms,
           }
           : undefined,
+        pricing: pricingCatalog,
       })
     : undefined
 

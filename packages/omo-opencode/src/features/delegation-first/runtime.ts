@@ -22,9 +22,13 @@ import {
 } from "../delegation-ladder"
 import {
   DEFAULT_GRUNT_GUARD_OPTIONS,
+  createPreGruntGate,
   detectGruntWorkCycle,
   type GruntGuardOptions,
+  type GruntToolHint,
   type GruntVerdict,
+  type PreGruntDecision,
+  type PreGruntGate,
   type ToolActivityEvent,
 } from "../grunt-guard"
 import {
@@ -33,12 +37,15 @@ import {
   type Watchdog,
   type WatchdogPolicy,
 } from "../worker-supervisor"
+import { discoverFreeModels, type PricingCatalog } from "../../hooks/resource-governor/pricing"
 import type { GovernanceAuditWriter } from "../../shared/governance-audit"
 
 export type DelegationFirstConfig = {
   ladder?: Partial<DelegationLadderConfig>
   watchdog?: Partial<WatchdogPolicy>
   grunt?: Partial<GruntGuardOptions>
+  // Live pricing catalog used to derive a free-worker hint for the early gate.
+  pricing?: PricingCatalog
 }
 
 export type DelegationFirstRuntime = {
@@ -56,6 +63,12 @@ export type DelegationFirstRuntime = {
   sessions(): string[]
   unregisterWorker(sessionID: string): void
   onToolActivity(sessionID: string, tool: string, nowMs?: number): GruntVerdict
+  preGruntCheck(
+    sessionID: string,
+    tool: string,
+    hint?: GruntToolHint,
+    contextPressure?: number,
+  ): PreGruntDecision
   dispose(): void
 }
 
@@ -67,7 +80,7 @@ export function createDelegationFirstRuntime(
   const jobSession = new Map<string, string>()
   // Maps a worker session id -> jobID (watchdog worker identity).
   const sessionJob = new Map<string, string>()
-  // Root-session tool activity windows for grunt detection.
+  // Root-session tool activity windows for post-hoc grunt detection.
   const gruntWindows = new Map<string, ToolActivityEvent[]>()
 
   const ladder: DelegationLadder = createDelegationLadder(cfg.ladder, {
@@ -90,6 +103,9 @@ export function createDelegationFirstRuntime(
   })
 
   const gruntOptions: GruntGuardOptions = { ...DEFAULT_GRUNT_GUARD_OPTIONS, ...cfg.grunt }
+
+  const freeWorkerHint = cfg.pricing ? discoverFreeModels(cfg.pricing)[0] ?? null : null
+  const gate: PreGruntGate = createPreGruntGate({ freeWorkerHint })
 
   return {
     beginDelegation(jobID, parentSessionID, prompt, workers) {
@@ -160,8 +176,55 @@ export function createDelegationFirstRuntime(
       }
       return verdict
     },
+    preGruntCheck(sessionID, tool, hint, contextPressure) {
+      const wasSteered = gate.isSteered(sessionID)
+      const decision = gate.inspect(sessionID, tool, hint, contextPressure)
+
+      if (decision.delegated && wasSteered) {
+        audit?.write(sessionID, {
+          subsystem: "delegation",
+          event: "early_delegation_dispatched",
+          session_id: sessionID,
+        })
+      }
+
+      if (decision.delegated) {
+        return decision
+      }
+
+      if (decision.selectiveVerification) {
+        audit?.write(sessionID, {
+          subsystem: "delegation",
+          event: "selective_root_verification",
+          tool,
+        })
+        return decision
+      }
+
+      if (decision.block) {
+        audit?.write(sessionID, {
+          subsystem: "delegation",
+          event: "root_grunt_pattern_detected",
+          reason: decision.reason,
+          grunt_count: decision.signal.gruntCount,
+          distinct_modules: decision.signal.distinctModules,
+          search_read_search: decision.signal.searchReadSearch,
+          cross_module: decision.signal.crossModule,
+        })
+        audit?.write(sessionID, {
+          subsystem: "delegation",
+          event: "early_delegation_required",
+          reason: decision.reason,
+          free_worker_hint: decision.freeWorkerHint,
+          context_pressure: contextPressure ?? null,
+        })
+      }
+
+      return decision
+    },
     dispose() {
       watchdog.dispose()
+      gate.clear()
       jobSession.clear()
       sessionJob.clear()
       gruntWindows.clear()

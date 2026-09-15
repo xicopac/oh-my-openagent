@@ -100,6 +100,7 @@ export function createPluginInterface(args: {
       ctx,
       hooks,
       backgroundManager: managers.backgroundManager,
+      delegationFirstRuntime: managers.delegationFirstRuntime,
     }),
 
     "tool.execute.after": createToolExecuteAfterHandler({

@@ -1,9 +1,25 @@
 export {
   DELEGATION_TOOLS,
+  DEFAULT_EARLY_DELEGATION_OPTIONS,
   DEFAULT_GRUNT_GUARD_OPTIONS,
   GRUNT_TOOLS,
+  READ_TOOLS,
+  SEARCH_TOOLS,
+  analyzeGruntSignals,
   detectGruntWorkCycle,
+  evaluateEarlyDelegation,
+  moduleRoot,
+  type EarlyDelegationOptions,
+  type EarlyDelegationVerdict,
   type GruntGuardOptions,
+  type GruntSignal,
   type GruntVerdict,
   type ToolActivityEvent,
 } from "./detector"
+export {
+  createPreGruntGate,
+  type GruntToolHint,
+  type PreGruntDecision,
+  type PreGruntGate,
+  type PreGruntGateOptions,
+} from "./gate"

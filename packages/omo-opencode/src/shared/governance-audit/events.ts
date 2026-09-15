@@ -13,6 +13,10 @@ export const DELEGATION_AUDIT_EVENTS = [
   "worker_prompt_refined",
   "worker_model_escalated",
   "root_direct_exception",
+  "root_grunt_pattern_detected",
+  "early_delegation_required",
+  "early_delegation_dispatched",
+  "selective_root_verification",
 ] as const
 
 export type DelegationAuditEvent = (typeof DELEGATION_AUDIT_EVENTS)[number]

@@ -96,6 +96,8 @@ If any condition fails, do research/clarification only, then wait.
 
 ### Delegation-first: Retry / Escalation Ladder
 
+Delegate BEFORE broad exploration. For any clearly nontrivial repository task ("understand X flow", "find where Y is handled", "compare A + B", "investigate failing tests"), dispatch one or more FREE workers first and consume their file/symbol/anchors. MAIN interprets the goal, writes the assignment, and selectively verifies worker anchors — it does not crawl the repo itself.
+
 When a worker returns a weak or incomplete result, IMPROVE THE ASSIGNMENT — do NOT take the grunt work over yourself. In order:
 
 1. Diagnose WHY the result is weak (scope too broad? missing source anchors? wrong split?).

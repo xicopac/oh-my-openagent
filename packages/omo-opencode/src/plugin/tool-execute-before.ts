@@ -1,13 +1,15 @@
 import type { PluginContext } from "./types"
 
 import { isTrackedBtwSideSession } from "../features/btw-side"
-import { getMainSessionID } from "../features/claude-code-session-state"
+import { getMainSessionID, subagentSessions } from "../features/claude-code-session-state"
 import { log, replaceToolArgs } from "../shared"
 import { resolveSessionAgent } from "./session-agent-resolver"
 import { stopContinuation } from "./stop-continuation"
 
 import type { CreatedHooks } from "../create-hooks"
 import type { BackgroundManager } from "../features/background-agent"
+import type { DelegationFirstRuntime } from "../features/delegation-first"
+import type { GruntToolHint } from "../features/grunt-guard"
 
 const BACKGROUND_WAIT_BLOCK_MESSAGE = [
   "Background task wait is already managed by the plugin.",
@@ -38,15 +40,48 @@ function isPureSleepCommand(command: string): boolean {
     && commandLines.every((line) => /^sleep\s+\d+(?:\.\d+)?[smhd]?\s*$/i.test(line))
 }
 
+function gruntHintForTool(tool: string, args: Record<string, unknown>): GruntToolHint | undefined {
+  const firstString = (keys: string[]): string | undefined => {
+    for (const key of keys) {
+      const value = args[key]
+      if (typeof value === "string" && value.length > 0) return value
+    }
+    return undefined
+  }
+  const target = firstString(["filePath", "file_path", "path", "pattern", "query"])
+  if (tool.toLowerCase() === "read") {
+    return { ...(target ? { target } : {}), selective: hasNumericRange(args) }
+  }
+  if (tool.toLowerCase() === "session_read") {
+    return { ...(target ? { target } : {}) }
+  }
+  return { ...(target ? { target } : {}) }
+}
+
+function hasNumericRange(args: Record<string, unknown>): boolean {
+  const read = (key: string): number | undefined => {
+    const value = args[key]
+    return typeof value === "number" ? value : undefined
+  }
+  return read("offset") !== undefined && read("limit") !== undefined
+}
+
+function rootContextPressure(hooks: CreatedHooks, sessionID: string): number {
+  const tokens = hooks.contextGovernor?.diagnose(sessionID)?.measured_context_tokens
+  if (tokens === null || tokens === undefined || tokens <= 0) return 0
+  return Math.min(1, tokens / 200_000)
+}
+
 export function createToolExecuteBeforeHandler(args: {
   ctx: PluginContext
   hooks: CreatedHooks
   backgroundManager?: Pick<BackgroundManager, "hasActiveChildTasks" | "hasPendingParentWake">
+  delegationFirstRuntime?: DelegationFirstRuntime
 }): (
   input: { tool: string; sessionID: string; callID: string },
   output: { args: Record<string, unknown> },
 ) => Promise<void> {
-  const { ctx, hooks, backgroundManager } = args
+  const { ctx, hooks, backgroundManager, delegationFirstRuntime } = args
 
   return async (input, output): Promise<void> => {
     // Strip mcp_ prefix from tool names — the model may emit mcp_background_output
@@ -68,6 +103,19 @@ export function createToolExecuteBeforeHandler(args: {
       isTrackedBtwSideSession(input.sessionID)
     ) {
       throw new Error("BTW side conversations cannot delegate work.")
+    }
+
+    if (delegationFirstRuntime && !subagentSessions.has(input.sessionID)) {
+      const contextPressure = rootContextPressure(hooks, input.sessionID)
+      const decision = delegationFirstRuntime.preGruntCheck(
+        input.sessionID,
+        input.tool,
+        gruntHintForTool(input.tool, output.args),
+        contextPressure,
+      )
+      if (decision.block && decision.steering) {
+        throw new Error(decision.steering)
+      }
     }
 
     if (input.tool.toLowerCase() === "bash" && typeof output.args.command === "string") {
