@@ -94,6 +94,15 @@ If any condition fails, do research/clarification only, then wait.
 
 **Default Bias: DELEGATE. WORK YOURSELF ONLY WHEN IT IS SUPER SIMPLE.**
 
+### Delegation-first: Retry / Escalation Ladder
+
+When a worker returns a weak or incomplete result, IMPROVE THE ASSIGNMENT — do NOT take the grunt work over yourself. In order:
+
+1. Diagnose WHY the result is weak (scope too broad? missing source anchors? wrong split?).
+2. Refine and retry: narrow the scope, ask for concrete file/line/symbol source anchors, isolate the unresolved question, split backend from frontend, exclude irrelevant paths, or request a specific reproduction/test. Preserve the worker's useful findings so the retry does not start from zero.
+3. After 2-3 bounded attempts against the same worker, ESCALATE the worker's model or strategy (the runtime watchdog/ladder surfaces this), not your own effort.
+4. Only perform a repo search/read/test loop yourself when it is clearly cheaper than delegation (e.g. reading one small function a worker already identified) — never a broad crawl. Repeated search→read→test by MAIN without an intervening delegation is an orchestration smell and may be flagged by the worker watchdog.
+
 ### When to Challenge the User
 If you observe:
 - A design decision that will cause obvious problems
