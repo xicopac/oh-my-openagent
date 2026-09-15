@@ -12,6 +12,10 @@ function meta(overrides: Partial<WatchdogMetadata> = {}): WatchdogMetadata {
     workerID: "w1",
     sessionID: "s1",
     status: "running",
+    stage: "first_response",
+    stageAtMs: 1_000_000,
+    requestStartedAtMs: 1_000_000,
+    firstResponseAtMs: 1_000_000,
     progressCounter: 0,
     previousProgressCounter: 0,
     lastChangeAtMs: 1_000_000,
@@ -76,6 +80,15 @@ describe("classifyLevel1", () => {
     expect(r.health).toBe("STARTING")
   })
 
+  test("classifies a stalled status as SUSPECTED_STALL", () => {
+    // given
+    const m = meta({ status: "stalled" })
+    // when
+    const r = classifyLevel1(m, DEFAULT_WATCHDOG_POLICY)
+    // then
+    expect(r.health).toBe("SUSPECTED_STALL")
+  })
+
   test("isInsecureLevel1 is true only for SUSPECTED_STALL", () => {
     expect(isInsecureLevel1("SUSPECTED_STALL")).toBe(true)
     expect(isInsecureLevel1("HEALTHY")).toBe(false)
@@ -86,7 +99,7 @@ describe("classifyLevel1", () => {
 })
 
 describe("createWatchdog", () => {
-  test("a steady advancing sequence emits only the first watchdog_progress (coalescing)", () => {
+  test("registration emits child_session_created then a steady sequence emits only watchdog_progress (coalescing)", () => {
     // given
     const events: WatchdogEventName[] = []
     let now = 1_000_000
@@ -106,10 +119,15 @@ describe("createWatchdog", () => {
     expect(first.health).toBe("HEALTHY")
     expect(second.health).toBe("HEALTHY")
     expect(third.health).toBe("HEALTHY")
-    expect(events).toEqual(["watchdog_progress"])
+    expect(events).toEqual([
+      "child_session_created",
+      "child_first_provider_response",
+      "watchdog_progress",
+      "child_first_progress",
+    ])
   })
 
-  test("check is a pure synchronous function returning a Level1Result", () => {
+  test("check is a pure synchronous function returning a WatchdogCheckResult", () => {
     // given
     const wd = createWatchdog()
     wd.register("s1", "w1")
@@ -122,7 +140,7 @@ describe("createWatchdog", () => {
     expect(result.advanced).toBe(true)
   })
 
-  test("emits watchdog_stall_suspected then watchdog_recovered on stall and recovery", () => {
+  test("emits milestone + stall + recovery events across a stall and recovery", () => {
     // given
     const events: WatchdogEventName[] = []
     let now = 1_000_000
@@ -139,10 +157,17 @@ describe("createWatchdog", () => {
     // then: activity resumes
     wd.onActivity("s1")
     wd.check("s1")
-    expect(events).toEqual(["watchdog_progress", "watchdog_stall_suspected", "watchdog_recovered"])
+    expect(events).toEqual([
+      "child_session_created",
+      "child_first_provider_response",
+      "watchdog_progress",
+      "watchdog_stall_suspected",
+      "child_first_progress",
+      "watchdog_recovered",
+    ])
   })
 
-  test("snapshot exposes only counters and timestamps", () => {
+  test("snapshot exposes only counters, stage, and timestamps", () => {
     // given
     const wd = createWatchdog()
     wd.register("s1", "w1")
@@ -155,6 +180,10 @@ describe("createWatchdog", () => {
       "workerID",
       "sessionID",
       "status",
+      "stage",
+      "stageAtMs",
+      "requestStartedAtMs",
+      "firstResponseAtMs",
       "progressCounter",
       "previousProgressCounter",
       "lastChangeAtMs",
@@ -185,7 +214,7 @@ describe("createWatchdog", () => {
     expect(imports[0]).toContain('from "./types"')
   })
 
-  test("watchdog.ts imports only ./level1 and ./types", async () => {
+  test("watchdog.ts imports only local pure modules", async () => {
     // given
     const src = await Bun.file(new URL("./watchdog.ts", import.meta.url)).text()
     // when
@@ -193,7 +222,7 @@ describe("createWatchdog", () => {
     // then
     expect(froms.length).toBeGreaterThan(0)
     for (const from of froms) {
-      expect(from).toMatch(/^\.\/(level1|types)$/)
+      expect(from).toMatch(/^\.\/(level1|lifecycle|stall|timeouts|types)$/)
     }
   })
 })

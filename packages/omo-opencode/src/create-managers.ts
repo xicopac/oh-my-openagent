@@ -141,18 +141,37 @@ export function createManagers(args: {
             wedgedThresholdMs: watchdogCfg.wedged_threshold_ms,
           }
           : undefined,
+        timeouts: watchdogCfg
+          ? {
+            dispatchTimeoutMs: watchdogCfg.dispatch_timeout_ms,
+            requestStartTimeoutMs: watchdogCfg.request_start_timeout_ms,
+            providerResponseTimeoutMs: watchdogCfg.provider_response_timeout_ms,
+            executionStallThresholdMs: watchdogCfg.quiet_stall_threshold_ms,
+            toolStallWedgedMs: watchdogCfg.wedged_threshold_ms,
+          }
+          : undefined,
         pricing: pricingCatalog,
       })
     : undefined
 
   // Periodic metadata-only watchdog sweep. Each check reads progress counters
-  // only and makes zero model calls, so the sweep is effectively free.
+  // and lifecycle stage only and makes zero model calls, so the sweep is
+  // effectively free. A timed-out stall is reclaimed automatically: cancelled
+  // (truthful terminal), journaled, and retried per the recovery policy.
   let stopWatchdogSweep: (() => void) | undefined
   if (delegationFirstRuntime && watchdogCfg?.enabled !== false) {
     const sweepIntervalMs = Math.max(watchdogCfg?.quiet_stall_threshold_ms ?? 180_000, 5_000) / 6
     const timer = setInterval(() => {
       try {
-        delegationFirstRuntime.checkAllWatchdogs()
+        const results = delegationFirstRuntime.checkAllWatchdogs()
+        for (const { sessionID, result } of results) {
+          if (!result.timedOut || !result.stallMode || result.stallMode === "QUIET_BUT_ACTIVE") continue
+          const task = backgroundManager?.findBySession(sessionID)
+          const providerModel = task?.model
+            ? `${task.model.providerID}/${task.model.modelID}`
+            : null
+          delegationFirstRuntime.reclaimStalled(sessionID, providerModel)
+        }
       } catch (error) {
         log("[create-managers] watchdog sweep error:", { error })
       }
@@ -255,6 +274,9 @@ export function createManagers(args: {
 
       log("[create-managers] onSubagentSessionDeleted callback completed")
     },
+    onSubagentRequestStarted: (sessionID: string) => {
+      delegationFirstRuntime?.markRequestStarted(sessionID)
+    },
     onShutdown: async () => {
       tuiStateMirror?.stop()
       stopWatchdogSweep?.()
@@ -278,6 +300,18 @@ export function createManagers(args: {
       ? (sessionID, escrowID, status) => resourceGovernorRuntime.settleChild(sessionID, escrowID, status)
       : undefined,
     launchGuard: resourceGovernorRuntime?.launchGuard,
+  })
+
+  delegationFirstRuntime?.setRecoverySink({
+    cancel: async (sessionID, reason) => {
+      const task = backgroundManager.findBySession(sessionID)
+      if (task) {
+        await backgroundManager.cancelTask(task.id, {
+          source: "watchdog-reclaim",
+          reason,
+        })
+      }
+    },
   })
 
   if (pluginConfig.tui?.sidebar?.enabled !== false) {

@@ -1,5 +1,78 @@
 # OMA Resource Governor — Authoritative Report
 
+## Child Lifecycle / Stall Diagnosis and Recovery (this change)
+
+**Proven root cause.** Three parallel `explore` background children created successfully and
+then sat at `status=running` for ~28 minutes with no output because the runtime had **no lifecycle
+milestones**, **no differentiated stall classification**, **no stage-aware timeouts**, and **no
+automatic reclaim**. Two independent gaps combined:
+
+1. The background-task poller (`BackgroundManager`) only completes a child on `session.idle` +
+   stability. If the provider never responds and the session never idles, the task stays `running`
+   indefinitely (no deadline).
+2. The Level-1 watchdog only *detected* `SUSPECTED_STALL` and journaled it; the periodic sweep in
+   `create-managers.ts` called `checkAllWatchdogs()` and discarded the result. Nothing cancelled the
+   child, marked it terminal, or retried it.
+
+Because there were no per-stage timestamps, we could not even determine *where* a child stopped
+(request never sent vs. provider hung vs. response lost). The reported class of failure is therefore
+"zero-progress child with no observable failure point and no automatic recovery".
+
+**Real child lifecycle path (traced).** For a background child:
+`task` tool → `executeBackgroundTask` → `BackgroundManager.launch` (task `pending`, queued) →
+`startTask` (manager.ts): `client.session.get(parent)` → `client.session.create` (session created) →
+`promptWithRetryInDirectory` (provider request dispatched, fire-and-forget) →
+`onSubagentSessionCreated` (tmux callback → `delegationFirstRuntime.attachChildSession` → watchdog
+register) → `event` hook `watchdogActivity` (first provider output) → task-poller `session.idle` →
+terminal. The watchdog attach fires *after* prompt dispatch, so `markRequestStarted` uses a
+pending-set so the milestone is applied once the session registers.
+
+**Authoritative progress primitive.** The existing per-child-session activity-event counter
+(`onActivity`, one in-process integer increment per `message.updated` / `message.part.*` /
+`session.next.*` / `step.*` event). Monitoring reads only `progressCounter`,
+`previousProgressCounter`, `lastChangeAtMs`, stage + stage/request/response timestamps. It reads no
+output, no output delta, no transcript, and makes zero model calls per check.
+
+**Stage-aware timeout policy** (`worker-supervisor/timeouts.ts`, configurable via
+`resource_governor.watchdog`): `dispatch_timeout_ms` (30s, authorized→no session),
+`request_start_timeout_ms` (30s, session→no request), `provider_response_timeout_ms` (180s,
+request→no response), `quiet_stall_threshold_ms` (180s, execution stall),
+`wedged_threshold_ms` (300s, tool/process). A build/test/process is `QUIET_BUT_ACTIVE`, never
+falsely stalled.
+
+**Differentiated failure modes** (`worker-supervisor/stall.ts`): `DISPATCH_STALL`,
+`PROVIDER_START_STALL`, `PROVIDER_RESPONSE_STALL`, `EXECUTION_STALL`, `TOOL_STALL`,
+`QUIET_BUT_ACTIVE`. Each carries `timedOut` so a within-deadline quiet child is not reclaimed.
+
+**Automatic recovery** (`worker-supervisor/recovery.ts` + `delegation-first/reclaimStalled` +
+`create-managers.ts` sweep): detect → record exact stage → cancel/reclaim (truthful `cancelled`
+terminal, never left `running`) → journal `watchdog_reclaimed` + `worker_retry_started` → retry per
+policy. First stall recharges same worker; a repeated same-model stall flips `alternate_worker`
+(true); a correlated parallel stall (>=2 same provider/model reclamations within 120s) also flips
+`alternate_worker` so three identical workers are not blindly relaunched into the same failure.
+Same-worker reclaim budget (`sameWorkerMaxReclaims=1`) stops unbounded loops.
+
+**Truthful status.** A reclaimed child reaches stage `cancelled` / `TERMINAL`; the `stalled`
+intermediate is preserved via `markStalled` + the stage is absorbing (a later session-deleted
+terminal cannot overwrite an explicit terminal kind).
+
+**Tests.** `worker-supervisor` 49 pass / 0 fail (watchdog, lifecycle, stall, recovery + supervision);
+`delegation-first` 15 pass / 0 fail (incl. `stall-recovery.test.ts` real-path integration:
+healthy→completed; zero-progress explore reclaimed within timeout; request-never-started;
+three parallel correlated stalls; no child content in audit). Resource-governor 168, background-agent
+771, delegate-task 512, create-managers 9 — all green. `bun run typecheck` clean; `bun run build`
+succeeds; `dist/index.js` carries `child_*` milestones, `reclaimStalled`,
+`onSubagentRequestStarted`, and all six `*_STALL` modes.
+
+**Live validation: SKIPPED.** No cheap configured provider is available in this environment and a
+paid-inference drive is out of scope. No success is fabricated.
+
+**Remaining limitations.** Retry is a journaled recommendation (`worker_retry_started` +
+`alternate_worker`/`worker_model_escalated`) plus a truthful `cancelled` terminal; a fully
+automatic *re-dispatch to a new child* still requires retaining the full `LaunchInput` in the
+delegation-first runtime (a follow-up, not a redesign). `DISPATCH_STALL` is available in the
+classifier but the background path pre-empts it with the poller's stale-task timeout.
+
 ## Delegation-First + Watchdog Level 1 (this change)
 
 **Status (updated 2026-09-15): delegation-first is now LIVE-WIRED into the real OpenCode child

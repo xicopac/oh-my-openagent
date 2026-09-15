@@ -5,12 +5,20 @@
  * file contents, and it makes zero model/SDK/provider calls.
  */
 
-import type { WorkerStatus } from "./types"
+import type { ChildStage, WorkerStatus } from "./types"
 
 export type WatchdogMetadata = {
   workerID: string
   sessionID: string
   status: WorkerStatus
+  /** Current lifecycle stage (authorization -> session -> request -> response). */
+  stage: ChildStage
+  /** When the current stage was entered. */
+  stageAtMs: number
+  /** When the provider request was dispatched (0 if never started). */
+  requestStartedAtMs: number
+  /** When the first provider output arrived (0 if never received). */
+  firstResponseAtMs: number
   /** Monotonic activity counter (per-child-session activity-event count). */
   progressCounter: number
   previousProgressCounter: number
@@ -50,6 +58,9 @@ export function classifyLevel1(meta: WatchdogMetadata, policy: WatchdogPolicy): 
   }
   if (meta.status === "completed" || meta.status === "error" || meta.status === "cancelled") {
     return { health: "TERMINAL", reason: "terminal state", advanced: false }
+  }
+  if (meta.status === "stalled") {
+    return { health: "SUSPECTED_STALL", reason: "reclaimed as stalled", advanced: false }
   }
   if (meta.progressCounter > meta.previousProgressCounter) {
     return { health: "HEALTHY", reason: "advanced", advanced: true }

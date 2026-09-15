@@ -5,7 +5,44 @@
  * transcript) and intervenes on a bounded ladder.
  */
 
-export type WorkerStatus = "pending" | "starting" | "running" | "idle" | "blocked" | "completed" | "error" | "cancelled"
+export type WorkerStatus =
+  | "pending"
+  | "starting"
+  | "running"
+  | "idle"
+  | "blocked"
+  | "stalled"
+  | "completed"
+  | "error"
+  | "cancelled"
+
+/**
+ * Monotonic lifecycle stage of a child dispatch. Recorded as the child moves
+ * through the real production path (authorization -> session -> provider
+ * request -> first output -> terminal). The stage reached when progress stops
+ * is exactly the "where" in the reported stall investigation.
+ */
+export type ChildStage =
+  | "dispatch_authorized"
+  | "session_created"
+  | "request_started"
+  | "first_response"
+  | "completed"
+  | "failed"
+  | "cancelled"
+
+/**
+ * Differentiated zero-progress failure modes. Each maps to a distinct stage /
+ * timeout so a supervisor reports the specific class of stall instead of an
+ * undifferentiated "agent stalled".
+ */
+export type StallMode =
+  | "DISPATCH_STALL"
+  | "PROVIDER_START_STALL"
+  | "PROVIDER_RESPONSE_STALL"
+  | "EXECUTION_STALL"
+  | "TOOL_STALL"
+  | "QUIET_BUT_ACTIVE"
 
 export type WorkerHealth =
   | "HEALTHY"

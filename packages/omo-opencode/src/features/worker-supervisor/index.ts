@@ -15,6 +15,8 @@ export {
   type WorkerHealth,
   type WorkerSignal,
   type WorkerStatus,
+  type ChildStage,
+  type StallMode,
 } from "./types"
 export { nextIntervention, type LadderState } from "./intervention"
 export { isMeaningfulProgress, progressFingerprint } from "./progress"
@@ -31,6 +33,23 @@ export {
 export {
   createWatchdog,
   type Watchdog,
+  type WatchdogCheckResult,
   type WatchdogEventName,
   type WatchdogOptions,
 } from "./watchdog"
+export {
+  advanceStage,
+  CHILD_MILESTONE_EVENTS,
+  isTerminalStage,
+  milestoneForStage,
+  type ChildMilestoneEvent,
+} from "./lifecycle"
+export { classifyStallMode, type StallClassification } from "./stall"
+export { DEFAULT_STALL_TIMEOUTS, type StallTimeoutPolicy } from "./timeouts"
+export {
+  createRecoveryCoordinator,
+  DEFAULT_RECOVERY_POLICY,
+  type RecoveryCoordinator,
+  type RecoveryDecision,
+  type RecoveryPolicy,
+} from "./recovery"

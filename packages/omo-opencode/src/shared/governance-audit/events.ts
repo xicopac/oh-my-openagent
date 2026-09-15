@@ -32,6 +32,25 @@ export const WATCHDOG_AUDIT_EVENTS = [
 
 export type WatchdogAuditEvent = (typeof WATCHDOG_AUDIT_EVENTS)[number]
 
+/** Zero-token child lifecycle milestones (see worker-supervisor/lifecycle.ts). */
+export const CHILD_LIFECYCLE_AUDIT_EVENTS = [
+  "child_dispatch_authorized",
+  "child_session_created",
+  "child_model_request_started",
+  "child_first_provider_response",
+  "child_first_progress",
+  "child_completed",
+  "child_failed",
+  "child_cancelled",
+] as const
+
+export type ChildLifecycleAuditEvent = (typeof CHILD_LIFECYCLE_AUDIT_EVENTS)[number]
+
+/** Stall recovery marker written by the delegation-first reclaim path. */
+export const STALL_RECOVERY_AUDIT_EVENTS = ["worker_retry_started"] as const
+
+export type StallRecoveryAuditEvent = (typeof STALL_RECOVERY_AUDIT_EVENTS)[number]
+
 /**
  * Concise zero-token events emitted by the delegation-first and watchdog
  * machinery. Flat list is convenient for a switch/validation guard.

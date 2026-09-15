@@ -103,6 +103,12 @@ export const ResourceGovernorWatchdogConfigSchema = z
     quiet_stall_threshold_ms: z.number().int().min(1_000).default(180_000),
     /** A long-running process (build/test) past this is considered wedged. */
     wedged_threshold_ms: z.number().int().min(1_000).default(300_000),
+    /** Authorized but child session never created → DISPATCH_STALL. */
+    dispatch_timeout_ms: z.number().int().min(1_000).default(30_000),
+    /** Session created but provider request never began → PROVIDER_START_STALL. */
+    request_start_timeout_ms: z.number().int().min(1_000).default(30_000),
+    /** Request sent but no first provider response → PROVIDER_RESPONSE_STALL. */
+    provider_response_timeout_ms: z.number().int().min(1_000).default(180_000),
     /** Coalesce healthy `watchdog_progress` heartbeats to at most one per this window. */
     heartbeat_coalesce_ms: z.number().int().min(0).default(5_000),
   })

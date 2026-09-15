@@ -247,6 +247,8 @@ export interface BackgroundManagerConfig {
   tmuxConfig?: TmuxConfig
   onSubagentSessionCreated?: OnSubagentSessionCreated
   onSubagentSessionDeleted?: OnSubagentSessionDeleted
+  /** Fired once the provider request for a child session has been dispatched. */
+  onSubagentRequestStarted?: (sessionID: string) => void
   onShutdown?: () => void | Promise<void>
   enableParentSessionNotifications?: boolean
   modelFallbackControllerAccessor?: ModelFallbackControllerAccessor
@@ -292,6 +294,7 @@ export class BackgroundManager {
   private tmuxEnabled: boolean
   private onSubagentSessionCreated?: OnSubagentSessionCreated
   private onSubagentSessionDeleted?: OnSubagentSessionDeleted
+  private onSubagentRequestStarted?: (sessionID: string) => void
   private onShutdown?: () => void | Promise<void>
 
   private queuesByKey: Map<string, QueueItem[]> = new Map()
@@ -336,6 +339,7 @@ export class BackgroundManager {
     this.tmuxEnabled = options?.tmuxConfig?.enabled ?? false
     this.onSubagentSessionCreated = options?.onSubagentSessionCreated
     this.onSubagentSessionDeleted = options?.onSubagentSessionDeleted
+    this.onSubagentRequestStarted = options?.onSubagentRequestStarted
     this.onShutdown = options?.onShutdown
     this.rootDescendantCounts = new Map()
     this.preStartDescendantReservations = new Set()
@@ -1143,6 +1147,8 @@ The fallback retry session is now created and can be inspected directly.
         })
       }
     })
+
+    this.onSubagentRequestStarted?.(sessionID)
 
     invokeTmuxSessionCreatedCallback({
       callback: this.onSubagentSessionCreated,

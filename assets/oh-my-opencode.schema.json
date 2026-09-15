@@ -9533,6 +9533,9 @@
             "startup_grace_ms": 60000,
             "quiet_stall_threshold_ms": 180000,
             "wedged_threshold_ms": 300000,
+            "dispatch_timeout_ms": 30000,
+            "request_start_timeout_ms": 30000,
+            "provider_response_timeout_ms": 180000,
             "heartbeat_coalesce_ms": 5000
           },
           "type": "object",
@@ -9559,6 +9562,24 @@
               "minimum": 1000,
               "maximum": 9007199254740991
             },
+            "dispatch_timeout_ms": {
+              "default": 30000,
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 9007199254740991
+            },
+            "request_start_timeout_ms": {
+              "default": 30000,
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 9007199254740991
+            },
+            "provider_response_timeout_ms": {
+              "default": 180000,
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 9007199254740991
+            },
             "heartbeat_coalesce_ms": {
               "default": 5000,
               "type": "integer",
@@ -9571,6 +9592,9 @@
             "startup_grace_ms",
             "quiet_stall_threshold_ms",
             "wedged_threshold_ms",
+            "dispatch_timeout_ms",
+            "request_start_timeout_ms",
+            "provider_response_timeout_ms",
             "heartbeat_coalesce_ms"
           ],
           "additionalProperties": false
