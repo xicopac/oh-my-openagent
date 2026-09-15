@@ -12,6 +12,7 @@ import {
   buildGrokSisyphusAgentConfig,
 } from "./sisyphus-agent-config";
 import { buildFallbackSisyphusPrompt } from "./sisyphus-dynamic-prompt";
+import { buildDelegationFirstExecutionDoctrine } from "./sisyphus-delegation-doctrine";
 import { buildClaudeFable5SisyphusPrompt } from "./sisyphus/claude-fable-5";
 import { buildClaudeOpus47SisyphusPrompt } from "./sisyphus/claude-opus-4-7";
 import { buildClaudeOpus48SisyphusPrompt } from "./sisyphus/claude-opus-4-8";
@@ -93,81 +94,110 @@ export function createSisyphusAgent(
   const categories = availableCategories ?? [];
   const agents = availableAgents ?? [];
 
+  // Prepend here so the runtime prompt reconciler (which re-runs this factory)
+  // also carries the doctrine on every model switch.
+  const doctrine = buildDelegationFirstExecutionDoctrine();
+  const prependDoctrine = (prompt: string): string => `${doctrine}\n\n${prompt}`;
+
   switch (resolveSisyphusPromptFamily(model)) {
     case "kimi-k3":
       return buildGptSisyphusAgentConfig(
         MODE,
         model,
-        buildKimiK3SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        prependDoctrine(
+          buildKimiK3SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        ),
       );
     case "kimi-k2-7":
       return buildGptSisyphusAgentConfig(
         MODE,
         model,
-        buildKimiK27SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        prependDoctrine(
+          buildKimiK27SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        ),
       );
     case "kimi-k2-6":
       return buildGptSisyphusAgentConfig(
         MODE,
         model,
-        buildKimiK26SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        prependDoctrine(
+          buildKimiK26SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        ),
       );
     case "gpt-5-5":
       return buildGptSisyphusAgentConfig(
         MODE,
         model,
-        buildGpt55SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        prependDoctrine(
+          buildGpt55SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        ),
       );
     case "gpt-5-4":
       return buildGptSisyphusAgentConfig(
         MODE,
         model,
-        buildGpt54SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        prependDoctrine(
+          buildGpt54SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        ),
       );
     case "claude-fable-5":
       return buildClaudeSisyphusAgentConfig(
         MODE,
         model,
-        buildClaudeFable5SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        prependDoctrine(
+          buildClaudeFable5SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        ),
       );
     case "claude-opus-5":
       return buildClaudeSisyphusAgentConfig(
         MODE,
         model,
-        buildClaudeOpus5SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        prependDoctrine(
+          buildClaudeOpus5SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        ),
       );
     case "claude-opus-4-8":
       return buildClaudeSisyphusAgentConfig(
         MODE,
         model,
-        buildClaudeOpus48SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        prependDoctrine(
+          buildClaudeOpus48SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        ),
       );
     case "claude-opus-4-7":
       return buildClaudeSisyphusAgentConfig(
         MODE,
         model,
-        buildClaudeOpus47SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        prependDoctrine(
+          buildClaudeOpus47SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        ),
       );
     case "glm-5-2":
       return buildGlmSisyphusAgentConfig(
         MODE,
         model,
-        buildGlm52SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        prependDoctrine(
+          buildGlm52SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        ),
       );
     case "grok-4":
       return buildGrokSisyphusAgentConfig(
         MODE,
         model,
-        buildGrok4SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        prependDoctrine(
+          buildGrok4SisyphusPrompt(model, agents, tools, skills, categories, useTaskSystem),
+        ),
       );
     case "fallback": {
-      const prompt = buildFallbackSisyphusPrompt(
-        model,
-        agents,
-        tools,
-        skills,
-        categories,
-        useTaskSystem,
+      const prompt = prependDoctrine(
+        buildFallbackSisyphusPrompt(
+          model,
+          agents,
+          tools,
+          skills,
+          categories,
+          useTaskSystem,
+        ),
       );
       return isGptModel(model)
         ? buildGptSisyphusAgentConfig(MODE, model, prompt)

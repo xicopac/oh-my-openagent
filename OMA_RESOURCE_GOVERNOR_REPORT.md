@@ -1,5 +1,44 @@
 # OMA Resource Governor — Authoritative Report
 
+## Sisyphus Delegation-First Orchestrator Doctrine (this change)
+
+**Status: COMPLETE.** MAIN's *default behavior* is now delegation-first, so the existing
+delegation-first runtime, ladder, watchdog, Resource Governor, and pre-grunt guard are exercised
+rather than bypassed by an orchestrator that reproduces grunt work inline.
+
+### Authoritative prompt path
+
+The live Sisyphus system prompt is composed by `createSisyphusAgent()` in
+`packages/omo-opencode/src/agents/sisyphus-agent-factory.ts`. It is the single source of truth:
+every model-family prompt (`kimi-k3`, `kimi-k2-7`, `kimi-k2-6`, `gpt-5-5`, `gpt-5-4`,
+`claude-fable-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `glm-5-2`, `grok-4`,
+`fallback`) is built and returned from that switch, and the runtime prompt reconciler
+(`sisyphus-runtime-prompt-reconciler.ts`, driven by the system-transform hook) re-runs that same
+factory on model switch. Note `agents/sisyphus/default.ts` `buildDefaultSisyphusPrompt` is a dead
+template (no non-test caller) and was intentionally NOT edited.
+
+### New doctrine
+
+A new `# DELEGATION-FIRST EXECUTION` core doctrine
+(`agents/sisyphus-delegation-doctrine.ts` `buildDelegationFirstExecutionDoctrine()`) is prepended at
+the top of every Sisyphus prompt body by `createSisyphusAgent`. It reframes MAIN as the ORCHESTRATOR:
+understand → decompose → delegate → refine/escalate → consume anchors → decide. It explicitly assigns
+repository discovery / broad grep / multi-file read / call-flow tracing / debug cycles / bounded
+implementation to workers, carves out narrow root direct-work exceptions (tiny lookups, reading an
+exact worker-provided anchor, diff/test inspection), closes the "I need to read core files for deep
+semantics" justification (upgrade the WORKER, not the grunt performer), and requires a self-check
+("Is this work a worker could perform?") before broad root tool use, with escalation through
+`FREE → alternate FREE → CHEAP_PAID → STRONG_PAID → MAIN_EQUIVALENT`.
+
+The pre-grunt guard remains a BACKSTOP: the doctrine makes early delegation the normal behavior so
+the guard does not have to repeatedly block MAIN.
+
+**Tests:** `agents/sisyphus-delegation-doctrine.test.ts` proves the doctrine is wired into the LIVE
+composed prompt (not a standalone constant) across the fallback and native families, covering the 8
+required behaviors (orchestrator identity, task-start delegation, worker-owned discovery, root
+selective-verification exceptions, refine/escalate-not-takeover, MAIN_EQUIVALENT escalation,
+deep-semantics prohibition, self-check). Factory and reconciler regressions stay green.
+
 ## Dynamic Economic/Capability Tier Bands (this change)
 
 **Status: COMPLETE.** Removed the static `model_routing.tiers` -> fixed-model bottleneck. A requested
