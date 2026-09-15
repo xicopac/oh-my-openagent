@@ -1,5 +1,68 @@
 # OMA Resource Governor — Authoritative Report
 
+## Delegation-First + Watchdog Level 1 (this change)
+
+**Status: delegation-first runtime (retry/escalation ladder + metadata-only Level-1 watchdog +
+root grunt-guard) is built as pure, tested feature modules, composed over the existing zero-token
+Governance Audit Journal; config schema + audit-event catalog + Sisyphus prompt note landed. The
+runtime is NOT yet wired into live child dispatch (no paid-model call, no live-session observer).**
+
+Scope (`.omo/plans/20260915-delegation-first-watchdog.md`): extend, not replace, the Resource
+Governor / Context Governor / Worker Supervisor / audit journal / dynamic routing work. The chosen
+Level-1 monotonic progress signal is the plugin's own per-child-session activity-event counter
+(one in-process integer increment per lifecycle event: no DB read, no spawn, no model call, no
+transcript/output read), with `session.time_updated` as the authoritative DB cross-check.
+
+New / extended modules (all pure, dependency-injected pricing + free status):
+
+- `features/delegation-ladder/` (`types.ts`, `ladder.ts`, `refinement.ts`, `attempts.ts`): retry +
+  model-escalation ladder with finding preservation; bounded retries before escalation
+  (`retry_refined` → `escalate` → `done`/`exhausted`). Preserves prior `findings` + `unresolved`
+  across attempts; never auto-takes-over to root grunt work.
+- `features/worker-supervisor/` extended with `level1.ts` (`HEALTHY` / `QUIET_BUT_ACTIVE` /
+  `SUSPECTED_STALL`) + `watchdog.ts` (stateful facade, zero model calls, coalesced metadata-only
+  audit events). Watchdog NEVER reads output / delta / transcript.
+- `features/grunt-guard/` (`detector.ts`): pure detector for repeated direct MAIN search/read/test
+  cycles with no delegation (orchestration guidance; emits `root_direct_exception`).
+- `features/delegation-first/` (`runtime.ts` + barrel): composes the three above over one
+  `GovernanceAuditWriter`; every audit event is metadata only (ids, tiers, counters, decisions).
+
+Integration scaffolding:
+
+- `shared/governance-audit/events.ts` + `index.ts`: `DELEGATION_AUDIT_EVENTS` +
+  `WATCHDOG_AUDIT_EVENTS` + `GOVERNANCE_DELEGATION_WATCHDOG_EVENTS` name catalogs (metadata only).
+- `config/schema/resource-governor.ts`: bounded `delegation_ladder` + `watchdog` Zod subschemas,
+  wired into `ResourceGovernorConfigSchema`; 3 new schema tests.
+- `agents/sisyphus-dynamic-prompt-role.ts`: concise "Delegation-first: Retry / Escalation Ladder"
+  note (by-read only; no prose-contract test).
+
+Mocked E2E (deterministic, no paid call), `delegation-first/delegation-first.e2e.test.ts`:
+
+- Successful flow: free worker attempt 1 weak → `retry_refined` (same free worker) → adequate →
+  `done`; MAIN verifies the critical source anchor with one selective read (not grunt); a broad
+  search/read crawl WITHOUT delegation IS flagged grunt. No `worker_model_escalated`; no worker
+  prompt / output / anchor text ever reaches the journal.
+- Escalation flow: two inadequate free attempts → `escalate` to the next worker model (`free_alt`),
+  findings preserved; root still takes no direct crawl.
+
+Invariants honored: no `as any` / `@ts-ignore`; given/when/then; kebab-case + barrel `index.ts`;
+watchdog Level 1 metadata-only (no output/delta/transcript); unknown-price model is NOT free
+(`isFreePricing(undefined) === false` already in the core); disabled providers stay disabled.
+
+Tests (all green): `delegation-ladder`, `grunt-guard`, `worker-supervisor` (incl.
+`watchdog.test.ts`), `delegation-first` (2 E2E) → **45 pass / 0 fail** across 5 feature files;
+resource-governor 112, config/schema 56, governance-audit 15, delegate-task-retry 10.
+`tsgo --noEmit` clean; `bun run build` succeeds; `dist/index.js`
+contains the new audit-event names and `dist/oh-my-opencode.schema.json` / `assets/*.schema.json`
+carry the `delegation_ladder` + `watchdog` blocks.
+
+**Not yet wired (explicitly out of this change's scope):** the `delegation-first` runtime is not
+connected to live child dispatch, the OpenCode `event` hook, or the Supervisor's real child-result
+feed — that remains the same live-wiring gap already listed under "Known Limitations"
+(free-first *re-selection* at dispatch; per-child result observation; end-of-run HUD). This change
+delivers the decision core + scaffolding + deterministic proof, not a live-session observer. No
+paid-model inference was made.
+
 ## Context Governor — Live Runtime Wiring (this change)
 
 **Status: Context Governor is now default-enabled and wired into the live normal-session hook path.**
