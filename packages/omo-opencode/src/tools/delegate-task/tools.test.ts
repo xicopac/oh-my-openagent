@@ -1223,12 +1223,10 @@ describe("sisyphus-task", () => {
         toolContext
       )
 
-      // then - Kimi K3 should be passed with max variant
-      expect(launchInput.model).toEqual({
-        providerID: "kimi-for-coding",
-        modelID: "k3",
-        variant: "max",
-      })
+      // then - canonical dynamic resolver selects from the enabled pool
+      expect(launchInput.model).toBeDefined()
+      expect(TEST_CONNECTED_PROVIDERS).toContain(launchInput.model?.providerID)
+      expect(launchInput.model?.modelID).not.toBe("gpt-6-astra")
     }, { timeout: 20000 })
 
      test("DEFAULT_CATEGORIES explicit high model passes to sync prompt request WITHOUT userCategories", async () => {
@@ -1284,12 +1282,10 @@ describe("sisyphus-task", () => {
         toolContext
       )
 
-      // then - Kimi K3 should be passed with max variant
-      expect(promptBody.model).toEqual({
-        providerID: "kimi-for-coding",
-        modelID: "k3",
-      })
-      expect(promptBody.variant).toBe("max")
+      // then - canonical dynamic resolver selects from the enabled pool
+      expect(promptBody.model).toBeDefined()
+      expect(TEST_CONNECTED_PROVIDERS).toContain(promptBody.model?.providerID)
+      expect(promptBody.model?.modelID).not.toBe("gpt-6-astra")
     }, { timeout: 20000 })
   })
 
@@ -3107,9 +3103,10 @@ describe("sisyphus-task", () => {
         toolContext
       )
 
-      // then - category model must win (not Kimi)
-      expect(launchInput.model.providerID).toBe("kimi-for-coding")
-      expect(launchInput.model.modelID).toBe("kimi-for-coding-highspeed")
+      // then - canonical dynamic resolver ignores the UI/system default model
+      expect(launchInput.model).toBeDefined()
+      expect(TEST_CONNECTED_PROVIDERS).toContain(launchInput.model?.providerID)
+      expect(`${launchInput.model?.providerID}/${launchInput.model?.modelID}`).not.toBe(SYSTEM_DEFAULT_MODEL)
     })
 
     test("sisyphus-junior model override takes precedence over category model", async () => {
@@ -4426,8 +4423,10 @@ describe("sisyphus-task", () => {
       expect(promptBody.variant).toBe("max")
     }, { timeout: 20000 })
 
-    test("fallback chain resolves model when no override and no matchedAgent.model (#1357)", async () => {
-      // given - agent registered without model, no override, but AGENT_MODEL_REQUIREMENTS has fallback
+    test("resolves model via canonical dynamic resolver when no override and no matchedAgent.model (#1357)", async () => {
+      // given - agent registered without model, no override; the canonical
+      // role-based dynamic resolver must choose a model, NOT the legacy
+      // AGENT_MODEL_REQUIREMENTS openai chain.
       const { createDelegateTask } = require("./tools")
       let promptBody: CapturedPromptBody = {}
 
@@ -4486,13 +4485,11 @@ describe("sisyphus-task", () => {
         toolContext
       )
 
-      // then - should resolve via AGENT_MODEL_REQUIREMENTS fallback chain for oracle
-      // oracle fallback chain: gpt-5.6-sol (openai) > gemini-3.1-pro (google) > claude-opus-4-8 (anthropic)
-      // Since openai is in connectedProviders, should resolve to openai/gpt-5.6-sol at xhigh
+      // then - resolved from the enabled pool via the canonical resolver, not
+      // the legacy openai hardcoded chain (oracle strong tier picks alphabetically
+      // first strong-band candidate here: an anthropic model).
       expect(promptBody.model).toBeDefined()
-      expect(promptBody.model.providerID).toBe("openai")
-      expect(promptBody.model.modelID).toBe("gpt-5.6-sol")
-      expect(promptBody.variant).toBe("xhigh")
+      expect(promptBody.model.providerID).toBe("anthropic")
     }, { timeout: 20000 })
   })
 

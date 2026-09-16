@@ -7,11 +7,14 @@ import { SISYPHUS_JUNIOR_AGENT } from "./sisyphus-junior-agent"
 import { resolveCategoryConfig } from "./categories"
 import { builtinCategoryGateModels, CATEGORY_PROMPT_APPEND_RESOLVERS } from "./constants"
 import { parseModelString } from "../../shared/model-string-parser"
-import { CATEGORY_MODEL_REQUIREMENTS } from "../../shared/model-requirements"
+import { CATEGORY_MODEL_REQUIREMENTS, getCategoryRoleRequirement } from "../../shared/model-requirements"
 import { normalizeFallbackModels, flattenToFallbackModelStrings } from "../../shared/model-resolver"
 import { buildFallbackChainFromModels, findMostSpecificFallbackEntry } from "../../shared/fallback-chain-from-models"
-import { getAvailableModelsForDelegateTask } from "./available-models"
+import { getAvailableModelsForDelegateTask, getEnabledModelState } from "./available-models"
+import { filterEnabledModelKeys, isModelEnabled } from "../../shared/model-enable-state"
 import { resolveModelForDelegateTask } from "./model-selection"
+import { resolveDynamicWorkerModel, buildModelRoutingPins } from "./dynamic-model-resolver"
+import type { ModelTier } from "@oh-my-opencode/delegate-core"
 import type { DelegatedModelConfig } from "./types"
 import { applyCategoryParams } from "./delegated-model-config"
 import { applyFallbackEntrySettings } from "./fallback-entry-settings"
@@ -80,6 +83,8 @@ export async function resolveCategoryExecution(
   }
 
   const availableModels = await getAvailableModelsForDelegateTask(client)
+  const enableState = await getEnabledModelState(client)
+  const enabledAvailableModels = filterEnabledModelKeys(availableModels, enableState)
 
   const resolved = resolveCategoryConfig(categoryName, {
     userCategories,
@@ -149,66 +154,103 @@ Available categories: ${allCategoryNames}`)
         : undefined
     }
   } else {
-    const resolution = resolveModelForDelegateTask({
-      userModel: explicitCategoryModel ?? overrideModel,
-      userFallbackModels: flattenToFallbackModelStrings(normalizedConfiguredFallbackModels),
-      categoryDefaultModel: categoryResolvedModel,
-      isUserConfiguredCategoryModel: hasCanonicalModels
-        ? configuredPrimaryModel !== undefined
-        : resolved.isUserConfiguredModel,
-      fallbackChain: requirement.fallbackChain,
-      availableModels,
-      systemDefaultModel,
-    })
-
-    if (resolution && "skipped" in resolution) {
-      isModelResolutionSkipped = true
-      const userModelOverride = explicitCategoryModel ?? overrideModel
-      if (userModelOverride) {
-        actualModel = userModelOverride
-        const parsedModel = parseModelString(userModelOverride)
-        const variantToUse = userCategories?.[args.category!]?.variant ?? resolved.config.variant
-        categoryModel = parsedModel
-          ? applyCategoryParams({ ...parsedModel, variant: variantToUse ?? parsedModel.variant }, resolved.config)
-          : undefined
-        modelInfo = { model: userModelOverride, type: "user-defined", source: "override" }
+    const hasUserFallbackModels = Boolean(normalizedConfiguredFallbackModels && normalizedConfiguredFallbackModels.length > 0)
+    const hasExplicitUserSource = Boolean(explicitCategoryModel ?? overrideModel ?? hasUserFallbackModels)
+    let dynamicCategoryModel: string | undefined
+    const roleRequirement = getCategoryRoleRequirement(args.category!)
+    if (!hasExplicitUserSource && roleRequirement) {
+      const dynamic = await resolveDynamicWorkerModel({
+        client,
+        tier: roleRequirement.defaultTier as ModelTier,
+        required: roleRequirement.required,
+        mainModel: inheritedModel,
+        pinned: buildModelRoutingPins(executorCtx.modelRouting),
+        ...(executorCtx.availableModelsOverride ? { availableModelsOverride: executorCtx.availableModelsOverride } : {}),
+        ...(executorCtx.pricingCatalog ? { pricingCatalog: executorCtx.pricingCatalog } : {}),
+        ...(executorCtx.delegationFirstRuntime
+          ? { extraUnavailable: executorCtx.delegationFirstRuntime.unavailableModels() }
+          : {}),
+      })
+      if (dynamic.kind === "resolved") {
+        dynamicCategoryModel = dynamic.model
+      } else if (dynamic.kind === "no-eligible-candidate" && !dynamic.livePoolEmpty) {
+        return categoryResolutionError(
+          `No enabled model satisfies role requirements for category "${args.category!}" (tier "${roleRequirement.defaultTier}"). ` +
+          `Connect an eligible provider or add an explicit model pin, then retry.`,
+        )
       }
-    } else if (resolution) {
-      const {
-        model: resolvedModel,
-        variant: resolvedVariant,
-        fallbackEntry: resolvedFallbackEntry,
-        matchedFallback: resolvedMatchedFallback,
-      } = resolution
-      fallbackEntry = resolvedFallbackEntry
-      matchedFallback = resolvedMatchedFallback === true
-      actualModel = resolvedModel
+    }
 
-      if (!parseModelString(actualModel)) {
-        return categoryResolutionError(`Invalid model format "${actualModel}". Expected "provider/model" format (e.g., "anthropic/claude-sonnet-4-6").`)
-      }
-
-      const type: "user-defined" | "inherited" | "category-default" | "system-default" =
-        (explicitCategoryModel || overrideModel)
-          ? "user-defined"
-          : (systemDefaultModel && actualModel === systemDefaultModel)
-              ? "system-default"
-              : "category-default"
-
-      const source: "override" | "category-default" | "system-default" =
-        type === "user-defined"
-          ? "override"
-          : type === "system-default"
-              ? "system-default"
-              : "category-default"
-
-      modelInfo = { model: actualModel, type, source }
-
+    if (!hasExplicitUserSource && dynamicCategoryModel) {
+      actualModel = dynamicCategoryModel
       const parsedModel = parseModelString(actualModel)
-      const variantToUse = userCategories?.[args.category!]?.variant ?? resolvedVariant ?? resolved.config.variant
+      const variantToUse = userCategories?.[args.category!]?.variant ?? resolved.config.variant
       categoryModel = parsedModel
         ? applyCategoryParams({ ...parsedModel, variant: variantToUse ?? parsedModel.variant }, resolved.config)
         : undefined
+      modelInfo = { model: actualModel, type: "category-default", source: "category-default" }
+    } else {
+      const resolution = resolveModelForDelegateTask({
+        userModel: explicitCategoryModel ?? overrideModel,
+        userFallbackModels: flattenToFallbackModelStrings(normalizedConfiguredFallbackModels),
+        categoryDefaultModel: categoryResolvedModel,
+        isUserConfiguredCategoryModel: hasCanonicalModels
+          ? configuredPrimaryModel !== undefined
+          : resolved.isUserConfiguredModel,
+        fallbackChain: undefined,
+        availableModels: enabledAvailableModels,
+        systemDefaultModel,
+      })
+
+      if (resolution && "skipped" in resolution) {
+        isModelResolutionSkipped = true
+        const userModelOverride = explicitCategoryModel ?? overrideModel
+        if (userModelOverride) {
+          actualModel = userModelOverride
+          const parsedModel = parseModelString(userModelOverride)
+          const variantToUse = userCategories?.[args.category!]?.variant ?? resolved.config.variant
+          categoryModel = parsedModel
+            ? applyCategoryParams({ ...parsedModel, variant: variantToUse ?? parsedModel.variant }, resolved.config)
+            : undefined
+          modelInfo = { model: userModelOverride, type: "user-defined", source: "override" }
+        }
+      } else if (resolution) {
+        const {
+          model: resolvedModel,
+          variant: resolvedVariant,
+          fallbackEntry: resolvedFallbackEntry,
+          matchedFallback: resolvedMatchedFallback,
+        } = resolution
+        fallbackEntry = resolvedFallbackEntry
+        matchedFallback = resolvedMatchedFallback === true
+        actualModel = resolvedModel
+
+        if (!parseModelString(actualModel)) {
+          return categoryResolutionError(`Invalid model format "${actualModel}". Expected "provider/model" format (e.g., "anthropic/claude-sonnet-4-6").`)
+        }
+
+        const type: "user-defined" | "inherited" | "category-default" | "system-default" =
+          (explicitCategoryModel || overrideModel)
+            ? "user-defined"
+            : (systemDefaultModel && actualModel === systemDefaultModel)
+                ? "system-default"
+                : "category-default"
+
+        const source: "override" | "category-default" | "system-default" =
+          type === "user-defined"
+            ? "override"
+            : type === "system-default"
+                ? "system-default"
+                : "category-default"
+
+        modelInfo = { model: actualModel, type, source }
+
+        const parsedModel = parseModelString(actualModel)
+        const variantToUse = userCategories?.[args.category!]?.variant ?? resolvedVariant ?? resolved.config.variant
+        categoryModel = parsedModel
+          ? applyCategoryParams({ ...parsedModel, variant: variantToUse ?? parsedModel.variant }, resolved.config)
+          : undefined
+      }
     }
   }
 
@@ -275,6 +317,13 @@ Available categories: ${categoryNames.join(", ")}`)
     })
   }
 
+  if (categoryModel) {
+    const key = `${categoryModel.providerID}/${categoryModel.modelID}`
+    if (!isModelEnabled(key, enableState)) {
+      return categoryResolutionError(`Resolved model "${key}" for category "${args.category!}" uses a disabled provider or model.`)
+    }
+  }
+
   return {
     agentToUse: SISYPHUS_JUNIOR_AGENT,
     categoryModel,
@@ -283,7 +332,7 @@ Available categories: ${categoryNames.join(", ")}`)
     modelInfo,
     actualModel,
     isUnstableAgent,
-    // Don't use hardcoded fallback chain when resolution was skipped (cold cache)
-    fallbackChain: configuredFallbackChain ?? ((isModelResolutionSkipped || explicitCategoryModel || overrideModel) ? undefined : requirement?.fallbackChain),
+    // Don't use a hardcoded fallback chain when resolution was skipped or explicit
+    fallbackChain: configuredFallbackChain ?? undefined,
   }
 }

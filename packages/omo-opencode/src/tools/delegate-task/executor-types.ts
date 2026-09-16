@@ -1,5 +1,5 @@
 import type { BackgroundManager } from "../../features/background-agent"
-import type { CategoriesConfig, GitMasterConfig, BrowserAutomationProvider, AgentOverrides, SisyphusAgentConfig } from "../../config/schema"
+import type { CategoriesConfig, GitMasterConfig, BrowserAutomationProvider, AgentOverrides, SisyphusAgentConfig, ModelRoutingConfig } from "../../config/schema"
 import type { ModelFallbackControllerAccessor } from "../../hooks/model-fallback"
 import type { PricingCatalog } from "../../hooks/resource-governor"
 import type { DelegationFirstRuntime } from "../../features/delegation-first"
@@ -20,6 +20,8 @@ export interface ExecutorContext {
   syncPollTimeoutMs?: number
   delegationFirstRuntime?: DelegationFirstRuntime
   pricingCatalog?: PricingCatalog
+  modelRouting?: ModelRoutingConfig
+  availableModelsOverride?: Set<string>
 }
 
 export interface ParentContext {

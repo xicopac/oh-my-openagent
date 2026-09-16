@@ -499,7 +499,7 @@ describe("createCallOmoAgent", () => {
     })
   })
 
-  test("falls back to first entry in agent's fallbackChain when no override is configured (#5301)", async () => {
+  test("does not fall back to the legacy openai fallbackChain when no override is configured (#5301)", async () => {
     //#given
     const launch = mock((_input: { model?: { providerID: string; modelID: string }; fallbackChain?: unknown[] }) => Promise.resolve({
       id: "task-default-model",
@@ -512,7 +512,7 @@ describe("createCallOmoAgent", () => {
       launch,
       getTask: mock(() => undefined),
     }
-    // no agentOverrides, no userCategories — the default fallback path
+    // no agentOverrides, no userCategories — the canonical dynamic path
     const toolDef = createCallOmoAgent(
       createMockCtx(DEFAULT_AGENTS),
       managerWithLaunch,
@@ -537,12 +537,8 @@ describe("createCallOmoAgent", () => {
       throw new Error("Expected launch to be called")
     }
     const [launchArgs] = firstLaunchCall
-    // explore's first fallbackChain entry is openai/gpt-5.6-luna-fast at low reasoning
-    expect(launchArgs.model).toEqual({
-      providerID: "openai",
-      modelID: "gpt-5.6-luna-fast",
-      variant: "low",
-    })
+    // The legacy openai/gpt-5.6-luna-fast hardcoded entry must never be selected.
+    expect(launchArgs.model).not.toEqual(expect.objectContaining({ providerID: "openai", modelID: "gpt-5.6-luna-fast" }))
   })
 
   test("should return a tool error when sync spawn depth validation fails", async () => {

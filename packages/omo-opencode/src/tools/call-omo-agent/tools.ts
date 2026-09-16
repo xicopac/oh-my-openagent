@@ -6,7 +6,7 @@ import type { ModelFallbackControllerAccessor } from "../../hooks/model-fallback
 import type { CategoriesConfig, AgentOverrides } from "../../config/schema"
 import type { DelegatedModelConfig } from "../../shared/model-resolution-types"
 import type { FallbackEntry } from "../../shared/model-requirements"
-import { AGENT_MODEL_REQUIREMENTS } from "../../shared/model-requirements"
+import { getAgentRoleRequirement } from "../../shared/model-requirements"
 import { getAgentConfigKey, stripInvisibleAgentCharacters } from "../../shared/agent-display-names"
 import { normalizeFallbackModels } from "../../shared/model-resolver"
 import { buildFallbackChainFromModels } from "../../shared/fallback-chain-from-models"
@@ -18,7 +18,9 @@ import { resolveCallableAgents } from "./agent-resolver"
 import { createOrGetSession } from "./session-creator"
 import { processMessages } from "./message-processor"
 import { waitForCompletion } from "./completion-poller"
-import { getFirstFallbackModel } from "../../agents/builtin-agents/model-resolution"
+import { resolveDynamicWorkerModel } from "../delegate-task/dynamic-model-resolver"
+import type { ModelTier } from "@oh-my-opencode/delegate-core"
+import type { OpencodeClient } from "../delegate-task/types"
 import type { ResourceGovernorRuntime } from "../../hooks/resource-governor"
 import { authorizeChildDispatch, blockMessage, resolvedModelKey, type ChildLaunchBackstop } from "../../hooks/resource-governor"
 
@@ -64,14 +66,14 @@ function authorizeSyncChild(
   }
 }
 
-function resolveModelAndFallbackChain(args: {
+async function resolveModelAndFallbackChain(args: {
   subagentType: string
   agentOverrides?: AgentOverrides
   userCategories?: CategoriesConfig
-}): { model: DelegatedModelConfig | undefined; fallbackChain: FallbackEntry[] | undefined } {
-  const { subagentType, agentOverrides, userCategories } = args
+  client: OpencodeClient
+}): Promise<{ model: DelegatedModelConfig | undefined; fallbackChain: FallbackEntry[] | undefined }> {
+  const { subagentType, agentOverrides, userCategories, client } = args
   const agentConfigKey = getAgentConfigKey(subagentType)
-  const agentRequirement = AGENT_MODEL_REQUIREMENTS[agentConfigKey]
 
   const agentOverride = agentOverrides?.[agentConfigKey as keyof AgentOverrides]
     ?? (agentOverrides
@@ -107,17 +109,29 @@ function resolveModelAndFallbackChain(args: {
         variant: variantToUse,
       })
     }
+  } else if (agentOverride?.fallback_models || agentOverride?.category) {
+    model = undefined
   } else {
-    const firstFallback = getFirstFallbackModel(agentRequirement)
-    if (firstFallback) {
-      const normalized = parseModelString(firstFallback.model)
-      if (normalized) {
-        model = firstFallback.variant ? { ...normalized, variant: firstFallback.variant } : normalized
-        log("[call_omo_agent] Resolved model from first fallbackChain entry", {
+    const roleRequirement = getAgentRoleRequirement(agentConfigKey)
+    if (roleRequirement) {
+      const dynamic = await resolveDynamicWorkerModel({
+        client,
+        tier: roleRequirement.defaultTier as ModelTier,
+        required: roleRequirement.required,
+      })
+      if (dynamic.kind === "resolved") {
+        const normalized = parseModelString(dynamic.model)
+        if (normalized) model = normalized
+        log("[call_omo_agent] Resolved model via canonical dynamic resolver", {
           agent: subagentType,
-          model: firstFallback.model,
-          variant: firstFallback.variant,
+          band: dynamic.band,
+          model: dynamic.model,
         })
+      } else if (dynamic.kind === "no-eligible-candidate" && !dynamic.livePoolEmpty) {
+        throw new Error(
+          `No enabled model satisfies role requirements for agent "${subagentType}" (tier "${roleRequirement.defaultTier}"). ` +
+          `Connect an eligible provider or add an explicit model pin, then retry.`,
+        )
       }
     }
   }
@@ -126,14 +140,12 @@ function resolveModelAndFallbackChain(args: {
     agentOverride?.fallback_models
     ?? (agentOverride?.category ? userCategories?.[agentOverride.category]?.fallback_models : undefined)
   )
-  const defaultProviderID = model?.providerID
-    ?? agentRequirement?.fallbackChain?.[0]?.providers?.[0]
-    ?? "opencode"
+  const defaultProviderID = model?.providerID ?? "opencode"
   const configuredFallbackChain = buildFallbackChainFromModels(normalizedFallbackModels, defaultProviderID)
 
   return {
     model,
-    fallbackChain: configuredFallbackChain ?? agentRequirement?.fallbackChain,
+    fallbackChain: configuredFallbackChain,
   }
 }
 
@@ -208,10 +220,11 @@ export function createCallOmoAgent(
         return `Error: Agent "${normalizedAgent}" is disabled via disabled_agents configuration. Remove it from disabled_agents in your .omo/omo.jsonc to use it.`
       }
 
-      const { model: resolvedModel, fallbackChain } = resolveModelAndFallbackChain({
+      const { model: resolvedModel, fallbackChain } = await resolveModelAndFallbackChain({
         subagentType: args.subagent_type,
         agentOverrides,
         userCategories,
+        client: ctx.client as OpencodeClient,
       })
 
       if (args.run_in_background) {

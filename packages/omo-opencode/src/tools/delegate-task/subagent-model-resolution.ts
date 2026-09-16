@@ -4,14 +4,17 @@ import { fuzzyMatchModel } from "../../shared/model-availability"
 import { buildFallbackChainFromModels } from "../../shared/fallback-chain-from-models"
 import { normalizeModelFormat } from "../../shared/model-format-normalizer"
 import { flattenToFallbackModelStrings, normalizeFallbackModels } from "../../shared/model-resolver"
-import { AGENT_MODEL_REQUIREMENTS } from "../../shared/model-requirements"
+import { getAgentRoleRequirement } from "../../shared/model-requirements"
+import type { ModelTier } from "@oh-my-opencode/delegate-core"
 import { log } from "../../shared/logger"
-import { getAvailableModelsForDelegateTask } from "./available-models"
+import { getAvailableModelsForDelegateTask, getEnabledModelState } from "./available-models"
+import { filterEnabledModelKeys, isModelEnabled } from "../../shared/model-enable-state"
 import { applyCategoryParams } from "./delegated-model-config"
-import type { ExecutorContext } from "./executor-types"
 import { applyFallbackEntrySettings } from "./fallback-entry-settings"
 import { resolveEffectiveFallbackEntry } from "./fallback-entry-resolution"
 import { resolveModelForDelegateTask } from "./model-selection"
+import { resolveDynamicWorkerModel, buildModelRoutingPins } from "./dynamic-model-resolver"
+import type { ExecutorContext } from "./executor-types"
 import type { AgentInfo } from "./subagent-discovery"
 import type { ResolvedSubagentModel } from "./subagent-resolution-types"
 
@@ -24,13 +27,14 @@ export async function resolveSubagentModel(
   agentToUse: string,
   matchedAgent: AgentInfo,
   executorCtx: ExecutorContext,
+  options: { mainModel?: string } = {},
 ): Promise<ResolvedSubagentModel> {
   let categoryModel = undefined
   let fallbackChain = undefined
 
   const agentConfigKey = getAgentConfigKey(agentToUse)
   const agentOverride = findAgentOverride(executorCtx.agentOverrides, agentConfigKey)
-  const agentRequirement = AGENT_MODEL_REQUIREMENTS[agentConfigKey]
+  const roleRequirement = getAgentRoleRequirement(agentConfigKey)
   const agentCategoryConfig = agentOverride?.category
     ? executorCtx.userCategories?.[agentOverride.category]
     : undefined
@@ -40,8 +44,12 @@ export async function resolveSubagentModel(
     agentOverride?.fallback_models
     ?? agentCategoryConfig?.fallback_models
   )
+  const hasUserFallbackModels = Boolean(normalizedAgentFallbackModels && normalizedAgentFallbackModels.length > 0)
 
   const availableModels = await getAvailableModelsForDelegateTask(executorCtx.client)
+  const enableState = await getEnabledModelState(executorCtx.client)
+  const enabledAvailableModels = filterEnabledModelKeys(availableModels, enableState)
+
   const normalizedMatchedModel = matchedAgent.model
     ? normalizeModelFormat(matchedAgent.model)
     : undefined
@@ -49,13 +57,45 @@ export async function resolveSubagentModel(
     ? `${normalizedMatchedModel.providerID}/${normalizedMatchedModel.modelID}`
     : undefined
 
-  if (agentOverride?.model || agentCategoryModel || agentRequirement || matchedAgent.model) {
+  let dynamicDefaultModel: string | undefined
+  if (roleRequirement && !hasExplicitUserModel && !hasUserFallbackModels && !matchedAgentModelStr) {
+    const dynamic = await resolveDynamicWorkerModel({
+      client: executorCtx.client,
+      tier: roleRequirement.defaultTier as ModelTier,
+      required: roleRequirement.required,
+      mainModel: options.mainModel,
+      pinned: buildModelRoutingPins(executorCtx.modelRouting),
+      ...(executorCtx.availableModelsOverride ? { availableModelsOverride: executorCtx.availableModelsOverride } : {}),
+      ...(executorCtx.pricingCatalog ? { pricingCatalog: executorCtx.pricingCatalog } : {}),
+      ...(executorCtx.delegationFirstRuntime
+        ? { extraUnavailable: executorCtx.delegationFirstRuntime.unavailableModels() }
+        : {}),
+    })
+    if (dynamic.kind === "resolved") {
+      dynamicDefaultModel = dynamic.model
+      log("[delegate-task] resolved subagent model dynamically", {
+        agent: agentToUse,
+        tier: roleRequirement.defaultTier,
+        band: dynamic.band,
+        model: dynamic.model,
+        escalated: dynamic.escalated,
+        usedMainModel: dynamic.usedMainModel,
+      })
+    } else if (dynamic.kind === "no-eligible-candidate" && !dynamic.livePoolEmpty) {
+      throw new Error(
+        `No enabled model satisfies role requirements for agent "${agentToUse}" (tier "${roleRequirement.defaultTier}"). ` +
+        `Connect an eligible provider or add an explicit model pin, then retry.`,
+      )
+    }
+  }
+
+  if (agentOverride?.model || agentCategoryModel || roleRequirement || matchedAgent.model) {
     const resolution = resolveModelForDelegateTask({
-      userModel: agentOverride?.model ?? agentCategoryModel,
+      userModel: agentOverride?.model ?? agentCategoryModel ?? dynamicDefaultModel,
       userFallbackModels: flattenToFallbackModelStrings(normalizedAgentFallbackModels),
       categoryDefaultModel: matchedAgentModelStr,
-      fallbackChain: agentRequirement?.fallbackChain,
-      availableModels,
+      fallbackChain: undefined,
+      availableModels: enabledAvailableModels,
       systemDefaultModel: undefined,
     })
 
@@ -90,7 +130,6 @@ export async function resolveSubagentModel(
       defaultProviderID,
     )
     fallbackChain = configuredFallbackChain
-      ?? ((resolutionSkipped || hasExplicitUserModel) ? undefined : agentRequirement?.fallbackChain)
     const effectiveEntry = resolveEffectiveFallbackEntry({
       categoryModel,
       configuredFallbackChain,
@@ -108,13 +147,20 @@ export async function resolveSubagentModel(
 
   if (!categoryModel && normalizedMatchedModel) {
     const fullModel = `${normalizedMatchedModel.providerID}/${normalizedMatchedModel.modelID}`
-    if (availableModels.size === 0 || fuzzyMatchModel(fullModel, availableModels, [normalizedMatchedModel.providerID])) {
+    if (enabledAvailableModels.size === 0 || fuzzyMatchModel(fullModel, enabledAvailableModels, [normalizedMatchedModel.providerID])) {
       categoryModel = normalizedMatchedModel
     } else {
       log("[delegate-task] Skipping unavailable agent default model", {
         agent: agentToUse,
         model: fullModel,
       })
+    }
+  }
+
+  if (categoryModel) {
+    const key = `${categoryModel.providerID}/${categoryModel.modelID}`
+    if (!isModelEnabled(key, enableState)) {
+      throw new Error(`Resolved model "${key}" for agent "${agentToUse}" uses a disabled provider or model.`)
     }
   }
 

@@ -138,6 +138,7 @@ describe("resource governor runtime integration", () => {
       getLoadedSkills: async () => [],
       resourceGovernorRuntime: runtime,
       resourceGovernorDefaultChildTokens: 600_000,
+      pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
     })
 
     // when a (catalog-free) child is requested

@@ -39,6 +39,79 @@ required behaviors (orchestrator identity, task-start delegation, worker-owned d
 selective-verification exceptions, refine/escalate-not-takeover, MAIN_EQUIVALENT escalation,
 deep-semantics prohibition, self-check). Factory and reconciler regressions stay green.
 
+## Legacy Fallback Removal — Canonical Subagent Resolution (this change)
+
+**Status: COMPLETE (live fix confirmation pending fresh-process restart).** Normal subagent
+selection still walked the built-in hardcoded `AGENT_MODEL_REQUIREMENTS` /
+`CATEGORY_MODEL_REQUIREMENTS` chains first, so an `explore` worker resolved BOTH rungs to
+`openai/*` models that the `opencode` gateway rejects, produced **0 tokens**, and errored. This
+change makes the live dynamic enabled-pool resolver the single authority for normal selection,
+enforces `disabled_providers` globally, and fails hard instead of silently launching dead children.
+
+### Root cause (traced, not guessed)
+
+A real `explore` worker launched through the exact Sisyphus delegation path (no manual model, no
+user `fallback_models` pin) failed with zero tokens:
+
+```
+Attempt 1 — openai/gpt-5.6-luna-fast
+  Error: Model not found: openai/gpt-5.6-luna-fast. Did you mean: gpt-5.6-luna-fast?
+Attempt 2 — openai/gpt-5.4-nano
+  Error: ProviderModelNotFoundError: Model not found: openai/gpt-5.4-nano.
+```
+
+The value source is `resolveModelForDelegateTask` (`delegate-core`), which prioritizes the hardcoded
+`AGENT_MODEL_REQUIREMENTS[agent].fallbackChain` when no explicit user pin exists. That chain
+(`openai/gpt-5.6-luna-fast -> openai/gpt-5.4-nano -> anthropic/claude-haiku-4-5 -> …`) lists an
+`openai` provider that this environment has disabled and that the `opencode` gateway does not serve,
+so every rung is either "provider not found" or a disabled route. `openai` is not in the live enabled
+pool, yet the legacy chain never consults it.
+
+### Method (canonical dynamic resolver, not another static list)
+
+The dynamic band resolver already existed (`delegate-core/model-band.ts` `resolveModelBand`). This
+change makes it authoritative for normal subagent selection and removes the legacy hardcoded chains:
+
+- `model-core/role-requirements.ts` (new): `RoleRequirement`, `AGENT_ROLE_REQUIREMENTS`,
+  `CATEGORY_ROLE_REQUIREMENTS`, `getAgentRoleRequirement`, `getCategoryRoleRequirement`. Only
+  `defaultTier` is prescribed (a policy band, not a model id); strict `vision`/`tool_call`
+  capability flags are intentionally NOT required because unknown metadata over-filters and
+  hard-fails live pools.
+- `omo-opencode/tools/delegate-task/dynamic-model-resolver.ts` (new): `resolveDynamicWorkerModel`
+  + `buildModelRoutingPins` — live enabled pool → filter `disabled_providers` models →
+  `resolveModelBand(effectiveTier)`. Returns `resolved` or `no-eligible-candidate` with
+  `livePoolEmpty` to distinguish cold-cache deferral from hard-fail.
+- `subagent-model-resolution.ts` + `category-resolver.ts`: default resolution routes through the
+  dynamic resolver; explicit user pins are preserved but still validated against the disabled
+  state; disabled-provider models are dropped from `unavailable` so pins to them are also ignored;
+  hard-fail (truthful error) when a non-empty pool has no eligible candidate; final
+  `isModelEnabled` guard as defense-in-depth. Legacy `CATEGORY_MODEL_REQUIREMENTS` chain removed.
+- `call-omo-agent/tools.ts`: `resolveModelAndFallbackChain` now async via
+  `resolveDynamicWorkerModel` (drops `getFirstFallbackModel` / `AGENT_MODEL_REQUIREMENTS`).
+
+`disabled_providers` is now enforced uniformly across the named-agent, category, and direct
+`explore`/`librarian` paths: any candidate whose provider is disabled is excluded from both the
+candidate pool and explicit-pin resolution.
+
+### Tests (all green)
+
+New `role-requirements.test.ts` + `canonical-routing.test.ts` (13 focused: disabled-provider
+filtering, pin-to-disabled drop, cold-cache deferral, hard-fail on exhausted non-empty pool,
+`mainModel` handling). Regression: `model-core` + `delegate-core` + `omo-opencode/src/tools/**` +
+`features/delegation-first` = 1596 pass / 0 fail. `bun run typecheck` clean; `bun run build` clean;
+`dist/index.js` carries `resolveDynamicWorkerModel` / `AGENT_ROLE_REQUIREMENTS` /
+`getAgentRoleRequirement`; smoke-import OK.
+
+### Live validation
+
+Root cause is PROVEN live: the real `explore` worker on the pre-fix runtime reproduced the exact
+`openai/*` zero-token error above (evidence: `.omo/evidence/20260916-legacy-fallback-removal/`).
+The fix is built into `dist/`; full live confirmation that a real `explore` worker now resolves a
+valid `opencode/*` model with tokens > 0 requires a fresh OpenCode process to load the rebuilt
+plugin (the running session was started with the pre-fix bundle). No cost was incurred.
+
+---
+
 ## Dynamic Economic/Capability Tier Bands (this change)
 
 **Status: COMPLETE.** Removed the static `model_routing.tiers` -> fixed-model bottleneck. A requested
