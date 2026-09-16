@@ -1,5 +1,52 @@
 # OMA Resource Governor — Authoritative Report
 
+## Disabled-Provider Baked Model Still Blocked Delegation (this change)
+
+**Status: COMPLETE (live confirmation pending fresh-process restart).** The prior
+"Legacy Fallback Removal" change made the dynamic enabled-pool resolver authoritative for
+*normal selection*, but a real `explore` worker still failed live with zero tokens:
+
+```
+ProviderModelNotFoundError: Model not found: openai/gpt-5.6-luna-fast. Did you mean: gpt-5.6-luna-fast?
+```
+
+### Root cause (traced, not guessed)
+
+`resolveSubagentModel` only invoked the dynamic resolver when the matched agent carried **no**
+model (`!matchedAgentModelStr`). But `explore`/`librarian` are registered with a **baked-in**
+default model resolved through the legacy `AGENT_MODEL_REQUIREMENTS` chain
+(`agents/builtin-agents/general-agents.ts` still uses `getFirstFallbackModel`, whose first rung
+is `openai/gpt-5.6-luna-fast`). That registration path was intentionally excluded from the prior
+fix because OpenCode's config handler must not call client APIs during init, and the existing
+`luna-deepseek-chain-policy` / `model-requirements-deprecated-routing` tests pin the chain to
+non-`opencode` providers.
+
+With `disabled_providers: ["openai"]` and only the `opencode` gateway connected, the baked
+`openai/gpt-5.6-luna-fast` is not in the enabled pool, so the spawn fell through to OpenCode's
+agent default and was rejected. Note: the `opencode` gateway serves `gpt-5.6-luna` (not the
+`-fast` OpenAI service-tier alias), `deepseek-v4-flash`, `minimax-m3`, `qwen3.6-plus`, etc.
+
+### Fix (delegation resolution, not the pinned chains)
+
+`subagent-model-resolution.ts` now runs `resolveDynamicWorkerModel` when the matched agent's
+baked model is **not actually usable** in the enabled pool (disabled/unavailable provider), not
+only when it is absent. A genuinely enabled matched model, and the cold-cache case (empty pool),
+still skip the dynamic resolver to preserve the prior behavior. The dynamic result is promoted to
+the explicit user model, so the spawn uses a valid `opencode/*` model instead of the stale
+`openai/*` string.
+
+### Evidence
+
+- New `subagent-model-resolution-disabled-provider.test.ts` (2 focused cases): a disabled-provider
+  baked model resolves a valid `opencode/*` model; an enabled matched model is used directly.
+- Regressions green: delegate-task + call-omo-agent (595), model-core + delegation-first +
+  resource-governor (587). `tsgo --noEmit` clean for omo-opencode + model-core.
+- `bun run build` clean; `dist/index.js` carries `matchedAgentModelUsable`.
+- Live confirmation (real `explore` worker resolving `opencode/*` with tokens > 0) requires a fresh
+  OpenCode process to load the rebuilt bundle; the running session predates this fix.
+
+---
+
 ## Sisyphus Delegation-First Orchestrator Doctrine (this change)
 
 **Status: COMPLETE.** MAIN's *default behavior* is now delegation-first, so the existing
