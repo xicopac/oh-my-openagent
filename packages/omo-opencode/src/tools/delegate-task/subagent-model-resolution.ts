@@ -58,7 +58,14 @@ export async function resolveSubagentModel(
     : undefined
 
   let dynamicDefaultModel: string | undefined
-  if (roleRequirement && !hasExplicitUserModel && !hasUserFallbackModels && !matchedAgentModelStr) {
+  const matchedAgentModelUsable = Boolean(
+    matchedAgentModelStr &&
+    normalizedMatchedModel &&
+    // Cold-cache (empty pool) stays "usable" to preserve the prior skip behavior.
+    (enabledAvailableModels.size === 0
+      || fuzzyMatchModel(matchedAgentModelStr, enabledAvailableModels, [normalizedMatchedModel.providerID]) !== null),
+  )
+  if (roleRequirement && !hasExplicitUserModel && !hasUserFallbackModels && !matchedAgentModelUsable) {
     const dynamic = await resolveDynamicWorkerModel({
       client: executorCtx.client,
       tier: roleRequirement.defaultTier as ModelTier,
