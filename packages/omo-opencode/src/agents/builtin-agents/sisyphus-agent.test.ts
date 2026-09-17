@@ -314,4 +314,30 @@ describe("maybeCreateSisyphusConfig", () => {
       expect(config?.permission).toHaveProperty("apply_patch", "allow");
     });
   });
+
+  describe("#given a plain DeepSeek V4 Flash runtime default", () => {
+    test("#when Sisyphus is created with no explicit model #then it resolves to plain V4 Flash", () => {
+      // given - fresh runtime default is plain Flash; no override, no UI selection
+      const agentOverrides: AgentOverrides = { sisyphus: {} };
+      const mergedCategories: Record<string, CategoryConfig> = {};
+
+      // when
+      const config = maybeCreateSisyphusConfig({
+        disabledAgents: [],
+        agentOverrides,
+        availableModels: new Set(["opencode/deepseek-v4-flash", "opencode/gpt-5.4"]),
+        systemDefaultModel: "opencode/deepseek-v4-flash",
+        isFirstRunNoCache: false,
+        availableAgents: [],
+        availableSkills: [],
+        availableCategories: [],
+        mergedCategories,
+        useTaskSystem: false,
+      });
+
+      // then - Sisyphus resolves to plain Flash, not Pro and not Vision Exp
+      expect(config).toBeDefined();
+      expect(config?.model).toBe("opencode/deepseek-v4-flash");
+    });
+  });
 });

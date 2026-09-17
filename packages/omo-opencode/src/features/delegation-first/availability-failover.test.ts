@@ -44,4 +44,34 @@ describe("selectNextEligibleWorker (disabled-model failover)", () => {
 		//#then
 		expect(result).toEqual({ kind: "no_eligible_worker" })
 	})
+
+	test("V4 Flash unavailable re-resolves to the next eligible worker, never back to the disabled model", () => {
+		//#given - plain Flash is the first worker but the provider reports it disabled
+		const workers = [
+			worker("opencode/deepseek-v4-flash"),
+			worker("opencode/gpt-5.4"),
+			worker("opencode/deepseek-v4-flash-vision-exp"),
+		]
+		const unavailable = new Set(["opencode/deepseek-v4-flash"])
+
+		//#when
+		const result = selectNextEligibleWorker(workers, 0, unavailable)
+
+		//#then - the next candidate is re-resolved, skipping disabled Flash and Vision Exp
+		expect(result.kind).toBe("next_worker")
+		expect(result.kind === "next_worker" && result.worker.model_id).toBe("opencode/gpt-5.4")
+	})
+
+	test("Vision Exp is never re-selected after plain Flash is disabled", () => {
+		//#given - plain Flash and Vision Exp both marked unavailable
+		const workers = [worker("opencode/deepseek-v4-flash"), worker("opencode/deepseek-v4-flash-vision-exp"), worker("opencode/gpt-5.4")]
+		const unavailable = new Set(["opencode/deepseek-v4-flash", "opencode/deepseek-v4-flash-vision-exp"])
+
+		//#when
+		const result = selectNextEligibleWorker(workers, 0, unavailable)
+
+		//#then - re-resolution skips both and reaches an eligible candidate
+		expect(result.kind).toBe("next_worker")
+		expect(result.kind === "next_worker" && result.worker.model_id).toBe("opencode/gpt-5.4")
+	})
 })

@@ -108,7 +108,7 @@ export const CATEGORY_FALLBACK_CHAINS: Readonly<Record<string, readonly Delegate
       model: "qwen3.8-max-preview",
       variant: "max",
     },
-    { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-pro", variant: "max" },
+    { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-flash", variant: "max" },
     { providers: ["xiaomi", "opencode-go"], model: "mimo-v2.5-pro", variant: "max" }
   ],
   "unspecified-high": [

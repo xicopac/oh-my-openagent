@@ -219,7 +219,7 @@ Override specific categories or curated agents in `omo.json`:
 **Other families**:
 
 - Grok 4.6: default for the `unspecified-low` category (xhigh)
-- DeepSeek V4 Flash / Pro: utility rungs in `explore`, `librarian`, `quick`, and `unspecified-low`
+- DeepSeek V4 Flash: utility rung in `explore`, `librarian`, `quick`, and `unspecified-low`
 
 See the [Agent-Model Matching Guide](./agent-model-matching.md) for the full chains, safe vs risky overrides, and the tuned-preset list.
 

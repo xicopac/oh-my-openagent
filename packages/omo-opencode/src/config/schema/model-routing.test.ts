@@ -10,7 +10,7 @@ describe("model_routing config", () => {
         tiers: {
           fast: { model: "opencode/nemotron-3.5-lightning-free" },
           balanced: { model: "opencode/mimo-v2.5-free" },
-          strong: { model: "opencode/deepseek-v4-pro" },
+          strong: { model: "opencode/deepseek-v4-flash" },
           master: { inherit_parent: true },
         },
       },
@@ -20,6 +20,7 @@ describe("model_routing config", () => {
     if (result.success) {
       expect(result.data.model_routing?.enabled).toBe(true)
       expect(result.data.model_routing?.tiers?.fast?.model).toBe("opencode/nemotron-3.5-lightning-free")
+      expect(result.data.model_routing?.tiers?.strong?.model).toBe("opencode/deepseek-v4-flash")
       expect(result.data.model_routing?.tiers?.master?.inherit_parent).toBe(true)
     }
   })

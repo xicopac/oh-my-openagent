@@ -43,7 +43,7 @@ model resolution.
       "tiers": {
         "fast": { "model": "opencode/nemotron-3.5-lightning-free" },
         "balanced": { "model": "opencode/mimo-v2.5-free" },
-        "strong": { "model": "opencode/deepseek-v4-pro" },
+        "strong": { "model": "opencode/deepseek-v4-flash" },
         "master": { "inherit_parent": true }
       }
     }

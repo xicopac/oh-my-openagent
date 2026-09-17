@@ -101,7 +101,7 @@ export const CATEGORY_MODEL_REQUIREMENTS: Record<string, ModelRequirement> = {
         model: "qwen3.8-max-preview",
         variant: "max",
       },
-      { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-pro", variant: "max" },
+      { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-flash", variant: "max" },
       { providers: ["xiaomi", "opencode-go"], model: "mimo-v2.5-pro", variant: "max" }
     ],
   },

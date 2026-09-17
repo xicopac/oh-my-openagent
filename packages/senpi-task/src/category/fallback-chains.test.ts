@@ -67,7 +67,7 @@ describe("CATEGORY_FALLBACK_CHAINS", () => {
         { providers: ["openai", "openai-codex", "github-copilot", "opencode"], model: "gpt-5.6-terra", variant: "high" },
         { providers: ["claude-sdk-oauth", "anthropic", "anthropic-api", "github-copilot", "opencode"], model: "claude-sonnet-5", variant: "low" },
         { providers: ["qwen-token-plan", "alibaba-token-plan", "qwen-token-plan-cn", "alibaba-token-plan-cn"], model: "qwen3.8-max-preview", variant: "max" },
-        { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-pro", variant: "max" },
+        { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-flash", variant: "max" },
         { providers: ["xiaomi", "opencode-go"], model: "mimo-v2.5-pro", variant: "max" }
       ],
       "unspecified-high": [

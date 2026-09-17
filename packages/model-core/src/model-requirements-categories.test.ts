@@ -178,7 +178,7 @@ describe("CATEGORY_MODEL_REQUIREMENTS", () => {
       },
       {
         providers: ["deepseek", "opencode-go"],
-        model: "deepseek-v4-pro",
+        model: "deepseek-v4-flash",
         variant: "max",
       },
       {
