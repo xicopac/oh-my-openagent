@@ -47,6 +47,75 @@ the explicit user model, so the spawn uses a valid `opencode/*` model instead of
 
 ---
 
+## Hard Worker-First Enforcement (this change)
+
+**Status: COMPLETE.** The delegation-first doctrine is now a runtime invariant, not a
+prompt. A per-root-session state machine hard-blocks broad delegable root work until a real
+child reaches the `request_started` lifecycle milestone.
+
+### Enforcement point
+
+Staged in `features/delegation-first/root-worker-state.ts`
+(`BOOTSTRAP → WORKER_REQUIRED → WORKER_ACTIVE → WORKER_EVIDENCE_AVAILABLE →
+EXCEPTIONAL_ROOT_TAKEOVER`) and evaluated in `DelegationFirstRuntime.preGruntCheck`, which the
+real `tool.execute.before` path already drives for root sessions. `runtime.ts` wires child
+lifecycle (`attachChildSession` / `markRequestStarted` → `worker_active`; `recordWorkerResult`
+→ `worker_evidence_available` or, on ladder `give_up`, `exceptional_takeover`).
+
+### Bootstrap exceptions
+
+`BOOTSTRAP` permits up to `bootstrapNarrowBudget` (3) narrow lookups/reads and one trivial
+edit/write. Metadata (`git status`/`log`/`rev-parse`, `pwd`, `ls`) and control/delegation tools
+are always allowed and never deadlock.
+
+### Semantic shell classification
+
+`features/grunt-guard/classify.ts` classifies `bash` commands deterministically (regex-only, no
+model call): `git status`/`pwd`/`ls` → metadata; `grep -R`/`rg`/`find`/`tree`/`locate`/multi-`cat`
+→ discovery; `docker inspect`/`logs`/`kubectl logs` → investigation; `bun test`/`tsc`/`bun run
+build` → test_build; `sed -i`/`npm install` → implementation; single-file `cat`/`head`/`tail`/`sed`
+→ narrow. Unknown commands default to `control` (never deadlock). `grep` with a scoped path is
+narrow; unscoped `grep`/`glob` are broad.
+
+### Worker-success milestone
+
+A delegation attempt alone does NOT unlock the root. Only a child that reaches `request_started`
+(real `onSubagentRequestStarted` lifecycle) transitions to `worker_active`. Failed/disabled
+children never satisfy the requirement; a replacement child re-dispatched by the availability
+failover can.
+
+### Selective verification
+
+When a worker returns adequate results or concrete anchors/files/symbols, the phase is
+`worker_evidence_available`: MAIN may read those exact anchors (selective reads), but any renewed
+broad investigation re-enters `worker_required` with
+`ROOT_ADDITIONAL_DELEGATION_REQUIRED`.
+
+### Exceptional takeover semantics
+
+Only bounded escalation exhaustion (the ladder's `give_up`) transitions to
+`EXCEPTIONAL_ROOT_TAKEOVER`, permitting direct root work. It is explicitly audited via the
+`exceptional_root_takeover` event; a no-eligible-worker failure without escalation exhaustion
+does NOT unlock the root.
+
+### New audit events (zero-token)
+
+`root_worker_required`, `root_bootstrap_allowed`, `root_grunt_blocked`,
+`worker_requirement_satisfied`, `worker_evidence_available`,
+`root_additional_delegation_required`, `exceptional_root_takeover`.
+
+### Tests
+
+`features/delegation-first/worker-first-gate.test.ts` (27 cases) covers: trivial one-file task,
+bootstrap metadata, first lookup, broad read/search blocking, Bash grep/find/cat/docker blocking,
+delegation-doesn't-unlock, successful child, failed child, replacement child, anchor verification,
+renewed-investigation re-block, weak-result escalation (not takeover), MAIN-equivalent child,
+truthful no-eligible-worker failure, audited exceptional takeover, and no-deadlock. Regression
+suites (grunt-guard, delegation-first, worker-supervisor, delegation-ladder, governance-audit:
+180 pass) stay green; `tsgo` clean.
+
+---
+
 ## Sisyphus Delegation-First Orchestrator Doctrine (this change)
 
 **Status: COMPLETE.** MAIN's *default behavior* is now delegation-first, so the existing

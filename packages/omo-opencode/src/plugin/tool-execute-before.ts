@@ -49,6 +49,10 @@ function gruntHintForTool(tool: string, args: Record<string, unknown>): GruntToo
     return undefined
   }
   const target = firstString(["filePath", "file_path", "path", "pattern", "query"])
+  if (tool.toLowerCase() === "bash") {
+    const command = typeof args.command === "string" ? args.command : undefined
+    return { ...(command ? { command } : {}) }
+  }
   if (tool.toLowerCase() === "read") {
     return { ...(target ? { target } : {}), selective: hasNumericRange(args) }
   }

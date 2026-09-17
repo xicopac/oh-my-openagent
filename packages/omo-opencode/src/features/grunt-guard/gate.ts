@@ -25,6 +25,8 @@ export type GruntToolHint = {
   target?: string
   /** True when the read is anchored to a specific line range (a worker-identified verification). */
   selective?: boolean
+  /** Raw shell command for `bash` calls (semantic classification of the command). */
+  command?: string
 }
 
 export type PreGruntDecision = {

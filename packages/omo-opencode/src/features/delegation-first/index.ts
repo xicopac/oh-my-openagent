@@ -25,3 +25,11 @@ export {
   type ReplayableAssignment,
   type RetryLineage,
 } from "./replay"
+export {
+  createRootWorkerState,
+  DEFAULT_ROOT_WORKER_STATE_CONFIG,
+  type RootWorkerGateDecision,
+  type RootWorkerPhase,
+  type RootWorkerState,
+  type RootWorkerStateConfig,
+} from "./root-worker-state"

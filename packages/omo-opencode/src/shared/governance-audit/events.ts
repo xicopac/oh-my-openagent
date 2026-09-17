@@ -70,10 +70,31 @@ export const STALL_RECOVERY_AUDIT_EVENTS = [
 export type StallRecoveryAuditEvent = (typeof STALL_RECOVERY_AUDIT_EVENTS)[number]
 
 /**
+ * Hard worker-first enforcement events. These record the per-root-session state
+ * machine transitions: when a non-trivial task requires a worker, when broad root
+ * work is blocked, when a real child launch satisfies the requirement, when a
+ * worker's evidence enables selective verification, when renewed broad work
+ * requires another delegation, and when the escalation chain is exhausted and an
+ * explicit, audited exceptional root takeover is permitted. Metadata only.
+ */
+export const WORKER_FIRST_AUDIT_EVENTS = [
+  "root_worker_required",
+  "root_bootstrap_allowed",
+  "root_grunt_blocked",
+  "worker_requirement_satisfied",
+  "worker_evidence_available",
+  "root_additional_delegation_required",
+  "exceptional_root_takeover",
+] as const
+
+export type WorkerFirstAuditEvent = (typeof WORKER_FIRST_AUDIT_EVENTS)[number]
+
+/**
  * Concise zero-token events emitted by the delegation-first and watchdog
  * machinery. Flat list is convenient for a switch/validation guard.
  */
 export const GOVERNANCE_DELEGATION_WATCHDOG_EVENTS = [
   ...DELEGATION_AUDIT_EVENTS,
   ...WATCHDOG_AUDIT_EVENTS,
+  ...WORKER_FIRST_AUDIT_EVENTS,
 ] as const

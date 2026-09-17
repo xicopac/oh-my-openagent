@@ -23,3 +23,9 @@ export {
   type PreGruntGate,
   type PreGruntGateOptions,
 } from "./gate"
+export {
+  classifyOperation,
+  classifyShellCommand,
+  type OperationClass,
+  type ShellSemantics,
+} from "./classify"

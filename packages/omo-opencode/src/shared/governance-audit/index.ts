@@ -20,8 +20,10 @@ export {
   GOVERNANCE_DELEGATION_WATCHDOG_EVENTS,
   STALL_RECOVERY_AUDIT_EVENTS,
   WATCHDOG_AUDIT_EVENTS,
+  WORKER_FIRST_AUDIT_EVENTS,
   type ChildLifecycleAuditEvent,
   type DelegationAuditEvent,
   type StallRecoveryAuditEvent,
   type WatchdogAuditEvent,
+  type WorkerFirstAuditEvent,
 } from "./events"

@@ -27,15 +27,20 @@ import {
 } from "../delegation-ladder"
 import {
   DEFAULT_GRUNT_GUARD_OPTIONS,
-  createPreGruntGate,
   detectGruntWorkCycle,
   type GruntGuardOptions,
   type GruntToolHint,
   type GruntVerdict,
   type PreGruntDecision,
-  type PreGruntGate,
   type ToolActivityEvent,
 } from "../grunt-guard"
+import {
+  createRootWorkerState,
+  REASON_ADDITIONAL,
+  REASON_WAIT,
+  type RootWorkerPhase,
+  type RootWorkerState,
+} from "./root-worker-state"
 import {
   createWatchdog,
   createRecoveryCoordinator,
@@ -129,6 +134,8 @@ export type DelegationFirstRuntime = {
     hint?: GruntToolHint,
     contextPressure?: number,
   ): PreGruntDecision
+  /** Current hard worker-first phase for a root session (observability + tests). */
+  rootPhase(sessionID: string): RootWorkerPhase
   dispose(): void
 }
 
@@ -154,6 +161,8 @@ export function createDelegationFirstRuntime(
   const gruntWindows = new Map<string, ToolActivityEvent[]>()
   // Sessions whose provider request was dispatched before the watchdog attached.
   const pendingRequestStarted = new Set<string>()
+  // Root sessions that already audited their first permitted bootstrap operation.
+  const bootstrapAudited = new Set<string>()
 
   const ladderConfig: DelegationLadderConfig = { ...DEFAULT_DELEGATION_LADDER_CONFIG, ...cfg.ladder }
 
@@ -184,7 +193,19 @@ export function createDelegationFirstRuntime(
   const gruntOptions: GruntGuardOptions = { ...DEFAULT_GRUNT_GUARD_OPTIONS, ...cfg.grunt }
 
   const freeWorkerHint = cfg.pricing ? discoverFreeModels(cfg.pricing)[0] ?? null : null
-  const gate: PreGruntGate = createPreGruntGate({ freeWorkerHint })
+  const rootState: RootWorkerState = createRootWorkerState()
+
+  function satisfyWorkerRequirement(sessionID: string): void {
+    const before = rootState.phase(sessionID)
+    rootState.noteWorkerRunning(sessionID)
+    if (rootState.phase(sessionID) === "worker_active" && before !== "worker_active") {
+      audit?.write(sessionID, {
+        subsystem: "delegation",
+        event: "worker_requirement_satisfied",
+        session_id: sessionID,
+      })
+    }
+  }
 
   function assignmentIDFor(sessionID: string): string | undefined {
     return sessionToAssignment.get(sessionID)
@@ -384,6 +405,7 @@ export function createDelegationFirstRuntime(
       watchdog.register(childSessionID, parentSessionID)
       if (pendingRequestStarted.delete(childSessionID)) {
         watchdog.markRequestStarted(childSessionID)
+        satisfyWorkerRequirement(parentSessionID)
       }
     },
     detachChildSession(childSessionID) {
@@ -406,7 +428,33 @@ export function createDelegationFirstRuntime(
       recovery.reset(childSessionID)
     },
     recordWorkerResult(jobID, result) {
-      return ladder.record(jobID, result)
+      const action = ladder.record(jobID, result)
+      const parent = jobSession.get(jobID)
+      if (parent) {
+        const anchors = result.findings.flatMap((f) => f.anchors ?? [])
+        const locations = result.findings
+          .filter((f) => f.type === "file" || f.type === "symbol")
+          .map((f) => f.summary)
+        if (result.adequate || anchors.length > 0 || locations.length > 0) {
+          rootState.noteWorkerEvidence(parent, [...anchors, ...locations])
+          audit?.write(parent, {
+            subsystem: "delegation",
+            event: "worker_evidence_available",
+            job_id: jobID,
+            anchor_count: anchors.length + locations.length,
+          })
+        }
+        if (action.kind === "give_up") {
+          rootState.noteEscalationExhausted(parent)
+          audit?.write(parent, {
+            subsystem: "delegation",
+            event: "exceptional_root_takeover",
+            job_id: jobID,
+            reason: action.reason,
+          })
+        }
+      }
+      return action
     },
     findings(jobID) {
       return ladder.findings(jobID)
@@ -414,6 +462,8 @@ export function createDelegationFirstRuntime(
     markRequestStarted(sessionID) {
       if (watchdog.sessions().includes(sessionID)) {
         watchdog.markRequestStarted(sessionID)
+        const parent = sessionJob.get(sessionID)
+        if (parent) satisfyWorkerRequirement(parent)
       } else {
         pendingRequestStarted.add(sessionID)
       }
@@ -608,19 +658,26 @@ export function createDelegationFirstRuntime(
       return verdict
     },
     preGruntCheck(sessionID, tool, hint, contextPressure) {
-      const wasSteered = gate.isSteered(sessionID)
-      const decision = gate.inspect(sessionID, tool, hint, contextPressure)
-
-      if (decision.delegated && wasSteered) {
-        audit?.write(sessionID, {
-          subsystem: "delegation",
-          event: "early_delegation_dispatched",
-          session_id: sessionID,
-        })
-      }
+      const beforePhase = rootState.phase(sessionID)
+      const decision = rootState.decide(sessionID, tool, hint)
 
       if (decision.delegated) {
-        return decision
+        if (beforePhase === "worker_required" || beforePhase === "worker_active") {
+          audit?.write(sessionID, {
+            subsystem: "delegation",
+            event: "early_delegation_dispatched",
+            session_id: sessionID,
+          })
+        }
+        return {
+          block: false,
+          reason: null,
+          steering: null,
+          freeWorkerHint: null,
+          signal: decision.signal,
+          delegated: true,
+          selectiveVerification: false,
+        }
       }
 
       if (decision.selectiveVerification) {
@@ -629,10 +686,28 @@ export function createDelegationFirstRuntime(
           event: "selective_root_verification",
           tool,
         })
-        return decision
       }
 
       if (decision.block) {
+        const newlyRequired =
+          decision.phase === "worker_required" && beforePhase !== "worker_required"
+        audit?.write(sessionID, {
+          subsystem: "delegation",
+          event: "root_grunt_blocked",
+          reason: decision.reason,
+          grunt_count: decision.signal.gruntCount,
+          distinct_modules: decision.signal.distinctModules,
+          phase: decision.phase,
+        })
+        if (newlyRequired) {
+          audit?.write(sessionID, {
+            subsystem: "delegation",
+            event: "root_worker_required",
+            reason: decision.reason,
+            free_worker_hint: freeWorkerHint,
+            context_pressure: contextPressure ?? null,
+          })
+        }
         audit?.write(sessionID, {
           subsystem: "delegation",
           event: "root_grunt_pattern_detected",
@@ -646,16 +721,55 @@ export function createDelegationFirstRuntime(
           subsystem: "delegation",
           event: "early_delegation_required",
           reason: decision.reason,
-          free_worker_hint: decision.freeWorkerHint,
+          free_worker_hint: freeWorkerHint,
           context_pressure: contextPressure ?? null,
+        })
+        if (decision.reason === REASON_ADDITIONAL) {
+          audit?.write(sessionID, {
+            subsystem: "delegation",
+            event: "root_additional_delegation_required",
+            reason: decision.reason,
+            scope: decision.scope ?? null,
+          })
+        }
+
+        return {
+          block: true,
+          reason: decision.reason,
+          steering: buildWorkerFirstSteering(decision.reason, decision.scope),
+          freeWorkerHint,
+          signal: decision.signal,
+          delegated: false,
+          selectiveVerification: false,
+        }
+      }
+
+      if (beforePhase === "bootstrap" && !bootstrapAudited.has(sessionID)) {
+        bootstrapAudited.add(sessionID)
+        audit?.write(sessionID, {
+          subsystem: "delegation",
+          event: "root_bootstrap_allowed",
+          op_class: decision.opClass,
+          phase: "bootstrap",
         })
       }
 
-      return decision
+      return {
+        block: false,
+        reason: null,
+        steering: null,
+        freeWorkerHint: null,
+        signal: decision.signal,
+        delegated: false,
+        selectiveVerification: decision.selectiveVerification,
+      }
+    },
+    rootPhase(sessionID) {
+      return rootState.phase(sessionID)
     },
     dispose() {
       watchdog.dispose()
-      gate.clear()
+      rootState.clear()
       jobSession.clear()
       sessionJob.clear()
       assignmentsById.clear()
@@ -664,6 +778,32 @@ export function createDelegationFirstRuntime(
       replacementSessions.clear()
       gruntWindows.clear()
       pendingRequestStarted.clear()
+      bootstrapAudited.clear()
     },
   }
+}
+
+function buildWorkerFirstSteering(reason: string | null, scope: string | null): string {
+  const bounded = scope && scope.length > 0 ? scope : "this task"
+  if (reason === REASON_ADDITIONAL) {
+    return [
+      "ROOT_ADDITIONAL_DELEGATION_REQUIRED",
+      `renewed broad investigation of ${bounded} requires another worker assignment;`,
+      'delegate to a free worker (e.g. task with subagent_type "explore") and consume the returned anchors instead of re-crawling.',
+    ].join(" ")
+  }
+  if (reason === REASON_WAIT) {
+    return [
+      "WORKER_ACTIVE",
+      `a worker is already running for ${bounded}; wait for its result before broad root exploration.`,
+      "Delegate additional independent investigations in parallel via task/call_omo_agent.",
+    ].join(" ")
+  }
+  return [
+    "ROOT_DELEGATION_REQUIRED",
+    `reason: broad delegable work was attempted before a worker was dispatched (${reason ?? "unknown"}).`,
+    "required_action: delegate",
+    `suggested_scope: ${bounded}`,
+    'Delegate the investigation to a free worker (e.g. task with subagent_type "explore" or "librarian") and consume the returned file/symbol/anchors instead of exploring the repository yourself. You may still read one specific file/line that a worker already identified.',
+  ].join(" ")
 }
