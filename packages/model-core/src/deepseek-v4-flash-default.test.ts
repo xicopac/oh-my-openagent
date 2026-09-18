@@ -7,9 +7,13 @@ import { resolveModelPipeline } from "./model-resolution-pipeline"
  * Focused routing-default tests for the DeepSeek model family.
  *
  * Contract under test:
- *  - Plain "DeepSeek V4 Flash" (`deepseek-v4-flash`) is the active DeepSeek
- *    model in the strongest/high-capability DeepSeek routing slot and in the
- *    fast utility slots (`explore`, `librarian`, `quick`).
+ *  - Plain "DeepSeek V4 Flash" (`deepseek-v4-flash`) remains the active DeepSeek
+ *    model in the strongest/high-capability DeepSeek routing slot
+ *    (`unspecified-low`, trailing) and in the `quick` utility slot, and stays
+ *    as a fallback rung for `explore`/`librarian` behind GPT-5.6 Luna low.
+ *  - Ordinary child workers (`explore`, `librarian`, `sisyphus-junior`) do NOT
+ *    lead with Flash: `explore`/`librarian` lead with GPT-5.6 Luna low and
+ *    `sisyphus-junior` leads with Claude Sonnet 5.
  *  - "DeepSeek V4 Flash Vision Exp" (`deepseek-v4-flash-vision-exp`) is never
  *    selected as a normal default.
  *  - No active category/agent routing prefers "DeepSeek V4 Pro"
@@ -34,20 +38,21 @@ describe("DeepSeek V4 Flash default routing", () => {
     ])
   })
 
-  test("explore, librarian, and sisyphus-junior agent chains lead with plain V4 Flash", () => {
+  test("explore and librarian lead with GPT-5.6 Luna low, keeping plain V4 Flash max as the next rung", () => {
     // given
-    for (const agentName of ["explore", "librarian", "sisyphus-junior"] as const) {
+    for (const agentName of ["explore", "librarian"] as const) {
       const chain = AGENT_MODEL_REQUIREMENTS[agentName].fallbackChain
 
       // when
       const deepseek = deepseekEntries(chain)
 
-      // then - plain flash is the preferred first rung
+      // then - Luna low leads; plain flash follows, never first
       expect(chain[0]).toEqual({
-        providers: ["deepseek"],
-        model: "deepseek-v4-flash",
-        variant: "max",
+        providers: ["openai", "openai-codex"],
+        model: "gpt-5.6-luna-fast",
+        variant: "low",
       })
+      expect(chain[0].model).not.toBe("deepseek-v4-flash")
       expect(deepseek).toContainEqual({
         providers: ["deepseek"],
         model: "deepseek-v4-flash",
@@ -55,6 +60,21 @@ describe("DeepSeek V4 Flash default routing", () => {
       })
       expect(deepseek.some((entry) => entry.model === "deepseek-v4-pro")).toBe(false)
     }
+  })
+
+  test("sisyphus-junior leads with Claude Sonnet 5 and carries no DeepSeek rung at all", () => {
+    // given
+    const chain = AGENT_MODEL_REQUIREMENTS["sisyphus-junior"].fallbackChain
+
+    // when
+    const deepseek = deepseekEntries(chain)
+
+    // then - sonnet first; no flash, no pro
+    expect(chain[0]).toEqual({
+      providers: ["anthropic", "github-copilot", "opencode"],
+      model: "claude-sonnet-5",
+    })
+    expect(deepseek).toEqual([])
   })
 
   test("quick category keeps non-reasoning plain V4 Flash (variant off)", () => {

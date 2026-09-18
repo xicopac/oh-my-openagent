@@ -54,7 +54,7 @@ describe("AGENT_MODEL_REQUIREMENTS", () => {
     expect(last?.model).toBe("big-pickle")
   })
 
-  test("librarian keeps plain DeepSeek V4 Flash primary before Luna, qwen, minimax, haiku, and nano fallbacks", () => {
+  test("librarian keeps GPT-5.6 Luna low primary before plain DeepSeek V4 Flash, qwen, minimax, haiku, and nano fallbacks", () => {
     // given
     const librarian = AGENT_MODEL_REQUIREMENTS["librarian"]
 
@@ -64,14 +64,14 @@ describe("AGENT_MODEL_REQUIREMENTS", () => {
     // then
     expect(librarian.fallbackChain).toHaveLength(8)
     expect(primary).toEqual({
-          providers: ["deepseek"],
-          model: "deepseek-v4-flash",
-          variant: "max",
-        })
-    expect(second).toEqual({
           providers: ["openai", "openai-codex"],
           model: "gpt-5.6-luna-fast",
           variant: "low",
+        })
+    expect(second).toEqual({
+          providers: ["deepseek"],
+          model: "deepseek-v4-flash",
+          variant: "max",
         })
     expect(third?.providers).toContain("opencode-go")
     expect(third?.providers).toContain("bailian-coding-plan")
@@ -92,7 +92,7 @@ describe("AGENT_MODEL_REQUIREMENTS", () => {
         })
   })
 
-  test("explore keeps plain DeepSeek V4 Flash primary before Luna, qwen, minimax, haiku, and nano fallbacks", () => {
+  test("explore keeps GPT-5.6 Luna low primary before plain DeepSeek V4 Flash, qwen, minimax, haiku, and nano fallbacks", () => {
     // given
     const explore = AGENT_MODEL_REQUIREMENTS["explore"]
 
@@ -102,14 +102,14 @@ describe("AGENT_MODEL_REQUIREMENTS", () => {
     // then
     expect(explore.fallbackChain).toHaveLength(8)
     expect(primary).toEqual({
-          providers: ["deepseek"],
-          model: "deepseek-v4-flash",
-          variant: "max",
-        })
-    expect(second).toEqual({
           providers: ["openai", "openai-codex"],
           model: "gpt-5.6-luna-fast",
           variant: "low",
+        })
+    expect(second).toEqual({
+          providers: ["deepseek"],
+          model: "deepseek-v4-flash",
+          variant: "max",
         })
     expect(third?.providers).toContain("opencode-go")
     expect(third?.providers).toContain("bailian-coding-plan")
@@ -262,7 +262,7 @@ describe("AGENT_MODEL_REQUIREMENTS", () => {
     expect(sixth?.providers[0]).toBe("opencode-go")
   })
 
-  test("sisyphus-junior keeps DeepSeek V4 Flash, sonnet, Kimi, minimax, and big-pickle fallbacks", () => {
+  test("sisyphus-junior leads with sonnet and keeps Kimi, sol, minimax, and big-pickle fallbacks with no DeepSeek rung", () => {
     // given
     const sisyphusJunior = AGENT_MODEL_REQUIREMENTS["sisyphus-junior"]
 
@@ -271,7 +271,6 @@ describe("AGENT_MODEL_REQUIREMENTS", () => {
 
     // then
     expect(modelIDs).toEqual([
-      "deepseek-v4-flash",
       "claude-sonnet-5",
       "kimi-k3",
       "gpt-5.6-sol",
@@ -280,6 +279,7 @@ describe("AGENT_MODEL_REQUIREMENTS", () => {
       "minimax-m2.7",
       "big-pickle",
     ])
+    expect(modelIDs).not.toContain("deepseek-v4-flash")
     expect(modelIDs).not.toContain("gpt-5.5")
   })
 

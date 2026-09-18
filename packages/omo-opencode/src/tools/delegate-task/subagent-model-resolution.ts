@@ -58,14 +58,12 @@ export async function resolveSubagentModel(
     : undefined
 
   let dynamicDefaultModel: string | undefined
-  const matchedAgentModelUsable = Boolean(
-    matchedAgentModelStr &&
-    normalizedMatchedModel &&
-    // Cold-cache (empty pool) stays "usable" to preserve the prior skip behavior.
-    (enabledAvailableModels.size === 0
-      || fuzzyMatchModel(matchedAgentModelStr, enabledAvailableModels, [normalizedMatchedModel.providerID]) !== null),
-  )
-  if (roleRequirement && !hasExplicitUserModel && !hasUserFallbackModels && !matchedAgentModelUsable) {
+  // Role-requirement agents are free-first: whenever the user has not pinned an
+  // explicit model or fallback list, the dynamic band resolver runs FIRST, even
+  // when the agent's static configured model is usable. The static matched-agent
+  // model is only a fallback for when the dynamic resolver cannot produce a
+  // candidate (cold cache / empty live pool), handled below.
+  if (roleRequirement && !hasExplicitUserModel && !hasUserFallbackModels) {
     const dynamic = await resolveDynamicWorkerModel({
       client: executorCtx.client,
       tier: roleRequirement.defaultTier as ModelTier,

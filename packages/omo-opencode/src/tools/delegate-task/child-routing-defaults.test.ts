@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
-import { resolveModelPipeline } from "@oh-my-opencode/model-core"
 import {
   AGENT_MODEL_REQUIREMENTS,
+  AGENT_ROLE_REQUIREMENTS,
   CATEGORY_MODEL_REQUIREMENTS,
 } from "../../shared/model-requirements"
 import type { PricingCatalog } from "../../hooks/resource-governor"
@@ -12,19 +12,24 @@ const FLASH = "opencode/deepseek-v4-flash"
 const GPT_OLD = "openai/gpt-old"
 const FALLBACK_1 = "opencode/fallback-1"
 const MAIN = "opencode/main-model"
+const FREE = "opencode/free-model"
+const FREE_ALT = "opencode/free-model-2"
 
 const FLASH_PRICE = { input: 0.3, output: 0.9, cache_read: 0, cache_write: 0 }
 const GPT_OLD_PRICE = { input: 2.0, output: 6.0, cache_read: 0, cache_write: 0 }
 const FALLBACK_1_PRICE = { input: 0.5, output: 1.5, cache_read: 0, cache_write: 0 }
 const MAIN_PRICE = { input: 10, output: 30, cache_read: 0, cache_write: 0 }
+const FREE_PRICE = { input: 0, output: 0, cache_read: 0, cache_write: 0 }
 
-const CATALOG = new Set([FLASH, GPT_OLD, FALLBACK_1])
+const CATALOG = new Set([FLASH, GPT_OLD, FALLBACK_1, FREE])
 
 const PRICING: PricingCatalog = {
   [FLASH]: FLASH_PRICE,
   [GPT_OLD]: GPT_OLD_PRICE,
   [FALLBACK_1]: FALLBACK_1_PRICE,
   [MAIN]: MAIN_PRICE,
+  [FREE]: FREE_PRICE,
+  [FREE_ALT]: FREE_PRICE,
 }
 
 function clientWithConfig(config: Record<string, unknown>): OpencodeClient {
@@ -51,47 +56,101 @@ async function resolveTier(tier: "fast" | "balanced" | "strong" | "master", extr
 /**
  * Routing-default contract for child agents and tiers.
  *
- * Plain DeepSeek V4 Flash (`deepseek-v4-flash` in chains, `opencode/deepseek-v4-flash` as the
- * concrete registered key) is the preferred default for delegated children and the
- * balanced/strong/master tiers. This is a two-part contract:
- *  - The legacy chain first rungs lead with Flash for explore, librarian, sisyphus-junior and the
- *    high-capability categories (ultrabrain, deep, unspecified-high, unspecified-low).
- *  - The dynamic band resolver selects Flash from a controlled enabled pool unless it is disabled,
- *    in which case the next legitimate candidate wins and a disabled GPT-old model is never picked.
+ * Ordinary child workers (explore, librarian, sisyphus-junior and the balanced tier) are
+ * FREE-FIRST: they prefer the best-eligible free model and escalate to paid bands only after
+ * the free pool is exhausted. Plain DeepSeek V4 Flash (`opencode/deepseek-v4-flash`) remains a
+ * paid strong-tier candidate and the master-tier parent inheritance, but it must never lead a
+ * legacy child chain nor preempt the free pool. This is a two-part contract:
+ *  - The legacy chain first rungs lead with their pre-Flash models (gpt-5.6-luna-fast for
+ *    explore/librarian, claude-sonnet-5 for sisyphus-junior, gpt-6-astra for the high-capability
+ *    categories, grok-4.6 for unspecified-low), and the sisyphus-junior chain carries no Flash
+ *    rung at all.
+ *  - The dynamic band resolver picks a free model for balanced, keeps strong on paid Flash,
+ *    fails over between free models when one is disabled, and only escalates balanced to paid
+ *    Flash once every free candidate is unavailable.
  */
-describe("child routing defaults prefer plain DeepSeek V4 Flash", () => {
-  test("legacy chain first rungs lead with plain Flash for child agents and high-capability categories", () => {
-    // given
-    const agentNames = ["explore", "librarian", "sisyphus-junior"] as const
-    const categoryNames = ["ultrabrain", "deep", "unspecified-high", "unspecified-low"] as const
+describe("child routing defaults prefer best-eligible free models", () => {
+  test("legacy chain first rungs are NOT Flash-first for child agents and high-capability categories", () => {
+    // given - the hardcoded agent/category fallback chains
 
-    // when / then - every child first rung is plain deepseek-v4-flash at max
-    for (const name of agentNames) {
-      expect(AGENT_MODEL_REQUIREMENTS[name].fallbackChain[0]).toEqual({
-        providers: ["deepseek"],
-        model: "deepseek-v4-flash",
-        variant: "max",
-      })
-    }
-    for (const name of categoryNames) {
-      expect(CATEGORY_MODEL_REQUIREMENTS[name].fallbackChain[0]).toEqual({
-        providers: ["deepseek", "opencode-go"],
-        model: "deepseek-v4-flash",
-        variant: "max",
-      })
-    }
+    // when / then - ordinary child agents lead with their pre-Flash first rungs
+    expect(AGENT_MODEL_REQUIREMENTS.explore.fallbackChain[0]).toEqual({
+      providers: ["openai", "openai-codex"],
+      model: "gpt-5.6-luna-fast",
+      variant: "low",
+    })
+    expect(AGENT_MODEL_REQUIREMENTS.librarian.fallbackChain[0]).toEqual({
+      providers: ["openai", "openai-codex"],
+      model: "gpt-5.6-luna-fast",
+      variant: "low",
+    })
+    expect(AGENT_MODEL_REQUIREMENTS["sisyphus-junior"].fallbackChain[0]).toEqual({
+      providers: ["anthropic", "github-copilot", "opencode"],
+      model: "claude-sonnet-5",
+    })
+    expect(
+      AGENT_MODEL_REQUIREMENTS["sisyphus-junior"].fallbackChain.some(
+        (rung) => rung.model === "deepseek-v4-flash",
+      ),
+    ).toBe(false)
+
+    // and the high-capability categories lead with their pre-Flash first rungs
+    expect(CATEGORY_MODEL_REQUIREMENTS.ultrabrain.fallbackChain[0]).toEqual({
+      providers: ["openai", "openai-codex"],
+      model: "gpt-6-astra",
+      variant: "max",
+    })
+    expect(CATEGORY_MODEL_REQUIREMENTS.deep.fallbackChain[0]).toEqual({
+      providers: ["openai", "openai-codex", "github-copilot", "opencode"],
+      model: "gpt-6-astra",
+      variant: "high",
+    })
+    expect(CATEGORY_MODEL_REQUIREMENTS["unspecified-high"].fallbackChain[0]).toEqual({
+      providers: ["openai", "openai-codex", "github-copilot", "opencode"],
+      model: "gpt-6-astra",
+      variant: "high",
+    })
+    expect(CATEGORY_MODEL_REQUIREMENTS["unspecified-low"].fallbackChain[0]).toEqual({
+      providers: ["xai", "github-copilot", "opencode"],
+      model: "grok-4.6",
+      variant: "xhigh",
+    })
   })
 
-  test("balanced and strong tiers resolve to Flash from a controlled enabled catalog", async () => {
-    // given - nothing quarantined: Flash, GPT-old, and fallback-1 are all enabled and paid
+  test("balanced tier resolves to a free model while strong stays on paid Flash", async () => {
+    // given - a controlled enabled pool: one free model plus paid Flash, GPT-old, and fallback-1
 
-    // when / then - cheapest paid and strongest paid both land on Flash
-    expect(await resolveTier("balanced")).toBe(FLASH)
+    // when / then - balanced is free-first; strong stays paid on Flash
+    expect(await resolveTier("balanced")).toBe(FREE)
     expect(await resolveTier("strong")).toBe(FLASH)
   })
 
+  test("a disabled free model falls back to another free model, not Flash", async () => {
+    // given - a second free model in the pool, and the first free model unavailable
+    const catalog = new Set([...CATALOG, FREE_ALT])
+
+    // when
+    const result = await resolveDynamicWorkerModel({
+      client: clientWithConfig({}),
+      tier: "balanced",
+      mainModel: MAIN,
+      availableModelsOverride: catalog,
+      pricingCatalog: PRICING,
+      extraUnavailable: [FREE],
+    })
+
+    // then - the second free model wins; paid Flash is only an escalation rung
+    expect(result.kind).toBe("resolved")
+    if (result.kind === "resolved") {
+      expect(result.model).toBe(FREE_ALT)
+      expect(result.model).not.toBe(FLASH)
+    }
+  })
+
   test("master tier resolves to Flash when the parent/main model is Flash", async () => {
-    // given
+    // given - the parent runs plain Flash
+
+    // when
     const result = await resolveDynamicWorkerModel({
       client: clientWithConfig({}),
       tier: "master",
@@ -100,7 +159,7 @@ describe("child routing defaults prefer plain DeepSeek V4 Flash", () => {
       pricingCatalog: PRICING,
     })
 
-    // when / then - main_equiv inherits the parent model
+    // then - main_equiv inherits the parent model
     expect(result.kind).toBe("resolved")
     if (result.kind === "resolved") {
       expect(result.model).toBe(FLASH)
@@ -108,7 +167,7 @@ describe("child routing defaults prefer plain DeepSeek V4 Flash", () => {
     }
   })
 
-  test("a disabled GPT-old model is never selected, even when pinned", async () => {
+  test("a disabled model is never selected, even when pinned", async () => {
     // given - GPT-old quarantined via the runtime unavailable set
     const disabled = new Set([GPT_OLD])
 
@@ -131,19 +190,19 @@ describe("child routing defaults prefer plain DeepSeek V4 Flash", () => {
       extraUnavailable: disabled,
     })
 
-    // then - GPT-old never wins; Flash is the next legitimate candidate
+    // then - GPT-old never wins; the free pool serves both the plain and the pinned request
     expect(balanced.kind).toBe("resolved")
     if (balanced.kind === "resolved") expect(balanced.model).not.toBe(GPT_OLD)
     expect(pinned.kind).toBe("resolved")
     if (pinned.kind === "resolved") {
       expect(pinned.model).not.toBe(GPT_OLD)
-      expect(pinned.model).toBe(FLASH)
+      expect(pinned.model).toBe(FREE)
     }
   })
 
-  test("a disabled Flash falls back to the next legitimate candidate, not Flash again", async () => {
-    // given - Flash quarantined
-    const disabled = new Set([FLASH])
+  test("free-pool exhaustion escalates balanced to a paid model only after every free candidate is unavailable", async () => {
+    // given - every free candidate in the pool is quarantined
+    const exhausted = new Set([FREE])
 
     // when
     const balanced = await resolveDynamicWorkerModel({
@@ -152,37 +211,120 @@ describe("child routing defaults prefer plain DeepSeek V4 Flash", () => {
       mainModel: MAIN,
       availableModelsOverride: CATALOG,
       pricingCatalog: PRICING,
-      extraUnavailable: disabled,
+      extraUnavailable: exhausted,
     })
 
-    // then - cheapest remaining paid model wins instead
+    // then - balanced leaves the free band and lands on the cheapest paid model (Flash)
     expect(balanced.kind).toBe("resolved")
     if (balanced.kind === "resolved") {
-      expect(balanced.model).not.toBe(FLASH)
-      expect(balanced.model).toBe(FALLBACK_1)
+      expect(balanced.model).toBe(FLASH)
+      expect(balanced.escalated).toBe(true)
     }
   })
+})
 
-  test("legacy chain failover skips an unavailable Flash rung and picks the next rung", () => {
-    // given - Flash absent from the availability set
-    const sisyphusJunior = resolveModelPipeline({
-      intent: {},
-      constraints: { availableModels: new Set(["anthropic/claude-sonnet-5"]) },
-      policy: { fallbackChain: AGENT_MODEL_REQUIREMENTS["sisyphus-junior"].fallbackChain },
+const FREE_FAST_1 = "opencode/free-fast-1"
+const FREE_GENERAL_1 = "opencode/free-general-1"
+const FREE_GENERAL_2 = "opencode/free-general-2"
+const GPT_PAID = "openai/gpt-paid"
+const GPT_PAID_PRICE = { input: 2.0, output: 6.0, cache_read: 0, cache_write: 0 }
+
+const MATRIX_CATALOG = new Set([FREE_FAST_1, FREE_GENERAL_1, FREE_GENERAL_2, FLASH, GPT_PAID])
+const MATRIX_PRICING: PricingCatalog = {
+  ...PRICING,
+  [FREE_FAST_1]: FREE_PRICE,
+  [FREE_GENERAL_1]: FREE_PRICE,
+  [FREE_GENERAL_2]: FREE_PRICE,
+  [GPT_PAID]: GPT_PAID_PRICE,
+}
+const MATRIX_FREE_POOL = new Set([FREE_FAST_1, FREE_GENERAL_1, FREE_GENERAL_2])
+
+type MatrixTier = "fast" | "balanced" | "strong" | "master"
+
+async function resolveMatrixRow(tier: MatrixTier, mainModel: string) {
+  const result = await resolveDynamicWorkerModel({
+    client: clientWithConfig({}),
+    tier,
+    mainModel,
+    availableModelsOverride: MATRIX_CATALOG,
+    pricingCatalog: MATRIX_PRICING,
+  })
+  expect(result.kind).toBe("resolved")
+  if (result.kind !== "resolved") throw new Error("Expected resolved")
+  return result
+}
+
+/**
+ * Routing cost matrix over a controlled catalog with three free models
+ * (free-fast-1, free-general-1, free-general-2) and two paid models
+ * (deepseek-v4-flash, gpt-paid). Ordinary child roles (explore, librarian,
+ * general, sisyphus-junior, the balanced tier) are free-first and must land in
+ * the "free" band; the root, strong, master, and strongest rows must stay on
+ * paid models (Flash / gpt-paid) in the strong_paid or main_equiv bands.
+ */
+describe("routing cost matrix", () => {
+  test("ordinary children resolve free while root, strong, and master stay paid", async () => {
+    // given - the role-declared default tiers for the named agents
+    expect(AGENT_ROLE_REQUIREMENTS.sisyphus.defaultTier).toBe("strong")
+    expect(AGENT_ROLE_REQUIREMENTS.explore.defaultTier).toBe("fast")
+    expect(AGENT_ROLE_REQUIREMENTS.librarian.defaultTier).toBe("fast")
+    expect(AGENT_ROLE_REQUIREMENTS.general.defaultTier).toBe("balanced")
+    expect(AGENT_ROLE_REQUIREMENTS["sisyphus-junior"].defaultTier).toBe("balanced")
+    // and the legacy explore chain still leads with gpt-5.6-luna-fast low
+    expect(AGENT_MODEL_REQUIREMENTS.explore.fallbackChain[0]).toEqual({
+      providers: ["openai", "openai-codex"],
+      model: "gpt-5.6-luna-fast",
+      variant: "low",
     })
 
-    // then - the next rung (claude-sonnet-5) is selected, never Flash
-    expect(sisyphusJunior?.model).toBe("anthropic/claude-sonnet-5")
-    expect(sisyphusJunior?.provenance).toBe("provider-fallback")
+    // when - every row of the matrix is resolved against the controlled catalog
+    const rows: Array<{ label: string; tier: MatrixTier; mainModel: string }> = [
+      { label: "root sisyphus", tier: AGENT_ROLE_REQUIREMENTS.sisyphus.defaultTier, mainModel: FLASH },
+      { label: "explore", tier: AGENT_ROLE_REQUIREMENTS.explore.defaultTier, mainModel: MAIN },
+      { label: "librarian", tier: AGENT_ROLE_REQUIREMENTS.librarian.defaultTier, mainModel: MAIN },
+      { label: "general", tier: AGENT_ROLE_REQUIREMENTS.general.defaultTier, mainModel: MAIN },
+      { label: "sisyphus-junior", tier: AGENT_ROLE_REQUIREMENTS["sisyphus-junior"].defaultTier, mainModel: MAIN },
+      { label: "balanced", tier: "balanced", mainModel: MAIN },
+      { label: "master", tier: "master", mainModel: FLASH },
+      { label: "strong", tier: "strong", mainModel: MAIN },
+      { label: "strongest", tier: "master", mainModel: GPT_PAID },
+    ]
+    const resolvedRows = new Map<string, Awaited<ReturnType<typeof resolveMatrixRow>>>()
+    for (const row of rows) {
+      const resolved = await resolveMatrixRow(row.tier, row.mainModel)
+      resolvedRows.set(row.label, resolved)
+      console.log(`matrix ${row.label}: tier=${row.tier} main=${row.mainModel} -> model=${resolved.model} band=${resolved.band}`)
+    }
+    const row = (label: string) => {
+      const resolved = resolvedRows.get(label)
+      if (!resolved) throw new Error(`missing matrix row ${label}`)
+      return resolved
+    }
 
-    // given - explore chain with Luna available but Flash absent
-    const explore = resolveModelPipeline({
-      intent: {},
-      constraints: { availableModels: new Set(["openai/gpt-5.6-luna-fast"]) },
-      policy: { fallbackChain: AGENT_MODEL_REQUIREMENTS["explore"].fallbackChain },
-    })
+    // then - ordinary child rows are free-band and never consume paid Flash
+    for (const label of ["explore", "librarian", "general", "sisyphus-junior", "balanced"]) {
+      expect(row(label).band).toBe("free")
+      expect(MATRIX_FREE_POOL.has(row(label).model)).toBe(true)
+      expect(row(label).model).not.toBe(FLASH)
+      expect(row(label).model).not.toBe(GPT_PAID)
+    }
 
-    // then - the Luna rung is the failover
-    expect(explore?.model).toBe("openai/gpt-5.6-luna-fast")
+    // and the root stays on paid Flash (strong request escalates to its own main equivalence)
+    expect(row("root sisyphus").model === FLASH || row("root sisyphus").model === GPT_PAID).toBe(true)
+    expect(row("root sisyphus").band).not.toBe("free")
+
+    // and master inherits the parent Flash via main_equiv
+    expect(row("master").model).toBe(FLASH)
+    expect(row("master").band).toBe("main_equiv")
+    expect(row("master").usedMainModel).toBe(true)
+
+    // and strong resolves to the cheapest paid strong model (Flash)
+    expect(row("strong").model).toBe(FLASH)
+    expect(row("strong").band).toBe("strong_paid")
+
+    // and the strongest row (master tier over a strong paid parent) inherits that paid parent
+    expect(row("strongest").model).toBe(GPT_PAID)
+    expect(row("strongest").band).toBe("main_equiv")
+    expect(row("strongest").usedMainModel).toBe(true)
   })
 })

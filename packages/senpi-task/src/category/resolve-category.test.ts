@@ -479,11 +479,11 @@ describe("builtin category defaults", () => {
     expect(defaults.map(({ config, name }) => [name, config.model, config.variant])).toEqual([
       ["visual-engineering", "anthropic/claude-fable-5-1", "max"],
       ["artistry", "anthropic/claude-fable-5-1", "max"],
-      ["ultrabrain", "opencode/deepseek-v4-flash", "max"],
-      ["deep", "opencode/deepseek-v4-flash", "max"],
+      ["ultrabrain", "openai/gpt-6-astra", "max"],
+      ["deep", "openai/gpt-6-astra", "high"],
       ["quick", "kimi-coding/kimi-for-coding-highspeed", undefined],
-      ["unspecified-low", "opencode/deepseek-v4-flash", "max"],
-      ["unspecified-high", "opencode/deepseek-v4-flash", "max"],
+      ["unspecified-low", "xai/grok-4.6", "xhigh"],
+      ["unspecified-high", "openai/gpt-6-astra", "high"],
       ["architect", "anthropic/claude-fable-5-1", "max"],
       ["writing", "anthropic/claude-fable-5-1", "medium"],
     ])
@@ -491,8 +491,8 @@ describe("builtin category defaults", () => {
     // then: availability gating applies only to the model-gated builtins; any listed id opens the gate
     expect(BUILTIN_CATEGORY_REQUIRES_MODEL).toEqual({
       architect: ["claude-fable-5-1"],
-      ultrabrain: ["gpt-6-astra", "gpt-5.6-sol", "deepseek-v4-flash"],
-      deep: ["gpt-6-astra", "gpt-5.6-sol", "deepseek-v4-flash"],
+      ultrabrain: ["gpt-6-astra", "gpt-5.6-sol"],
+      deep: ["gpt-6-astra", "gpt-5.6-sol"],
     })
   })
 })

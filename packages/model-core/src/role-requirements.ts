@@ -18,7 +18,8 @@
  * union without importing it (model-core must not depend on delegate-core).
  *
  *   fast     -> free      ($0 models)
- *   balanced -> cheap_paid (paid, materially cheaper than MAIN)
+ *   balanced -> free      (free-first; escalates to paid bands only after
+ *                          the free pool is exhausted)
  *   strong   -> strong_paid (stronger paid, below/equal MAIN)
  *   master   -> main_equiv (same concrete model as MAIN)
  */
@@ -61,6 +62,7 @@ export const AGENT_ROLE_REQUIREMENTS: Record<string, RoleRequirement> = {
   momus: { defaultTier: "strong" },
   atlas: { defaultTier: "balanced" },
   "sisyphus-junior": { defaultTier: "balanced" },
+  general: { defaultTier: "balanced" },
 }
 
 /**

@@ -118,7 +118,7 @@ describe("category activation gating", () => {
       // then
       expect(result.kind).toBe("model_unavailable")
       if (result.kind !== "model_unavailable") throw new Error("Expected model_unavailable")
-      expect(result.attemptedModel).toBe("opencode/deepseek-v4-flash")
+      expect(result.attemptedModel).toBe("openai/gpt-6-astra")
       expect(result.availableCategories).not.toContain("ultrabrain")
     })
 
@@ -153,22 +153,6 @@ describe("category activation gating", () => {
       expect(result.spec.variant).toBe("max")
     })
 
-    test("#when the registry offers deepseek-v4-flash alone #then the gate opens and ultrabrain resolves on it at max", () => {
-      // given
-      const models = registry([model("deepseek", "deepseek-v4-flash")])
-
-      // when
-      const result = resolveCategory("ultrabrain", {}, models)
-
-      // then
-      expect(result.kind).toBe("resolved")
-      if (result.kind !== "resolved") throw new Error("Expected resolved")
-      expect(result.spec.provider).toBe("deepseek")
-      expect(result.spec.modelId).toBe("deepseek-v4-flash")
-      expect(result.spec.variant).toBe("max")
-      expect(result.availableCategories).toContain("ultrabrain")
-    })
-
     test("#when only Copilot carries gpt-5.6-sol #then the gate is satisfied and the copilot rung applies", () => {
       // given
       const models = registry([model("github-copilot", "gpt-5.6-sol")])
@@ -195,7 +179,7 @@ describe("category activation gating", () => {
       // then
       expect(result.kind).toBe("model_unavailable")
       if (result.kind !== "model_unavailable") throw new Error("Expected model_unavailable")
-      expect(result.attemptedModel).toBe("opencode/deepseek-v4-flash")
+      expect(result.attemptedModel).toBe("openai/gpt-6-astra")
       expect(result.availableCategories).not.toContain("deep")
     })
 

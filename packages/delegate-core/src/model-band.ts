@@ -6,8 +6,9 @@
  *
  *   fast      -> free          : suitable enabled models whose authoritative
  *                                 applicable price is $0 across every bucket
- *   balanced  -> cheap_paid    : suitable paid models materially cheaper than
- *                                 MAIN (lowest expected cost first)
+ *   balanced  -> free          : free-first; suitable $0 models first,
+ *                                 escalating to paid bands only after the
+ *                                 free pool is exhausted
  *   strong    -> strong_paid   : suitable stronger paid models below or equal to
  *                                 MAIN's ceiling (capability/strength first)
  *   master    -> main_equiv    : the same concrete model/tier as MAIN (child)
@@ -30,7 +31,7 @@ export type ModelBand = (typeof MODEL_BANDS)[number]
 
 export const TIER_TO_BAND: Record<ModelTier, ModelBand> = {
   fast: "free",
-  balanced: "cheap_paid",
+  balanced: "free",
   strong: "strong_paid",
   master: "main_equiv",
 }

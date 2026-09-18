@@ -110,18 +110,18 @@ describe("OPENAI_CATEGORIES deep entry", () => {
     //#then
     expect(ultraCat).toBeDefined()
     expect(ultraCat?.resolvePromptAppend).toBe(resolveUltrabrainCategoryPromptAppend)
-    expect(ultraCat?.config).toEqual({ model: "opencode/deepseek-v4-flash", variant: "max" })
+    expect(ultraCat?.config).toEqual({ model: "openai/gpt-6-astra", variant: "max" })
   })
 
-  test("deep and unspecified-high default to DeepSeek V4 Flash max, and deep opens on any gate model", () => {
+  test("deep and unspecified-high default to GPT-6 Astra, and deep opens on any GPT flagship gate model", () => {
     //#given
     const deepCat = OPENAI_CATEGORIES.find((c) => c.name === "deep")
     const highCat = OPENAI_CATEGORIES.find((c) => c.name === "unspecified-high")
 
     //#then
-    expect(deepCat?.config).toEqual({ model: "opencode/deepseek-v4-flash", variant: "max" })
-    expect(deepCat?.requiresModel).toEqual(["gpt-6-astra", "gpt-5.6-sol", "deepseek-v4-flash"])
-    expect(highCat?.config).toEqual({ model: "opencode/deepseek-v4-flash", variant: "max" })
+    expect(deepCat?.config).toEqual({ model: "openai/gpt-6-astra", variant: "high" })
+    expect(deepCat?.requiresModel).toEqual(["gpt-6-astra", "gpt-5.6-sol"])
+    expect(highCat?.config).toEqual({ model: "openai/gpt-6-astra", variant: "high" })
     expect(highCat?.resolvePromptAppend).toBe(resolveUnspecifiedHighCategoryPromptAppend)
   })
 

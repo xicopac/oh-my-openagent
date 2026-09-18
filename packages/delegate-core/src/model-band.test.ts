@@ -50,7 +50,7 @@ describe("resolveModelBand", () => {
 
     test("#then tierToBand maps each tier to its economic band", () => {
       expect(tierToBand("fast")).toBe("free")
-      expect(tierToBand("balanced")).toBe("cheap_paid")
+      expect(tierToBand("balanced")).toBe("free")
       expect(tierToBand("strong")).toBe("strong_paid")
       expect(tierToBand("master")).toBe("main_equiv")
     })
@@ -77,19 +77,80 @@ describe("resolveModelBand", () => {
     })
   })
 
-  describe("#given a cheap_paid request", () => {
-    test("#then it never returns a free model", () => {
+  describe("#given a balanced free-first request", () => {
+    test("#then it prefers a genuinely $0 model over every paid model", () => {
       const result = resolveModelBand({ requestedTier: "balanced", ...base() })
-      expect(result?.band).toBe("cheap_paid")
-      expect(result?.model).not.toBe(FREE_A)
-      expect(result?.model).not.toBe(FREE_B)
+      expect(result?.band).toBe("free")
+      expect(result?.model === FREE_A || result?.model === FREE_B).toBe(true)
       expect(result?.usedMainModel).toBe(false)
     })
 
-    test("#then it picks the lowest expected-cost suitable paid model, excluding over-MAIN models", () => {
-      const result = resolveModelBand({ requestedTier: "balanced", ...base() })
+    test("#then it escalates to the lowest expected-cost paid model only when the free pool is exhausted", () => {
+      const result = resolveModelBand({
+        requestedTier: "balanced",
+        ...base(),
+        unavailable: new Set([FREE_A, FREE_B]),
+      })
+      expect(result?.band).toBe("cheap_paid")
       expect(result?.model).toBe(CHEAP_A)
       expect(result?.model).not.toBe(EXPENSIVE)
+      expect(result?.escalated).toBe(true)
+    })
+  })
+
+  describe("#given the balanced free-first escalation ladder", () => {
+    const FLASH = "deepseek/deepseek-v4-flash"
+    const PAID_STRONG = "openai/paid-strong"
+    const BALANCED_MAIN = "opencode/main"
+    const BALANCED_MAIN_PRICE: ModelBandPricing = { input: 10, output: 30, cache_read: 0, cache_write: 0 }
+
+    function balancedPool(): ModelBandCandidate[] {
+      return [
+        { model: "opencode/free-a", pricing: price(0, 0), capability: 0.7, tool_call: true },
+        { model: "opencode/free-b", pricing: price(0, 0), capability: 0.6, tool_call: true },
+        { model: FLASH, pricing: price(0.5, 2), capability: 0.9, reasoning: true, tool_call: true },
+        { model: PAID_STRONG, pricing: price(5, 15), capability: 0.95, reasoning: true, tool_call: true },
+      ]
+    }
+
+    test("#then it returns a $0 free model in the free band", () => {
+      const result = resolveModelBand({
+        requestedTier: "balanced",
+        candidates: balancedPool(),
+        mainModel: BALANCED_MAIN,
+        mainPricing: BALANCED_MAIN_PRICE,
+      })
+      expect(result?.band).toBe("free")
+      expect(result?.requestedBand).toBe("free")
+      expect(result?.model).toBe("opencode/free-a")
+      expect(result?.escalated).toBe(false)
+    })
+
+    test("#then with free-a unavailable it returns free-b (still free, never Flash)", () => {
+      const result = resolveModelBand({
+        requestedTier: "balanced",
+        candidates: balancedPool(),
+        mainModel: BALANCED_MAIN,
+        mainPricing: BALANCED_MAIN_PRICE,
+        unavailable: new Set(["opencode/free-a"]),
+      })
+      expect(result?.band).toBe("free")
+      expect(result?.model).toBe("opencode/free-b")
+      expect(result?.model).not.toBe(FLASH)
+    })
+
+    test("#then with every free model unavailable it escalates to a paid band and returns Flash", () => {
+      const result = resolveModelBand({
+        requestedTier: "balanced",
+        candidates: balancedPool(),
+        mainModel: BALANCED_MAIN,
+        mainPricing: BALANCED_MAIN_PRICE,
+        unavailable: new Set(["opencode/free-a", "opencode/free-b"]),
+      })
+      expect(result?.band === "cheap_paid" || result?.band === "strong_paid").toBe(true)
+      expect(result?.escalated).toBe(true)
+      expect(result?.model === FLASH || result?.model === PAID_STRONG).toBe(true)
+      expect(result?.model).toBe(FLASH)
     })
   })
 

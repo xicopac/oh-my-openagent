@@ -17,23 +17,18 @@ describe("Senpi category routing policy", () => {
     expect(routing).toEqual({
       visualEngineering: { model: "anthropic/claude-fable-5-1", variant: "max" },
       quick: { model: "kimi-coding/kimi-for-coding-highspeed" },
-      unspecifiedHigh: { model: "opencode/deepseek-v4-flash", variant: "max" },
-      unspecifiedLow: { model: "opencode/deepseek-v4-flash", variant: "max" },
+      unspecifiedHigh: { model: "openai/gpt-6-astra", variant: "high" },
+      unspecifiedLow: { model: "xai/grok-4.6", variant: "xhigh" },
     })
   })
 
-  test("unspecified-low fallback chain is DeepSeek V4 Flash max first and excludes luna", () => {
+  test("unspecified-low fallback chain is grok-4.6 xhigh first and excludes luna", () => {
     // given / when
     const chain = CATEGORY_FALLBACK_CHAINS["unspecified-low"]
 
     // then
     expect(chain.map((entry) => entry.model)).not.toContain("gpt-5.6-luna")
     expect(chain).toEqual([
-      {
-        providers: ["deepseek", "opencode-go"],
-        model: "deepseek-v4-flash",
-        variant: "max",
-      },
       {
         providers: ["xai", "github-copilot", "opencode"],
         model: "grok-4.6",
@@ -52,6 +47,11 @@ describe("Senpi category routing policy", () => {
       {
         providers: ["qwen-token-plan", "alibaba-token-plan", "qwen-token-plan-cn", "alibaba-token-plan-cn"],
         model: "qwen3.8-max-preview",
+        variant: "max",
+      },
+      {
+        providers: ["deepseek", "opencode-go"],
+        model: "deepseek-v4-flash",
         variant: "max",
       },
       {

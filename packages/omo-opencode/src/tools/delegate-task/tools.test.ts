@@ -173,7 +173,7 @@ describe("sisyphus-task", () => {
 
       // when / #then
       expect(category).toBeDefined()
-      expect(category.model).toBe("opencode/deepseek-v4-flash")
+      expect(category.model).toBe("openai/gpt-6-astra")
       expect(category.variant).toBe("max")
     })
 
@@ -183,18 +183,18 @@ describe("sisyphus-task", () => {
 
       // when / #then
       expect(category).toBeDefined()
-      expect(category.model).toBe("opencode/deepseek-v4-flash")
-      expect(category.variant).toBe("max")
+      expect(category.model).toBe("openai/gpt-6-astra")
+      expect(category.variant).toBe("high")
     })
 
-    test("unspecified-high category uses DeepSeek V4 Flash max as primary", () => {
+    test("unspecified-high category uses GPT-6 Astra high as primary", () => {
       // given
       const category = DEFAULT_CATEGORIES["unspecified-high"]
 
       // when / #then
       expect(category).toBeDefined()
-      expect(category.model).toBe("opencode/deepseek-v4-flash")
-      expect(category.variant).toBe("max")
+      expect(category.model).toBe("openai/gpt-6-astra")
+      expect(category.variant).toBe("high")
     })
   })
 
@@ -884,8 +884,8 @@ describe("sisyphus-task", () => {
       expect(result).toBeNull()
     })
 
-    test("keeps deep available with its builtin DeepSeek V4 Flash config when only the gpt-5.6-sol gate model is present", () => {
-      // #given: the gate opens on either flagship or DeepSeek V4 Flash; the runtime chain later lands the sol rung
+    test("keeps deep available with its builtin GPT-6 Astra config when only the gpt-5.6-sol gate model is present", () => {
+      // #given: the gate opens on either GPT flagship; the runtime chain later lands the sol rung
       const categoryName = "deep"
       const availableModels = new Set<string>(["openai/gpt-5.6-sol"])
 
@@ -897,8 +897,8 @@ describe("sisyphus-task", () => {
 
       // #then
       const resolved = expectResolvedCategoryConfig(result)
-      expect(resolved.config.model).toBe("opencode/deepseek-v4-flash")
-      expect(resolved.config.variant).toBe("max")
+      expect(resolved.config.model).toBe("openai/gpt-6-astra")
+      expect(resolved.config.variant).toBe("high")
     })
 
     test("keeps deep available when only gpt-6-astra is present", () => {
@@ -914,8 +914,8 @@ describe("sisyphus-task", () => {
 
       // #then
       const resolved = expectResolvedCategoryConfig(result)
-      expect(resolved.config.model).toBe("opencode/deepseek-v4-flash")
-      expect(resolved.config.variant).toBe("max")
+      expect(resolved.config.model).toBe("openai/gpt-6-astra")
+      expect(resolved.config.variant).toBe("high")
     })
 
     test("bypasses requiresModel when explicit user config provided", () => {
@@ -3821,21 +3821,21 @@ describe("sisyphus-task", () => {
       
       // then - catalog model is used
       const category = expectResolvedCategoryConfig(resolved)
-      expect(category.config.model).toBe("opencode/deepseek-v4-flash")
+      expect(category.config.model).toBe("openai/gpt-6-astra")
       expect(category.config.variant).toBe("max")
     })
 
     test("default model is used for category with default entry", () => {
       // given - unspecified-low has default model
       const categoryName = "unspecified-low"
-      
+
       // when
       const resolved = resolveCategoryConfig(categoryName, { systemDefaultModel: SYSTEM_DEFAULT_MODEL })
-      
+
       // then - default model from DEFAULT_CATEGORIES is used
       const category = expectResolvedCategoryConfig(resolved)
-      expect(category.config.model).toBe("opencode/deepseek-v4-flash")
-      expect(category.config.variant).toBe("max")
+      expect(category.config.model).toBe("xai/grok-4.6")
+      expect(category.config.variant).toBe("xhigh")
     })
 
     test("category built-in model takes precedence over inheritedModel for builtin category", () => {
@@ -3846,10 +3846,10 @@ describe("sisyphus-task", () => {
       // when
       const resolved = resolveCategoryConfig(categoryName, { inheritedModel, systemDefaultModel: SYSTEM_DEFAULT_MODEL })
       
-      // then - category's built-in model wins (ultrabrain uses DeepSeek V4 Flash)
+      // then - category's built-in model wins (ultrabrain uses GPT-6 Astra)
       const category = expectResolvedCategoryConfig(resolved)
       const actualModel = category.config.model
-      expect(actualModel).toBe("opencode/deepseek-v4-flash")
+      expect(actualModel).toBe("openai/gpt-6-astra")
     })
 
     test("when user defines model - modelInfo should report user-defined regardless of inheritedModel", () => {
@@ -3903,12 +3903,12 @@ describe("sisyphus-task", () => {
       const categoryName = "ultrabrain"
       const inheritedModel = "anthropic/claude-opus-4-7"
       
-      // when category has a built-in model (DeepSeek V4 Flash for ultrabrain)
+      // when category has a built-in model (GPT-6 Astra for ultrabrain)
       const resolved = resolveCategoryConfig(categoryName, { inheritedModel, systemDefaultModel: SYSTEM_DEFAULT_MODEL })
-      
+
       // then category's built-in model should be used, NOT inheritedModel
       const category = expectResolvedCategoryConfig(resolved)
-      expect(category.model).toBe("opencode/deepseek-v4-flash")
+      expect(category.model).toBe("openai/gpt-6-astra")
     })
 
     test("FIXED: systemDefaultModel is used when no userConfig.model and no inheritedModel", () => {

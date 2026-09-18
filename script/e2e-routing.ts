@@ -33,6 +33,7 @@ import { join } from "node:path"
 
 import {
   runRuntimeScenarios,
+  runRoutingCostPolicyScenario,
   eventNames,
   countNamed,
   type CheckResult,
@@ -313,6 +314,11 @@ async function main(): Promise<void> {
   const persistence = await runPersistenceScenarios()
   checks.push(...persistence.checks)
   tempDirs.push(...persistence.traceDirs)
+
+  // Tier B3: routing cost policy (free-first + quarantine persistence)
+  const costPolicy = await runRoutingCostPolicyScenario()
+  checks.push(...costPolicy.checks)
+  tempDirs.push(...costPolicy.traceDirs)
 
   // Tier A: process-level worker-first gate
   let procEnvRoot: string | undefined

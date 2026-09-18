@@ -29,13 +29,13 @@ describe("Luna and DeepSeek chain policy", () => {
   })
 
   test.each(["explore", "librarian"])(
-    "%s leads with max-reasoning DeepSeek V4 Flash before Luna",
+    "%s leads with low-reasoning Luna before max-reasoning DeepSeek V4 Flash",
     (agentName) => {
       const chain = AGENT_MODEL_REQUIREMENTS[agentName].fallbackChain
 
       expect(chain.slice(0, 2)).toEqual([
-        DEEPSEEK_MAX,
         { providers: ["openai", "openai-codex"], model: "gpt-5.6-luna-fast", variant: "low" },
+        DEEPSEEK_MAX,
       ])
     },
   )

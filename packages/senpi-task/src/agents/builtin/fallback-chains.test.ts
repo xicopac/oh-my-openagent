@@ -41,8 +41,8 @@ describe("AGENT_FALLBACK_CHAINS", () => {
   test("#given the mirrored fallback table #when compared with the independent transcription #then every provider model variant and order is pinned", () => {
     expect(AGENT_FALLBACK_CHAINS).toEqual({
       explore: [
-        { providers: ["deepseek"], model: "deepseek-v4-flash", variant: "max" },
         { providers: ["openai", "openai-codex"], model: "gpt-5.6-luna-fast", variant: "low" },
+        { providers: ["deepseek"], model: "deepseek-v4-flash", variant: "max" },
         { providers: ["opencode-go", "bailian-coding-plan"], model: "qwen3.7-plus" },
         { providers: ["opencode-go"], model: "minimax-m3" },
         { providers: ["minimax-coding-plan", "minimax-cn-coding-plan"], model: "MiniMax-M3" },
@@ -51,8 +51,8 @@ describe("AGENT_FALLBACK_CHAINS", () => {
         { providers: ["openai", "openai-codex"], model: "gpt-5.4-nano" }
       ],
       librarian: [
-        { providers: ["deepseek"], model: "deepseek-v4-flash", variant: "max" },
         { providers: ["openai", "openai-codex"], model: "gpt-5.6-luna-fast", variant: "low" },
+        { providers: ["deepseek"], model: "deepseek-v4-flash", variant: "max" },
         { providers: ["opencode-go", "bailian-coding-plan"], model: "qwen3.7-plus" },
         { providers: ["opencode-go"], model: "minimax-m3" },
         { providers: ["minimax-coding-plan", "minimax-cn-coding-plan"], model: "MiniMax-M3" },

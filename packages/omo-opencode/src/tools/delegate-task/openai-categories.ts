@@ -158,25 +158,23 @@ You are working on tasks that don't fit specific categories but require substant
 const UNSPECIFIED_HIGH_CATEGORY_CALLER_GUIDANCE = `<Selection_Gate>Use only when no specialist category fits and substantial effort spans systems/modules with broad impact. Use unspecified-low for contained moderate work.</Selection_Gate>`
 
 // The ultrabrain/deep gate: any id present in the live registry keeps the category available.
-// DeepSeek V4 Flash is now the default model for these categories, so it opens the gate alongside
-// the GPT flagships; a registry carrying only Flash keeps deep/ultrabrain usable.
-const ULTRA_DEEP_GATE_MODELS = ["gpt-6-astra", "gpt-5.6-sol", "deepseek-v4-flash"] as const
+const GPT_FLAGSHIP_GATE_MODELS = ["gpt-6-astra", "gpt-5.6-sol"] as const
 
 export const OPENAI_CATEGORIES: BuiltinCategoryDefinition[] = [
   {
     name: "ultrabrain",
-    config: { model: "opencode/deepseek-v4-flash", variant: "max" },
+    config: { model: "openai/gpt-6-astra", variant: "max" },
     description: "Use ONLY for genuinely hard, logic-heavy tasks. Give clear goals only, not step-by-step instructions.",
     promptAppend: ULTRABRAIN_CATEGORY_PROMPT_APPEND,
     resolvePromptAppend: resolveUltrabrainCategoryPromptAppend,
   },
   {
     name: "deep",
-    config: { model: "opencode/deepseek-v4-flash", variant: "max" },
+    config: { model: "openai/gpt-6-astra", variant: "high" },
     description: "**MANDATORY: USE deep FOR 3D GRAPHICS, COMPUTER USE, BROWSER USE, BACKEND, LOGIC, ALGORITHMS, CAPTCHA SOLVING, AND MULTIMODAL WORK.** Deep autonomous problem-solving for complex research. ONE goal + ONE deliverable per call — multiple goals must fan out as parallel `deep` calls, never bundled into one.",
     promptAppend: DEEP_CATEGORY_PROMPT_APPEND,
     resolvePromptAppend: resolveDeepCategoryPromptAppend,
-    requiresModel: ULTRA_DEEP_GATE_MODELS,
+    requiresModel: GPT_FLAGSHIP_GATE_MODELS,
   },
   {
     name: "quick",
@@ -187,14 +185,14 @@ export const OPENAI_CATEGORIES: BuiltinCategoryDefinition[] = [
   },
   {
     name: "unspecified-low",
-    config: { model: "opencode/deepseek-v4-flash", variant: "max" },
+    config: { model: "xai/grok-4.6", variant: "xhigh" },
     description: "Tasks that don't fit other categories, low effort required",
     callerGuidance: UNSPECIFIED_LOW_CATEGORY_CALLER_GUIDANCE,
     promptAppend: UNSPECIFIED_LOW_CATEGORY_PROMPT_APPEND,
   },
   {
     name: "unspecified-high",
-    config: { model: "opencode/deepseek-v4-flash", variant: "max" },
+    config: { model: "openai/gpt-6-astra", variant: "high" },
     description: "Tasks that don't fit other categories, high effort required",
     callerGuidance: UNSPECIFIED_HIGH_CATEGORY_CALLER_GUIDANCE,
     promptAppend: UNSPECIFIED_HIGH_CATEGORY_PROMPT_APPEND,

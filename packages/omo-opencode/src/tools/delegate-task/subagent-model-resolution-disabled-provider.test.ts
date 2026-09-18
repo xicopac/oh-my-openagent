@@ -124,8 +124,8 @@ describe("resolveSubagentExecution - disabled-provider baked model", () => {
     expect(result.categoryModel?.modelID).not.toContain("openai")
   })
 
-  test("keeps an enabled matched model instead of re-routing through the dynamic resolver", async () => {
-    //#given explore is baked with an enabled opencode model (no disabled provider)
+  test("an enabled matched model is still reached through the dynamic resolver when it is the free-band winner", async () => {
+    //#given explore is baked with an enabled opencode model that is also the free-band winner
     const args = createBaseArgs()
     const executorCtx = createExecutorContext(
       async () => [{ name: "explore", mode: "subagent", model: "opencode/gpt-5.6-luna" }],
@@ -141,9 +141,64 @@ describe("resolveSubagentExecution - disabled-provider baked model", () => {
     //#when
     const result = await resolveSubagentExecution(args, executorCtx, "sisyphus", "deep")
 
-    //#then the baked model is used directly
+    //#then the dynamic resolver lands on the same free model
     expect(result.error).toBeUndefined()
     expect(result.agentToUse).toBe("explore")
     expect(result.categoryModel).toEqual({ providerID: "opencode", modelID: "gpt-5.6-luna" })
+  })
+
+  test("free-first: a usable PAID matched model loses to the dynamic free band", async () => {
+    //#given explore is baked with a usable PAID model, and a free model exists in the pool
+    const args = createBaseArgs()
+    const executorCtx = createExecutorContext(
+      async () => [{ name: "explore", mode: "subagent", model: "opencode/deepseek-v4-flash" }],
+      {
+        availableModelsOverride: new Set(["opencode/gpt-5.6-luna", "opencode/deepseek-v4-flash"]),
+        pricingCatalog: {
+          "opencode/gpt-5.6-luna": FREE,
+          "opencode/deepseek-v4-flash": CHEAP,
+        },
+      },
+    )
+
+    //#when
+    const result = await resolveSubagentExecution(args, executorCtx, "sisyphus", "deep")
+
+    //#then the dynamic free-band resolver wins over the static paid model
+    expect(result.error).toBeUndefined()
+    expect(result.agentToUse).toBe("explore")
+    expect(result.categoryModel).toEqual({ providerID: "opencode", modelID: "gpt-5.6-luna" })
+    expect(logMock).toHaveBeenCalledWith(
+      "[delegate-task] resolved subagent model dynamically",
+      expect.objectContaining({ agent: "explore", band: "free", model: "opencode/gpt-5.6-luna" }),
+    )
+  })
+
+  test("an explicit agent override model still wins over the dynamic free band", async () => {
+    //#given explore is pinned by the user to a paid model while a free model exists
+    const args = createBaseArgs()
+    const executorCtx = createExecutorContext(
+      async () => [{ name: "explore", mode: "subagent", model: "opencode/gpt-5.6-luna-fast" }],
+      {
+        availableModelsOverride: new Set(["opencode/gpt-5.6-luna", "opencode/deepseek-v4-flash"]),
+        pricingCatalog: {
+          "opencode/gpt-5.6-luna": FREE,
+          "opencode/deepseek-v4-flash": CHEAP,
+        },
+        agentOverrides: { explore: { model: "opencode/deepseek-v4-flash" } },
+      },
+    )
+
+    //#when
+    const result = await resolveSubagentExecution(args, executorCtx, "sisyphus", "deep")
+
+    //#then the explicit user pin is honored; the free band is not consulted
+    expect(result.error).toBeUndefined()
+    expect(result.agentToUse).toBe("explore")
+    expect(result.categoryModel).toEqual({ providerID: "opencode", modelID: "deepseek-v4-flash" })
+    expect(logMock).not.toHaveBeenCalledWith(
+      "[delegate-task] resolved subagent model dynamically",
+      expect.anything(),
+    )
   })
 })

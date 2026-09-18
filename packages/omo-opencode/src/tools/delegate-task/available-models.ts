@@ -120,8 +120,9 @@ export async function getModelsWithPricingAndMetadataForDelegateTask(client: Ope
 /**
  * Live model + pricing discovery for delegate-task. Merges the connected
  * provider-models cache and the live `client.model.list()` result, and derives
- * authoritative per-model pricing from the live cost (USD per 1M tokens). A
- * model is genuinely $0 only when the live cost reports input AND output as 0.
+ * authoritative per-model pricing from the cost metadata (USD per 1M tokens)
+ * carried by either source. A model is genuinely $0 only when its cost reports
+ * input AND output as 0.
  */
 export async function getModelsWithPricingForDelegateTask(
   client: OpencodeClient,
@@ -134,10 +135,14 @@ export async function getModelsWithPricingForDelegateTask(
     const models = new Set<string>()
     for (const [providerID, entries] of Object.entries(providerModelsCache.models)) {
       if (!connected.has(providerID)) continue
-      for (const item of entries as Array<string | { id?: string }>) {
-        const modelID = typeof item === "string" ? item : item?.id
+      for (const item of entries) {
+        const modelID = typeof item === "string" ? item : item.id
         if (!modelID) continue
-        models.add(`${providerID}/${modelID}`)
+        const key = `${providerID}/${modelID}`
+        models.add(key)
+        if (typeof item === "string") continue
+        const cost = extractModelPricing(item.cost)
+        if (cost) pricing[key] = cost
       }
     }
     return { models, pricing }

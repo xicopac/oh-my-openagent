@@ -36,7 +36,6 @@ describe("CATEGORY_FALLBACK_CHAINS", () => {
         { providers: ["claude-sdk-oauth", "anthropic", "anthropic-api", "github-copilot", "opencode"], model: "claude-fable-5-1", variant: "max" }
       ],
       ultrabrain: [
-        { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-flash", variant: "max" },
         { providers: ["openai", "openai-codex"], model: "gpt-6-astra", variant: "max" },
         { providers: ["github-copilot"], model: "gpt-6-astra", variant: "max" },
         { providers: ["openai", "openai-codex", "opencode"], model: "gpt-6-astra", variant: "max" },
@@ -45,7 +44,6 @@ describe("CATEGORY_FALLBACK_CHAINS", () => {
         { providers: ["openai", "openai-codex", "opencode"], model: "gpt-5.6-sol", variant: "max" }
       ],
       deep: [
-        { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-flash", variant: "max" },
         { providers: ["openai", "openai-codex", "github-copilot", "opencode"], model: "gpt-6-astra", variant: "high" },
         { providers: ["openai", "openai-codex", "github-copilot", "opencode"], model: "gpt-5.6-sol", variant: "medium" }
       ],
@@ -65,15 +63,14 @@ describe("CATEGORY_FALLBACK_CHAINS", () => {
         { providers: ["claude-sdk-oauth", "anthropic", "anthropic-api", "github-copilot"], model: "claude-haiku-4-5", variant: "off" }
       ],
       "unspecified-low": [
-        { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-flash", variant: "max" },
         { providers: ["xai", "github-copilot", "opencode"], model: "grok-4.6", variant: "xhigh" },
         { providers: ["openai", "openai-codex", "github-copilot", "opencode"], model: "gpt-5.6-terra", variant: "high" },
         { providers: ["claude-sdk-oauth", "anthropic", "anthropic-api", "github-copilot", "opencode"], model: "claude-sonnet-5", variant: "low" },
         { providers: ["qwen-token-plan", "alibaba-token-plan", "qwen-token-plan-cn", "alibaba-token-plan-cn"], model: "qwen3.8-max-preview", variant: "max" },
+        { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-flash", variant: "max" },
         { providers: ["xiaomi", "opencode-go"], model: "mimo-v2.5-pro", variant: "max" }
       ],
       "unspecified-high": [
-        { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-flash", variant: "max" },
         { providers: ["openai", "openai-codex", "github-copilot", "opencode"], model: "gpt-6-astra", variant: "high" },
         { providers: ["claude-sdk-oauth", "anthropic", "anthropic-api", "github-copilot", "opencode"], model: "claude-opus-5", variant: "xhigh" },
         { providers: ["zai-coding-plan", "opencode-go"], model: "glm-5.3", variant: "max" },

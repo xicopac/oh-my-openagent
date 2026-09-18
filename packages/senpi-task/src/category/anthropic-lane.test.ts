@@ -116,7 +116,7 @@ describe("builtin Claude rungs under the senpi harness", () => {
     expect([meteredHigh.spec.provider, meteredHigh.spec.modelId, meteredHigh.spec.variant]).toEqual([
       "opencode", "claude-opus-5", "xhigh",
     ])
-    expect(meteredHigh.spec.requested_model?.display).toBe("opencode/deepseek-v4-flash")
+    expect(meteredHigh.spec.requested_model?.display).toBe("openai/gpt-6-astra")
     expect(planConsultant.model).toBe("anthropic/claude-fable-5-1")
     expect(planConsultant.resolved_model?.display).toBe("anthropic/claude-fable-5-1")
     expect(planConsultant.fallback_models).toBeUndefined()

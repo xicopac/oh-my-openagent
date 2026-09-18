@@ -841,7 +841,7 @@ describe("Prometheus category config resolution", () => {
 
     // then
     expect(config).toBeDefined()
-    expect(config?.model).toBe("opencode/deepseek-v4-flash")
+    expect(config?.model).toBe("openai/gpt-6-astra")
     expect(config?.variant).toBe("max")
   })
 
@@ -901,7 +901,7 @@ describe("Prometheus category config resolution", () => {
 
     // then - falls back to DEFAULT_CATEGORIES
     expect(config).toBeDefined()
-    expect(config?.model).toBe("opencode/deepseek-v4-flash")
+    expect(config?.model).toBe("openai/gpt-6-astra")
     expect(config?.variant).toBe("max")
   })
 

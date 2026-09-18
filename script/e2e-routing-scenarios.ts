@@ -22,7 +22,13 @@ import {
   type DelegationFirstRuntime,
   type ReplayableAssignment,
 } from "../packages/omo-opencode/src/features/delegation-first"
+import { loadPersistentAvailability } from "../packages/omo-opencode/src/features/delegation-first/persistent-model-availability"
 import type { WorkerCandidate } from "../packages/omo-opencode/src/features/delegation-ladder"
+import {
+  resolveModelBand,
+  type ModelBandPricing,
+  type ModelTier,
+} from "../packages/delegate-core/src/model-band"
 
 export type CheckResult = { name: string; passed: boolean; failures: string[] }
 
@@ -321,6 +327,197 @@ export async function runRuntimeScenarios(): Promise<{ checks: CheckResult[]; tr
     run.dispose()
   }
 
+  return { checks: allChecks, traceDirs }
+}
+
+/**
+ * Routing cost policy scenario: free-first worker routing with the persistent
+ * disabled-model quarantine. Asserts the root stays on paid Flash, ordinary
+ * balanced workers resolve into the free pool (never Flash while a free model
+ * remains), a disabled free model is durably quarantined and skipped by a
+ * fresh runtime sharing only the persistence file, and paid Flash is consumed
+ * only after the free pool is exhausted or strong routing is explicitly
+ * requested. Deterministic PASS/FAIL; no external provider.
+ */
+export async function runRoutingCostPolicyScenario(): Promise<{ checks: CheckResult[]; traceDirs: string[] }> {
+  const allChecks: CheckResult[] = []
+  const traceDirs: string[] = []
+
+  const FLASH = "test/deepseek-v4-flash"
+  const MAIN = "test/main"
+  const FREE_A = "test/free-a"
+  const FREE_B = "test/free-b"
+  const FREE_PRICE: ModelBandPricing = { input: 0, output: 0, cache_read: 0, cache_write: 0 }
+  const PRICING: Record<string, ModelBandPricing> = {
+    [FLASH]: { input: 0.3, output: 0.9, cache_read: 0, cache_write: 0 },
+    [MAIN]: { input: 10, output: 30, cache_read: 0, cache_write: 0 },
+    [FREE_A]: FREE_PRICE,
+    [FREE_B]: FREE_PRICE,
+  }
+  const resolveTier = (tier: ModelTier, mainModel: string, extraUnavailable?: Iterable<string>) =>
+    resolveModelBand({
+      requestedTier: tier,
+      candidates: [
+        { model: FREE_A, pricing: FREE_PRICE },
+        { model: FREE_B, pricing: FREE_PRICE },
+        { model: FLASH, pricing: PRICING[FLASH] },
+      ],
+      mainModel,
+      mainPricing: PRICING[mainModel],
+      unavailable: new Set(extraUnavailable ?? []),
+    })
+
+  // (1) the root stays on paid Flash
+  const root = resolveTier("strong", FLASH)
+  allChecks.push(
+    root !== undefined && root.model === FLASH
+      ? ok("Root (MAIN) uses Flash")
+      : fail("Root (MAIN) uses Flash", [root ? `model=${root.model} band=${root.band}` : "no-eligible-candidate"]),
+  )
+
+  // (2) an ordinary balanced worker resolves into the free pool, not Flash
+  const ordinary = resolveTier("balanced", MAIN)
+  allChecks.push(
+    ordinary !== undefined &&
+      ordinary.model !== FLASH &&
+      ordinary.band === "free" &&
+      (ordinary.model === FREE_A || ordinary.model === FREE_B)
+      ? ok("Ordinary worker (balanced) resolves free, not Flash")
+      : fail("Ordinary worker (balanced) resolves free, not Flash", [
+          ordinary ? `model=${ordinary.model} band=${ordinary.band}` : "no-eligible-candidate",
+        ]),
+  )
+
+  // shared persistence file for the quarantine scenarios
+  const availabilityDir = mkdtempSync(join(tmpdir(), "oma-e2e-cost-"))
+  const availabilityFile = join(availabilityDir, "model-availability.json")
+  traceDirs.push(availabilityDir)
+
+  const paidFlashWorker: WorkerCandidate = { model_id: FLASH, tier: "cheap_paid", capability: 0.9, free: false }
+  const run = startRun([freeWorker(FREE_A), freeWorker(FREE_B), paidFlashWorker], "job-cost", {
+    modelAvailabilityFilePath: availabilityFile,
+  })
+  traceDirs.push(run.auditRoot)
+
+  // (3) a disabled free model is quarantined and the quarantine persists
+  run.rt.recordModelUnavailable("child-1", FREE_A, "Model is disabled")
+  let events = await snapshot(run)
+  allChecks.push(
+    eventNames(events).includes("worker_model_unavailable")
+      ? ok("Disabled free model quarantine event")
+      : fail("Disabled free model quarantine event", [`events=${eventNames(events).join(",")}`]),
+  )
+  allChecks.push(
+    run.rt.unavailableModels().includes(FREE_A)
+      ? ok("Disabled free model marked unavailable")
+      : fail("Disabled free model marked unavailable", [`unavailable=${run.rt.unavailableModels().join(",")}`]),
+  )
+  const persisted = loadPersistentAvailability(availabilityFile)
+  allChecks.push(
+    persisted.entries[FREE_A]?.classification === "disabled"
+      ? ok("Disabled free quarantine persisted to disk")
+      : fail("Disabled free quarantine persisted to disk", [`entries=${JSON.stringify(persisted.entries)}`]),
+  )
+
+  // (4) the replacement worker stays in the free pool while free-b exists
+  allChecks.push(
+    run.sink.relaunches.length === 1 && run.sink.relaunches[0]?.worker === FREE_B
+      ? ok("Replacement worker stays in free pool")
+      : fail("Replacement worker stays in free pool", [
+          `relaunches=${run.sink.relaunches.length} worker=${run.sink.relaunches[0]?.worker}`,
+        ]),
+  )
+  const withQuarantine = resolveTier("balanced", MAIN, run.rt.unavailableModels())
+  allChecks.push(
+    withQuarantine !== undefined && withQuarantine.model !== FLASH && withQuarantine.model === FREE_B
+      ? ok("Resolver routes to free-b, not Flash, while free-b remains")
+      : fail("Resolver routes to free-b, not Flash, while free-b remains", [
+          withQuarantine ? `model=${withQuarantine.model}` : "no-eligible-candidate",
+        ]),
+  )
+
+  // (5) a fresh runtime sharing only the file remembers the quarantine
+  const freshAuditRoot = mkdtempSync(join(tmpdir(), "oma-e2e-rt-"))
+  traceDirs.push(freshAuditRoot)
+  const freshAudit = createGovernanceAuditWriter({ root: freshAuditRoot })
+  const freshRt = createDelegationFirstRuntime(freshAudit, { modelAvailabilityFilePath: availabilityFile })
+  const freshSink = makeSink()
+  freshRt.setRecoverySink({ cancel: freshSink.cancel, relaunch: freshSink.relaunch })
+  allChecks.push(
+    freshRt.unavailableModels().includes(FREE_A)
+      ? ok("Fresh runtime hydrates quarantine without a new mark")
+      : fail("Fresh runtime hydrates quarantine without a new mark", [
+          `unavailable=${freshRt.unavailableModels().join(",")}`,
+        ]),
+  )
+  allChecks.push(
+    freshSink.relaunches.length === 0
+      ? ok("Fresh runtime never re-attempts the disabled free model")
+      : fail("Fresh runtime never re-attempts the disabled free model", [`relaunches=${freshSink.relaunches.length}`]),
+  )
+  const freshResolution = resolveTier("balanced", MAIN, freshRt.unavailableModels())
+  allChecks.push(
+    freshResolution !== undefined && freshResolution.model !== FREE_A && freshResolution.model === FREE_B
+      ? ok("Fresh-runtime routing skips the disabled free model")
+      : fail("Fresh-runtime routing skips the disabled free model", [
+          freshResolution ? `model=${freshResolution.model}` : "no-eligible-candidate",
+        ]),
+  )
+  await freshAudit.flush()
+  freshRt.dispose()
+
+  // (6) Flash is never consumed while a free model remains eligible
+  allChecks.push(
+    run.sink.relaunches.every((record) => record.worker !== FLASH)
+      ? ok("Flash not consumed while a free model remains")
+      : fail("Flash not consumed while a free model remains", [
+          `relaunches=${run.sink.relaunches.map((record) => record.worker).join(",")}`,
+        ]),
+  )
+
+  // (7) paid Flash is reached only by free-pool exhaustion or explicit strong routing
+  run.rt.recordModelUnavailable("child-2", FREE_B, "Model is disabled")
+  events = await snapshot(run)
+  allChecks.push(
+    run.sink.relaunches.length === 2 && run.sink.relaunches[1]?.worker === FLASH
+      ? ok("Flash escalated only after free-pool exhaustion")
+      : fail("Flash escalated only after free-pool exhaustion", [
+          `relaunches=${run.sink.relaunches.map((record) => record.worker).join(",")}`,
+        ]),
+  )
+  allChecks.push(
+    countNamed(events, "worker_model_unavailable") === 2 && countNamed(events, "retry_chain_exhausted") === 0
+      ? ok("Both free models quarantined without chain exhaustion")
+      : fail("Both free models quarantined without chain exhaustion", [
+          `worker_model_unavailable=${countNamed(events, "worker_model_unavailable")} retry_chain_exhausted=${countNamed(events, "retry_chain_exhausted")}`,
+        ]),
+  )
+  const exhausted = resolveTier("balanced", MAIN, [FREE_A, FREE_B])
+  allChecks.push(
+    exhausted !== undefined && exhausted.model === FLASH && exhausted.escalated
+      ? ok("Resolver escalates to Flash after free-pool exhaustion")
+      : fail("Resolver escalates to Flash after free-pool exhaustion", [
+          exhausted ? `model=${exhausted.model} band=${exhausted.band}` : "no-eligible-candidate",
+        ]),
+  )
+  const explicitStrong = resolveTier("strong", MAIN)
+  allChecks.push(
+    explicitStrong !== undefined && explicitStrong.model === FLASH && explicitStrong.band === "strong_paid"
+      ? ok("Explicit strong routing resolves paid Flash")
+      : fail("Explicit strong routing resolves paid Flash", [
+          explicitStrong ? `model=${explicitStrong.model} band=${explicitStrong.band}` : "no-eligible-candidate",
+        ]),
+  )
+  const stillFree = resolveTier("balanced", MAIN)
+  allChecks.push(
+    stillFree !== undefined && stillFree.model !== FLASH && stillFree.band === "free"
+      ? ok("No Flash escalation while the free pool remains")
+      : fail("No Flash escalation while the free pool remains", [
+          stillFree ? `model=${stillFree.model} band=${stillFree.band}` : "no-eligible-candidate",
+        ]),
+  )
+
+  run.dispose()
   return { checks: allChecks, traceDirs }
 }
 
