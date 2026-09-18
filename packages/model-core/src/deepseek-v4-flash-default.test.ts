@@ -34,15 +34,20 @@ describe("DeepSeek V4 Flash default routing", () => {
     ])
   })
 
-  test("explore and librarian agent chains default to plain V4 Flash after Luna", () => {
+  test("explore, librarian, and sisyphus-junior agent chains lead with plain V4 Flash", () => {
     // given
-    for (const agentName of ["explore", "librarian"] as const) {
+    for (const agentName of ["explore", "librarian", "sisyphus-junior"] as const) {
       const chain = AGENT_MODEL_REQUIREMENTS[agentName].fallbackChain
 
       // when
       const deepseek = deepseekEntries(chain)
 
-      // then - plain flash is the DeepSeek fallback rung
+      // then - plain flash is the preferred first rung
+      expect(chain[0]).toEqual({
+        providers: ["deepseek"],
+        model: "deepseek-v4-flash",
+        variant: "max",
+      })
       expect(deepseek).toContainEqual({
         providers: ["deepseek"],
         model: "deepseek-v4-flash",

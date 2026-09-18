@@ -84,7 +84,7 @@ describe("createSisyphusJuniorAgentWithOverrides", () => {
       const result = createSisyphusJuniorAgentWithOverrides(override)
 
       // then
-      expect(SISYPHUS_JUNIOR_DEFAULTS.model).toBe("anthropic/claude-sonnet-5")
+      expect(SISYPHUS_JUNIOR_DEFAULTS.model).toBe("opencode/deepseek-v4-flash")
       expect(result.model).toBe(SISYPHUS_JUNIOR_DEFAULTS.model)
     })
 

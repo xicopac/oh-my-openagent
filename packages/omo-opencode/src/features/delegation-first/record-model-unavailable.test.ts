@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, describe, expect, test } from "bun:test"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { createDelegationFirstRuntime } from "./runtime"
 import type { ReplayableAssignment } from "./replay"
 import type { RelaunchOutcome } from "./runtime"
@@ -47,11 +50,24 @@ function fakeSink() {
   return { sink, cancelled, relaunches }
 }
 
+// Point every runtime at its own temp persistent store so quarantines never
+// reach the real ~/.omo/model-availability.json during tests.
+const availabilityDirs: string[] = []
+function tempAvailabilityFile(): string {
+  const dir = mkdtempSync(join(tmpdir(), "record-unavailable-availability-"))
+  availabilityDirs.push(dir)
+  return join(dir, "model-availability.json")
+}
+
+afterAll(() => {
+  for (const dir of availabilityDirs) rmSync(dir, { recursive: true, force: true })
+})
+
 describe("recordModelUnavailable (disabled-model hard-fail + auto-replace)", () => {
   test("marks the model unavailable and re-dispatches the next eligible worker", () => {
     //#given
     const { writer, events } = captureAudit()
-    const rt = createDelegationFirstRuntime(writer)
+    const rt = createDelegationFirstRuntime(writer, { modelAvailabilityFilePath: tempAvailabilityFile() })
     const { sink, relaunches } = fakeSink()
     rt.setRecoverySink(sink)
     rt.retainAssignment(makeAssignment([free("a/free-a"), free("b/free-b")]), "child1")
@@ -69,7 +85,7 @@ describe("recordModelUnavailable (disabled-model hard-fail + auto-replace)", () 
   test("hard-fails (cancel, no relaunch) when no eligible worker remains", () => {
     //#given
     const { writer, events } = captureAudit()
-    const rt = createDelegationFirstRuntime(writer)
+    const rt = createDelegationFirstRuntime(writer, { modelAvailabilityFilePath: tempAvailabilityFile() })
     const { sink, cancelled, relaunches } = fakeSink()
     rt.setRecoverySink(sink)
     rt.retainAssignment(makeAssignment([free("a/free-a")]), "child1")
@@ -86,7 +102,7 @@ describe("recordModelUnavailable (disabled-model hard-fail + auto-replace)", () 
   test("skips any model that is already unavailable when selecting the replacement", () => {
     //#given
     const { writer } = captureAudit()
-    const rt = createDelegationFirstRuntime(writer)
+    const rt = createDelegationFirstRuntime(writer, { modelAvailabilityFilePath: tempAvailabilityFile() })
     const { sink, relaunches } = fakeSink()
     rt.setRecoverySink(sink)
     rt.retainAssignment(makeAssignment([free("a/free-a"), free("b/disabled"), free("c/free-c")]), "child1")

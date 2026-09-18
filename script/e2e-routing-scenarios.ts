@@ -13,11 +13,12 @@
  */
 import { mkdtempSync, readFileSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 
 import { createGovernanceAuditWriter, type GovernanceAuditWriter } from "../packages/omo-opencode/src/shared/governance-audit"
 import {
   createDelegationFirstRuntime,
+  type DelegationFirstConfig,
   type DelegationFirstRuntime,
   type ReplayableAssignment,
 } from "../packages/omo-opencode/src/features/delegation-first"
@@ -101,14 +102,21 @@ type FailoverRun = {
   sink: Sink
   audit: GovernanceAuditWriter
   auditRoot: string
+  /** Persistent availability store backing this runtime (temp by default). */
+  availabilityRoot: string
   flush: () => Promise<void>
   dispose: () => void
 }
 
-function startRun(workers: WorkerCandidate[], assignmentID = "job"): FailoverRun {
+function startRun(workers: WorkerCandidate[], assignmentID = "job", cfg: DelegationFirstConfig = {}): FailoverRun {
   const auditRoot = mkdtempSync(join(tmpdir(), "oma-e2e-rt-"))
   const audit = createGovernanceAuditWriter({ root: auditRoot })
-  const rt = createDelegationFirstRuntime(audit)
+  // Isolate each scenario's quarantine store by default so quarantines never
+  // leak between scenarios through the user's real `~/.omo` store; an explicit
+  // `modelAvailabilityFilePath` (cross-runtime persistence) still wins.
+  const availabilityFile =
+    cfg.modelAvailabilityFilePath ?? join(mkdtempSync(join(tmpdir(), "oma-e2e-avail-")), "model-availability.json")
+  const rt = createDelegationFirstRuntime(audit, { ...cfg, modelAvailabilityFilePath: availabilityFile })
   const sink = makeSink()
   rt.setRecoverySink({ cancel: sink.cancel, relaunch: sink.relaunch })
   rt.retainAssignment(assignment(assignmentID, workers), "child-1")
@@ -119,6 +127,7 @@ function startRun(workers: WorkerCandidate[], assignmentID = "job"): FailoverRun
     sink,
     audit,
     auditRoot,
+    availabilityRoot: dirname(availabilityFile),
     flush: () => audit.flush(),
     dispose: () => {
       void audit.flush()
@@ -147,6 +156,7 @@ export async function runRuntimeScenarios(): Promise<{ checks: CheckResult[]; tr
   {
     const run = startRun([freeWorker("test/worker-disabled"), freeWorker("test/worker-ok")])
     traceDirs.push(run.auditRoot)
+    traceDirs.push(run.availabilityRoot)
 
     run.rt.recordModelUnavailable("child-1", "test/worker-disabled", "Model is disabled")
     let events = await snapshot(run)
@@ -207,6 +217,7 @@ export async function runRuntimeScenarios(): Promise<{ checks: CheckResult[]; tr
   {
     const run = startRun([freeWorker("test/worker-disabled"), freeWorker("test/worker-disabled-2"), freeWorker("test/worker-ok")])
     traceDirs.push(run.auditRoot)
+    traceDirs.push(run.availabilityRoot)
 
     run.rt.recordModelUnavailable("child-1", "test/worker-disabled", "Model is disabled")
     let events = await snapshot(run)
@@ -256,6 +267,7 @@ export async function runRuntimeScenarios(): Promise<{ checks: CheckResult[]; tr
   {
     const run = startRun([freeWorker("test/worker-disabled"), freeWorker("test/worker-disabled-2")])
     traceDirs.push(run.auditRoot)
+    traceDirs.push(run.availabilityRoot)
 
     run.rt.recordModelUnavailable("child-1", "test/worker-disabled", "Model is disabled")
     run.rt.recordModelUnavailable("child-2", "test/worker-disabled-2", "Model is disabled")
@@ -283,6 +295,7 @@ export async function runRuntimeScenarios(): Promise<{ checks: CheckResult[]; tr
   {
     const run = startRun([freeWorker("test/worker-disabled"), freeWorker("test/worker-ok")])
     traceDirs.push(run.auditRoot)
+    traceDirs.push(run.availabilityRoot)
 
     run.rt.recordModelUnavailable("child-1", "test/worker-disabled", "Model is disabled")
 

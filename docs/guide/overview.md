@@ -40,8 +40,8 @@ Want more control? Run `/ulw-plan` for interview-based planning, then `/ulw-exec
 You don't have to know model names to get a good main agent. Pick a profile by intent and omo picks the model:
 
 - **Capable**: the strongest generalist you have. Claude Fable 5.1, then Claude Opus 5, then Kimi K3, then GLM 5.3.
-- **Simple work**: fast and cheap for small, well-specified edits. GPT-5.6 Luna Fast, then DeepSeek V4 Flash, then Claude Haiku 4.5.
-- **Deep work**: maximum reasoning for hard problems. GPT-6 Astra, then GPT-5.6 Sol. Same chain the `deep` category runs.
+- **Simple work**: fast and cheap for small, well-specified edits. DeepSeek V4 Flash, then GPT-5.6 Luna Fast, then Claude Haiku 4.5.
+- **Deep work**: maximum reasoning for hard problems. DeepSeek V4 Flash, then GPT-6 Astra, then GPT-5.6 Sol. Same chain the `deep` category runs.
 
 Set one key in `omo.json`:
 
@@ -211,15 +211,15 @@ Override specific categories or curated agents in `omo.json`:
 
 **GPT models** (explicit reasoning, principle-driven):
 
-- GPT-6 Astra: OpenAI's most capable model; default for `plan-reviewer` (xhigh, high on Copilot), `ultrabrain` (max), `deep` (high), and `unspecified-high` (high), with `gpt-6-astra-fast` as the Fast-mode variant
+- GPT-6 Astra: OpenAI's most capable model; the fallback rung under Flash for `plan-reviewer` (xhigh, high on Copilot), `ultrabrain` (max), `deep` (high), and `unspecified-high` (high), with `gpt-6-astra-fast` as the Fast-mode variant
 - GPT-5.6 Sol: the GPT-recommended main-agent configuration; the fallback rung under Astra for `ultrabrain` (max) and `deep` (medium)
 - GPT-5.6 Terra: balanced mid-tier; second rung in `unspecified-low`
-- GPT 5.6 Luna Fast: fast and cheap; default for `explore` and `librarian`
+- GPT 5.6 Luna Fast: fast and cheap; the Luna fallback rung under Flash in `explore` and `librarian`
 
 **Other families**:
 
-- Grok 4.6: default for the `unspecified-low` category (xhigh)
-- DeepSeek V4 Flash: utility rung in `explore`, `librarian`, `quick`, and `unspecified-low`
+- DeepSeek V4 Flash: preferred default across child routing - `explore`, `librarian`, `sisyphus-junior`, and the `ultrabrain`, `deep`, `unspecified-low`, `unspecified-high` categories, plus the balanced/strong tiers; a non-reasoning utility rung in `quick`
+- Grok 4.6: second rung in the `unspecified-low` category (xhigh)
 
 See the [Agent-Model Matching Guide](./agent-model-matching.md) for the full chains, safe vs risky overrides, and the tuned-preset list.
 

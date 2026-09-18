@@ -37,6 +37,7 @@ import {
   countNamed,
   type CheckResult,
 } from "./e2e-routing-scenarios"
+import { runPersistenceScenarios } from "./e2e-routing-persistence-scenarios"
 
 const REPO_ROOT = join(import.meta.dir, "..")
 const MOCK_PATH = join(import.meta.dir, "e2e-routing", "mock-provider.mjs")
@@ -170,6 +171,7 @@ async function runWorkerFirstProcess(evidenceRoot: string): Promise<{ checks: Ch
     OPENCODE_DISABLE_AUTOUPDATE: "1",
     OPENCODE_DISABLE_MODELS_FETCH: "1",
     OMO_GOVERNANCE_DIR: gov,
+    OMO_MODEL_AVAILABILITY_FILE: join(state, "model-availability.json"),
   }
   const prompt = "OMA_E2E_WORKER_FIRST: find where OMA_E2E_WORKER_FIRST is handled and report it."
   const proc = spawn([findOpencode(), "run", "--format", "json", "--auto", "-m", "test/root", prompt], {
@@ -306,6 +308,11 @@ async function main(): Promise<void> {
   const runtime = await runRuntimeScenarios()
   checks.push(...runtime.checks)
   tempDirs.push(...runtime.traceDirs)
+
+  // Tier B2: cross-runtime persistence of the negative-availability quarantine
+  const persistence = await runPersistenceScenarios()
+  checks.push(...persistence.checks)
+  tempDirs.push(...persistence.traceDirs)
 
   // Tier A: process-level worker-first gate
   let procEnvRoot: string | undefined

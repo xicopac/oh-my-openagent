@@ -1284,7 +1284,7 @@ describe("buildAgent with category and skills", () => {
     const agent = resolveAgentSkills(buildAgent(source["test-agent"], TEST_MODEL))
 
     // #then - category's built-in model and skills are applied
-    expect(agent.model).toBe("openai/gpt-6-astra")
+    expect(agent.model).toBe("opencode/deepseek-v4-flash")
     expect(agent.variant).toBe("max")
     const prompt = agent.prompt ?? ""
     const skillContent = frontendSkillContent()
@@ -1431,9 +1431,9 @@ describe("override.category expansion in createBuiltinAgents", () => {
     // #when
     const agents = await createBuiltinAgents([], overrides, undefined, TEST_DEFAULT_MODEL)
 
-    // #then - ultrabrain category: model=openai/gpt-6-astra, variant=max
+    // #then - ultrabrain category: model=opencode/deepseek-v4-flash, variant=max
     expect(agents.oracle).toBeDefined()
-    expect(agents.oracle.model).toBe("openai/gpt-6-astra")
+    expect(agents.oracle.model).toBe("opencode/deepseek-v4-flash")
     expect(agents.oracle.variant).toBe("max")
   })
 
@@ -1500,9 +1500,9 @@ describe("override.category expansion in createBuiltinAgents", () => {
     // #when
     const agents = await createBuiltinAgents([], overrides, undefined, TEST_DEFAULT_MODEL)
 
-    // #then - ultrabrain category: model=openai/gpt-6-astra, variant=max
+    // #then - ultrabrain category: model=opencode/deepseek-v4-flash, variant=max
     expect(agents.sisyphus).toBeDefined()
-    expect(agents.sisyphus.model).toBe("openai/gpt-6-astra")
+    expect(agents.sisyphus.model).toBe("opencode/deepseek-v4-flash")
     expect(agents.sisyphus.variant).toBe("max")
   })
 
@@ -1515,9 +1515,9 @@ describe("override.category expansion in createBuiltinAgents", () => {
     // #when
     const agents = await createBuiltinAgents([], overrides, undefined, TEST_DEFAULT_MODEL)
 
-    // #then - ultrabrain category: model=openai/gpt-6-astra, variant=max
+    // #then - ultrabrain category: model=opencode/deepseek-v4-flash, variant=max
     expect(agents.atlas).toBeDefined()
-    expect(agents.atlas.model).toBe("openai/gpt-6-astra")
+    expect(agents.atlas.model).toBe("opencode/deepseek-v4-flash")
     expect(agents.atlas.variant).toBe("max")
   })
 

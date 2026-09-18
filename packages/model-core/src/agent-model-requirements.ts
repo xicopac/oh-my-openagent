@@ -52,8 +52,8 @@ export const AGENT_MODEL_REQUIREMENTS: Record<string, ModelRequirement> = {
   },
   librarian: {
     fallbackChain: [
-      { providers: ["openai", "openai-codex"], model: "gpt-5.6-luna-fast", variant: "low" },
       { providers: ["deepseek"], model: "deepseek-v4-flash", variant: "max" },
+      { providers: ["openai", "openai-codex"], model: "gpt-5.6-luna-fast", variant: "low" },
       { providers: ["opencode-go", "bailian-coding-plan"], model: "qwen3.7-plus" },
       { providers: ["opencode-go"], model: "minimax-m3" },
       { providers: ["minimax-coding-plan", "minimax-cn-coding-plan"], model: "MiniMax-M3" },
@@ -64,8 +64,8 @@ export const AGENT_MODEL_REQUIREMENTS: Record<string, ModelRequirement> = {
   },
   explore: {
     fallbackChain: [
-      { providers: ["openai", "openai-codex"], model: "gpt-5.6-luna-fast", variant: "low" },
       { providers: ["deepseek"], model: "deepseek-v4-flash", variant: "max" },
+      { providers: ["openai", "openai-codex"], model: "gpt-5.6-luna-fast", variant: "low" },
       { providers: ["opencode-go", "bailian-coding-plan"], model: "qwen3.7-plus" },
       { providers: ["opencode-go"], model: "minimax-m3" },
       { providers: ["minimax-coding-plan", "minimax-cn-coding-plan"], model: "MiniMax-M3" },
@@ -149,6 +149,7 @@ export const AGENT_MODEL_REQUIREMENTS: Record<string, ModelRequirement> = {
   },
   "sisyphus-junior": {
     fallbackChain: [
+      { providers: ["deepseek"], model: "deepseek-v4-flash", variant: "max" },
       { providers: ["anthropic", "github-copilot", "opencode"], model: "claude-sonnet-5" },
       { providers: ["opencode-go"], model: "kimi-k3" },
       {

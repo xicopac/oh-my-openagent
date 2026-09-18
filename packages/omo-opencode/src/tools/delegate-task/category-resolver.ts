@@ -172,7 +172,13 @@ Available categories: ${allCategoryNames}`)
           : {}),
       })
       if (dynamic.kind === "resolved") {
-        dynamicCategoryModel = dynamic.model
+        // A main_equiv escalation (usedMainModel) means the live pool held no candidate suitable
+        // for the category's tier, so the band resolver fell back to the parent session model.
+        // Categories carry explicit defaults and must not inherit the parent model, so skip the
+        // escalation and let the category-default resolution below win.
+        if (!dynamic.usedMainModel) {
+          dynamicCategoryModel = dynamic.model
+        }
       } else if (dynamic.kind === "no-eligible-candidate" && !dynamic.livePoolEmpty) {
         return categoryResolutionError(
           `No enabled model satisfies role requirements for category "${args.category!}" (tier "${roleRequirement.defaultTier}"). ` +

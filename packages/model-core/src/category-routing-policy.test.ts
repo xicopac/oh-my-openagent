@@ -30,7 +30,7 @@ describe("category routing policy", () => {
     ])
   })
 
-  test("deep is limited to a single sol-family medium rung", () => {
+  test("deep leads with DeepSeek V4 Flash max before the sol-family fallbacks", () => {
     // given
     const deep = CATEGORY_MODEL_REQUIREMENTS["deep"]
 
@@ -39,6 +39,11 @@ describe("category routing policy", () => {
 
     // then
     expect(chain).toEqual([
+      {
+        providers: ["deepseek", "opencode-go"],
+        model: "deepseek-v4-flash",
+        variant: "max",
+      },
       {
         providers: ["openai", "openai-codex", "github-copilot", "opencode"],
         model: "gpt-6-astra",
@@ -102,7 +107,7 @@ describe("category routing policy", () => {
     ])
   })
 
-  test("unspecified-low follows the approved 6-rung chain headed by grok-4.6 xhigh", () => {
+  test("unspecified-low follows the approved 6-rung chain headed by DeepSeek V4 Flash max", () => {
     // given
     const unspecifiedLow = CATEGORY_MODEL_REQUIREMENTS["unspecified-low"]
 
@@ -112,6 +117,11 @@ describe("category routing policy", () => {
     // then
     expect(chain.map((entry) => entry.model)).not.toContain("gpt-5.6-luna")
     expect(chain).toEqual([
+      {
+        providers: ["deepseek", "opencode-go"],
+        model: "deepseek-v4-flash",
+        variant: "max",
+      },
       {
         providers: ["xai", "github-copilot", "opencode"],
         model: "grok-4.6",
@@ -130,11 +140,6 @@ describe("category routing policy", () => {
       {
         providers: ["qwen-token-plan", "alibaba-token-plan", "qwen-token-plan-cn", "alibaba-token-plan-cn"],
         model: "qwen3.8-max-preview",
-        variant: "max",
-      },
-      {
-        providers: ["deepseek", "opencode-go"],
-        model: "deepseek-v4-flash",
         variant: "max",
       },
       {
@@ -158,6 +163,11 @@ describe("category routing policy", () => {
 
     // then
     expect(highChain).toEqual([
+      {
+        providers: ["deepseek", "opencode-go"],
+        model: "deepseek-v4-flash",
+        variant: "max",
+      },
       {
         providers: ["openai", "openai-codex", "github-copilot", "opencode"],
         model: "gpt-6-astra",

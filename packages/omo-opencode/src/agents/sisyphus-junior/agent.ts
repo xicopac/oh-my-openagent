@@ -41,7 +41,7 @@ const MODE: AgentMode = "subagent"
 const BLOCKED_TOOLS = ["task"]
 
 export const SISYPHUS_JUNIOR_DEFAULTS = {
-  model: "anthropic/claude-sonnet-5",
+  model: "opencode/deepseek-v4-flash",
   temperature: 0.1,
 } as const
 

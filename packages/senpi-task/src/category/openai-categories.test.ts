@@ -98,15 +98,15 @@ describe("category prompt append resolvers", () => {
 })
 
 describe("GPT-6 Astra builtin defaults and gates", () => {
-  it("#given the builtin definitions #then ultrabrain runs Astra at max, deep and unspecified-high at high", () => {
-    expect(definition("ultrabrain").config).toEqual({ model: "openai/gpt-6-astra", variant: "max" })
-    expect(definition("deep").config).toEqual({ model: "openai/gpt-6-astra", variant: "high" })
-    expect(definition("unspecified-high").config).toEqual({ model: "openai/gpt-6-astra", variant: "high" })
+  it("#given the builtin definitions #then ultrabrain, deep, and unspecified-high default to DeepSeek V4 Flash at max", () => {
+    expect(definition("ultrabrain").config).toEqual({ model: "opencode/deepseek-v4-flash", variant: "max" })
+    expect(definition("deep").config).toEqual({ model: "opencode/deepseek-v4-flash", variant: "max" })
+    expect(definition("unspecified-high").config).toEqual({ model: "opencode/deepseek-v4-flash", variant: "max" })
   })
 
-  it("#given the GPT flagship gate #then ultrabrain and deep open on either Astra or Sol and unspecified-high is ungated", () => {
-    expect(definition("ultrabrain").requiresModel).toEqual(["gpt-6-astra", "gpt-5.6-sol"])
-    expect(definition("deep").requiresModel).toEqual(["gpt-6-astra", "gpt-5.6-sol"])
+  it("#given the gate #then ultrabrain and deep open on Astra, Sol, or DeepSeek V4 Flash and unspecified-high is ungated", () => {
+    expect(definition("ultrabrain").requiresModel).toEqual(["gpt-6-astra", "gpt-5.6-sol", "deepseek-v4-flash"])
+    expect(definition("deep").requiresModel).toEqual(["gpt-6-astra", "gpt-5.6-sol", "deepseek-v4-flash"])
     expect(definition("unspecified-high").requiresModel).toBeUndefined()
   })
 })

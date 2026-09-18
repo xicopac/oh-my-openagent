@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test"
 import { CATEGORY_MODEL_REQUIREMENTS } from "./model-requirements"
 
 describe("CATEGORY_MODEL_REQUIREMENTS", () => {
-  test("ultrabrain routes GPT-6 Astra max before the existing Sol max fallbacks", () => {
+  test("ultrabrain routes plain DeepSeek V4 Flash max before the GPT-6 Astra max and Sol max fallbacks", () => {
     expect(CATEGORY_MODEL_REQUIREMENTS.ultrabrain.fallbackChain).toEqual([
+      { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-flash", variant: "max" },
       { providers: ["openai", "openai-codex"], model: "gpt-6-astra", variant: "max" },
       { providers: ["github-copilot"], model: "gpt-6-astra", variant: "max" },
       { providers: ["openai", "openai-codex", "opencode"], model: "gpt-6-astra", variant: "max" },
@@ -40,8 +41,9 @@ describe("CATEGORY_MODEL_REQUIREMENTS", () => {
     ])
   })
 
-  test("deep routes GPT-6 Astra high before the Sol medium fallback", () => {
+  test("deep routes plain DeepSeek V4 Flash max before the GPT-6 Astra high and Sol medium fallbacks", () => {
     expect(CATEGORY_MODEL_REQUIREMENTS.deep.fallbackChain).toEqual([
+      { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-flash", variant: "max" },
       { providers: ["openai", "openai-codex", "github-copilot", "opencode"], model: "gpt-6-astra", variant: "high" },
       { providers: ["openai", "openai-codex", "github-copilot", "opencode"], model: "gpt-5.6-sol", variant: "medium" },
     ])
@@ -147,7 +149,7 @@ describe("CATEGORY_MODEL_REQUIREMENTS", () => {
     ])
   })
 
-  test("unspecified-low follows the approved 6-rung chain headed by grok-4.6 xhigh", () => {
+  test("unspecified-low follows the approved 6-rung chain headed by DeepSeek V4 Flash max", () => {
     // given
     const requirement = CATEGORY_MODEL_REQUIREMENTS["unspecified-low"]
 
@@ -156,6 +158,11 @@ describe("CATEGORY_MODEL_REQUIREMENTS", () => {
 
     // then
     expect(chain).toEqual([
+      {
+        providers: ["deepseek", "opencode-go"],
+        model: "deepseek-v4-flash",
+        variant: "max",
+      },
       {
         providers: ["xai", "github-copilot", "opencode"],
         model: "grok-4.6",
@@ -177,11 +184,6 @@ describe("CATEGORY_MODEL_REQUIREMENTS", () => {
         variant: "max",
       },
       {
-        providers: ["deepseek", "opencode-go"],
-        model: "deepseek-v4-flash",
-        variant: "max",
-      },
-      {
         providers: ["xiaomi", "opencode-go"],
         model: "mimo-v2.5-pro",
         variant: "max",
@@ -189,7 +191,7 @@ describe("CATEGORY_MODEL_REQUIREMENTS", () => {
     ])
   })
 
-  test("unspecified-high follows the approved Astra-first 4-rung chain", () => {
+  test("unspecified-high follows the approved Flash-first 4-rung chain", () => {
     // given
     const requirement = CATEGORY_MODEL_REQUIREMENTS["unspecified-high"]
 
@@ -198,6 +200,11 @@ describe("CATEGORY_MODEL_REQUIREMENTS", () => {
 
     // then
     expect(chain).toEqual([
+      {
+        providers: ["deepseek", "opencode-go"],
+        model: "deepseek-v4-flash",
+        variant: "max",
+      },
       {
         providers: ["openai", "openai-codex", "github-copilot", "opencode"],
         model: "gpt-6-astra",

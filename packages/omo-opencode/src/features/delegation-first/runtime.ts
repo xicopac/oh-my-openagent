@@ -54,6 +54,7 @@ import {
 import { recommendFailoverAction, type RedispatchAction } from "./failover"
 import { selectNextEligibleWorker } from "./availability-failover"
 import { createModelAvailabilityCache, type ModelAvailabilityCache } from "./model-availability-cache"
+import { resolveModelAvailabilityFilePath } from "./persistent-model-availability"
 import {
   buildReplacementPrompt,
   initialLineage,
@@ -70,6 +71,9 @@ export type DelegationFirstConfig = {
   grunt?: Partial<GruntGuardOptions>
   // Live pricing catalog used to derive a free-worker hint for the early gate.
   pricing?: PricingCatalog
+  // Persistent negative-availability store path; defaults to env
+  // `OMO_MODEL_AVAILABILITY_FILE` or `~/.omo/model-availability.json`.
+  modelAvailabilityFilePath?: string
 }
 
 /** Result of a governed replacement-child re-dispatch. */
@@ -116,6 +120,8 @@ export type DelegationFirstRuntime = {
   recordModelUnavailable(sessionID: string, modelKey: string, reason: string): void
   /** Live set of models currently marked unavailable (for candidate filtering). */
   unavailableModels(): string[]
+  /** Absolute path of the persistent negative-availability store. */
+  getAvailabilityFilePath(): string
   setRecoverySink(sink: RecoverySink): void
   /** Evaluate a timed-out stall and reclaim it (cancel + governed re-dispatch) automatically. */
   reclaimStalled(sessionID: string, providerModel: string | null, nowMs?: number): void
@@ -187,7 +193,10 @@ export function createDelegationFirstRuntime(
   })
 
   const recovery: RecoveryCoordinator = createRecoveryCoordinator()
-  const availability: ModelAvailabilityCache = createModelAvailabilityCache()
+  const availabilityFilePath = resolveModelAvailabilityFilePath(cfg.modelAvailabilityFilePath)
+  const availability: ModelAvailabilityCache = createModelAvailabilityCache({
+    persistentFilePath: availabilityFilePath,
+  })
   let sink: RecoverySink | undefined
 
   const gruntOptions: GruntGuardOptions = { ...DEFAULT_GRUNT_GUARD_OPTIONS, ...cfg.grunt }
@@ -542,6 +551,9 @@ export function createDelegationFirstRuntime(
     },
     unavailableModels() {
       return availability.unavailableKeys()
+    },
+    getAvailabilityFilePath() {
+      return availabilityFilePath
     },
     setRecoverySink(next) {
       sink = next

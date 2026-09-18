@@ -37,6 +37,7 @@ export const CATEGORY_FALLBACK_CHAINS: Readonly<Record<string, readonly Delegate
     }
   ],
   ultrabrain: [
+    { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-flash", variant: "max" },
     { providers: ["openai", "openai-codex"], model: "gpt-6-astra", variant: "max" },
     { providers: ["github-copilot"], model: "gpt-6-astra", variant: "max" },
     { providers: ["openai", "openai-codex", "opencode"], model: "gpt-6-astra", variant: "max" },
@@ -45,6 +46,7 @@ export const CATEGORY_FALLBACK_CHAINS: Readonly<Record<string, readonly Delegate
     { providers: ["openai", "openai-codex", "opencode"], model: "gpt-5.6-sol", variant: "max" }
   ],
   deep: [
+    { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-flash", variant: "max" },
     {
       providers: ["openai", "openai-codex", "github-copilot", "opencode"],
       model: "gpt-6-astra",
@@ -92,6 +94,7 @@ export const CATEGORY_FALLBACK_CHAINS: Readonly<Record<string, readonly Delegate
     }
   ],
   "unspecified-low": [
+    { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-flash", variant: "max" },
     { providers: ["xai", "github-copilot", "opencode"], model: "grok-4.6", variant: "xhigh" },
     {
       providers: ["openai", "openai-codex", "github-copilot", "opencode"],
@@ -108,10 +111,10 @@ export const CATEGORY_FALLBACK_CHAINS: Readonly<Record<string, readonly Delegate
       model: "qwen3.8-max-preview",
       variant: "max",
     },
-    { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-flash", variant: "max" },
     { providers: ["xiaomi", "opencode-go"], model: "mimo-v2.5-pro", variant: "max" }
   ],
   "unspecified-high": [
+    { providers: ["deepseek", "opencode-go"], model: "deepseek-v4-flash", variant: "max" },
     {
       providers: ["openai", "openai-codex", "github-copilot", "opencode"],
       model: "gpt-6-astra",

@@ -107,7 +107,11 @@ describe("worker-first hard gate (runtime preGruntCheck)", () => {
   function makeRuntime(): { rt: DelegationFirstRuntime; audit: GovernanceAuditWriter; root: string } {
     const root = mkdtempSync(join(tmpdir(), "worker-first-"))
     const audit = createGovernanceAuditWriter({ root })
-    const rt = createDelegationFirstRuntime(audit)
+    // Quarantines go to a temp store inside the audit root (cleaned with it) so
+    // recordModelUnavailable never touches the real ~/.omo/model-availability.json.
+    const rt = createDelegationFirstRuntime(audit, {
+      modelAvailabilityFilePath: join(root, "model-availability.json"),
+    })
     return { rt, audit, root }
   }
 
@@ -269,16 +273,28 @@ describe("worker-first hard gate (runtime preGruntCheck)", () => {
 })
 
 describe("worker lifecycle (successful dispatch requirement)", () => {
-  function makeRuntime(): { rt: DelegationFirstRuntime; audit: GovernanceAuditWriter; root: string } {
+  function makeRuntime(): {
+    rt: DelegationFirstRuntime
+    audit: GovernanceAuditWriter
+    root: string
+    availabilityDir: string
+  } {
     const root = mkdtempSync(join(tmpdir(), "worker-lifecycle-"))
+    // Quarantines live in a separate temp dir so recordModelUnavailable never
+    // touches the real ~/.omo/model-availability.json and never pollutes the
+    // audit journal root scanned by readEventNames.
+    const availabilityDir = mkdtempSync(join(tmpdir(), "worker-lifecycle-availability-"))
     const audit = createGovernanceAuditWriter({ root })
-    const rt = createDelegationFirstRuntime(audit)
-    return { rt, audit, root }
+    const rt = createDelegationFirstRuntime(audit, {
+      modelAvailabilityFilePath: join(availabilityDir, "model-availability.json"),
+    })
+    return { rt, audit, root, availabilityDir }
   }
 
-  function cleanup(r: { rt: DelegationFirstRuntime; root: string }): void {
+  function cleanup(r: { rt: DelegationFirstRuntime; root: string; availabilityDir: string }): void {
     r.rt.dispose()
     rmSync(r.root, { recursive: true, force: true })
+    rmSync(r.availabilityDir, { recursive: true, force: true })
   }
 
   test("9. successful child launch (request-started) satisfies the requirement", () => {
