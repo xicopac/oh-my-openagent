@@ -54,6 +54,7 @@ import {
 import { recommendFailoverAction, type RedispatchAction } from "./failover"
 import { selectNextEligibleWorker } from "./availability-failover"
 import { createModelAvailabilityCache, type ModelAvailabilityCache } from "./model-availability-cache"
+import { createPaidWorkerGate } from "../../tools/delegate-task/paid-worker-gate"
 import { resolveModelAvailabilityFilePath } from "./persistent-model-availability"
 import {
   buildReplacementPrompt,
@@ -74,6 +75,8 @@ export type DelegationFirstConfig = {
   // Persistent negative-availability store path; defaults to env
   // `OMO_MODEL_AVAILABILITY_FILE` or `~/.omo/model-availability.json`.
   modelAvailabilityFilePath?: string
+  /** COST-SAFETY: maximum concurrent paid child requests (default 1). */
+  maxConcurrentPaidWorkers?: number
 }
 
 /** Result of a governed replacement-child re-dispatch. */
@@ -123,6 +126,12 @@ export type DelegationFirstRuntime = {
   /** Absolute path of the persistent negative-availability store. */
   getAvailabilityFilePath(): string
   setRecoverySink(sink: RecoverySink): void
+  /** COST-SAFETY: reserve one paid-child slot (false when at the cap). */
+  tryAcquirePaidChild(): boolean
+  /** COST-SAFETY: mark a launched child session as paid so detach releases its slot. */
+  markPaidChildSession(sessionID: string): void
+  /** COST-SAFETY: release a paid-child slot directly (sync/terminal paths). */
+  releasePaidChild(): void
   /** Evaluate a timed-out stall and reclaim it (cancel + governed re-dispatch) automatically. */
   reclaimStalled(sessionID: string, providerModel: string | null, nowMs?: number): void
   watchdogActivity(sessionID: string): void
@@ -198,6 +207,8 @@ export function createDelegationFirstRuntime(
     persistentFilePath: availabilityFilePath,
   })
   let sink: RecoverySink | undefined
+  const paidGate = createPaidWorkerGate(cfg.maxConcurrentPaidWorkers ?? 1)
+  const paidSessions = new Set<string>()
 
   const gruntOptions: GruntGuardOptions = { ...DEFAULT_GRUNT_GUARD_OPTIONS, ...cfg.grunt }
 
@@ -418,6 +429,10 @@ export function createDelegationFirstRuntime(
       }
     },
     detachChildSession(childSessionID) {
+      if (paidSessions.has(childSessionID)) {
+        paidSessions.delete(childSessionID)
+        paidGate.release()
+      }
       if (replacementSessions.has(childSessionID)) {
         const snapshot = watchdog.snapshot(childSessionID)
         const assignmentID = sessionToAssignment.get(childSessionID)
@@ -554,6 +569,15 @@ export function createDelegationFirstRuntime(
     },
     getAvailabilityFilePath() {
       return availabilityFilePath
+    },
+    tryAcquirePaidChild() {
+      return paidGate.tryAcquire()
+    },
+    markPaidChildSession(sessionID) {
+      paidSessions.add(sessionID)
+    },
+    releasePaidChild() {
+      paidGate.release()
     },
     setRecoverySink(next) {
       sink = next

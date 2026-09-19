@@ -42,6 +42,9 @@ describe("resolveCategoryExecution", () => {
 		directory: "/tmp/test",
 		userCategories: {},
 		sisyphusJuniorModel: undefined,
+		// Fixtures exercise paid category-resolution mechanics; the free-only
+		// cost-safety default is covered by the dedicated cost-safety tests.
+		modelRouting: { allow_paid_workers: true },
 	})
 
 	test("returns unpinned resolution when category cache is not ready on first run", async () => {

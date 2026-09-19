@@ -112,6 +112,7 @@ export async function executeBackgroundTask(
   categoryModel: DelegatedModelConfig | undefined,
   systemContent: string | undefined,
   fallbackChain?: FallbackEntry[],
+  paidSlotAcquired = false,
 ): Promise<string> {
   const { manager } = executorCtx
 
@@ -186,6 +187,13 @@ export async function executeBackgroundTask(
         category: args.category,
         modelFallbackControllerAccessor: executorCtx.modelFallbackControllerAccessor,
       })
+      // COST-SAFETY: only a child that actually acquired a paid slot holds it
+      // until the session detaches (runtime releases it in detachChildSession).
+      // Free children are never marked paid, so their detach cannot consume a
+      // slot owned by an unrelated paid child.
+      if (paidSlotAcquired && executorCtx.delegationFirstRuntime) {
+        executorCtx.delegationFirstRuntime.markPaidChildSession(sessionId)
+      }
     }
 
     if (executorCtx.delegationFirstRuntime && executorCtx.pricingCatalog) {

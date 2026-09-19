@@ -5,6 +5,8 @@ import { log } from "../../shared/logger"
 import { parseModelString } from "../../shared/model-string-parser"
 import { getModelsWithPricingAndMetadataForDelegateTask, getEnabledModelState } from "./available-models"
 import { filterEnabledModelKeys } from "../../shared/model-enable-state"
+import { isFreePricing } from "../../hooks/resource-governor/pricing"
+import { paidWorkerGate } from "./paid-worker-gate"
 import { buildSystemContent } from "./prompt-builder"
 import {
   resolveSkillContent,
@@ -230,6 +232,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
           mainPricing,
           pinned,
           unavailable,
+          allowPaidWorkers: modelOptions.modelRouting?.allow_paid_workers ?? false,
         })
         if (!resolved) {
           log("[delegate-task] model_tier requested but unresolved; keeping existing resolution", {
@@ -325,22 +328,50 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         nativeSkillInfos,
       })
 
+      // COST-SAFETY: when the resolved child model is paid, acquire a paid-child
+      // slot. Free-only children are not gated. With allow_paid_workers true the
+      // slot is capped at max_concurrent_paid_workers (default 1); without paid
+      // permission the resolver already refuses paid models.
+      const resolvedPaidKey = categoryModel?.modelID
+        ? resolvedModelKey(categoryModel.providerID, categoryModel.modelID)
+        : null
+      const allowPaidWorkers = modelOptions.modelRouting?.allow_paid_workers ?? false
+      let paidSlotAcquired = false
+      if (resolvedPaidKey && allowPaidWorkers) {
+        const price = options.pricingCatalog?.[resolvedPaidKey]
+        const isPaid = price === undefined || !isFreePricing(price)
+        if (isPaid) {
+          const gate = options.delegationFirstRuntime
+          const ok = gate
+            ? gate.tryAcquirePaidChild()
+            : paidWorkerGate.tryAcquire()
+          if (!ok) {
+            return `PAID_WORKER_CONCURRENCY_LIMIT: maximum ${modelOptions.modelRouting?.max_concurrent_paid_workers ?? 1} concurrent paid child request(s) reached. Wait for an existing paid child to finish, then retry.`
+          }
+          paidSlotAcquired = true
+        }
+      }
+
       if (runInBackground) {
-        return executeBackgroundTask(delegateTaskArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, fallbackChain)
+        return executeBackgroundTask(delegateTaskArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, fallbackChain, paidSlotAcquired)
       }
 
       if (options.delegationFirstRuntime) {
-        return runDelegationFirstSync({
-          options,
-          ctx,
-          args: delegateTaskArgs,
-          parentContext,
-          agentToUse,
-          categoryModel,
-          systemContent,
-          modelInfo,
-          fallbackChain,
-        })
+        try {
+          return await runDelegationFirstSync({
+            options,
+            ctx,
+            args: delegateTaskArgs,
+            parentContext,
+            agentToUse,
+            categoryModel,
+            systemContent,
+            modelInfo,
+            fallbackChain,
+          })
+        } finally {
+          if (paidSlotAcquired) options.delegationFirstRuntime.releasePaidChild()
+        }
       }
 
       const enforcement = enforceResourceGovernor(
@@ -356,6 +387,11 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
       try {
         return await executeSyncTask(delegateTaskArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, modelInfo, fallbackChain, undefined, enforcement.backstop)
       } finally {
+        if (paidSlotAcquired) {
+          // This path runs only without a delegation-first runtime (that branch
+          // returns earlier), so the module gate always owns the slot here.
+          paidWorkerGate.release()
+        }
         if (enforcement.escrowID !== null) {
           options.resourceGovernorRuntime?.settleChild(ctx.sessionID, enforcement.escrowID, "completed")
         }

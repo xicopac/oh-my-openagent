@@ -29,6 +29,7 @@ import {
   type ModelBandPricing,
   type ModelTier,
 } from "../packages/delegate-core/src/model-band"
+import { createPaidWorkerGate } from "../packages/omo-opencode/src/tools/delegate-task/paid-worker-gate"
 
 export type CheckResult = { name: string; passed: boolean; failures: string[] }
 
@@ -354,7 +355,7 @@ export async function runRoutingCostPolicyScenario(): Promise<{ checks: CheckRes
     [FREE_A]: FREE_PRICE,
     [FREE_B]: FREE_PRICE,
   }
-  const resolveTier = (tier: ModelTier, mainModel: string, extraUnavailable?: Iterable<string>) =>
+  const resolveTier = (tier: ModelTier, mainModel: string, extraUnavailable?: Iterable<string>, allowPaidWorkers = false) =>
     resolveModelBand({
       requestedTier: tier,
       candidates: [
@@ -365,14 +366,23 @@ export async function runRoutingCostPolicyScenario(): Promise<{ checks: CheckRes
       mainModel,
       mainPricing: PRICING[mainModel],
       unavailable: new Set(extraUnavailable ?? []),
+      allowPaidWorkers,
     })
 
-  // (1) the root stays on paid Flash
-  const root = resolveTier("strong", FLASH)
+  // (1) the root stays on paid Flash only with explicit paid permission
+  const root = resolveTier("strong", FLASH, undefined, true)
   allChecks.push(
     root !== undefined && root.model === FLASH
-      ? ok("Root (MAIN) uses Flash")
-      : fail("Root (MAIN) uses Flash", [root ? `model=${root.model} band=${root.band}` : "no-eligible-candidate"]),
+      ? ok("Root paid model allowed with explicit permission")
+      : fail("Root paid model allowed with explicit permission", [root ? `model=${root.model} band=${root.band}` : "no-eligible-candidate"]),
+  )
+  const rootFreeOnly = resolveTier("strong", FLASH)
+  allChecks.push(
+    rootFreeOnly === undefined || rootFreeOnly.band === "free"
+      ? ok("Child strong tier without paid permission stays free-only")
+      : fail("Child strong tier without paid permission stays free-only", [
+          rootFreeOnly ? `model=${rootFreeOnly.model} band=${rootFreeOnly.band}` : "no-eligible-candidate",
+        ]),
   )
 
   // (2) an ordinary balanced worker resolves into the free pool, not Flash
@@ -494,18 +504,34 @@ export async function runRoutingCostPolicyScenario(): Promise<{ checks: CheckRes
   )
   const exhausted = resolveTier("balanced", MAIN, [FREE_A, FREE_B])
   allChecks.push(
-    exhausted !== undefined && exhausted.model === FLASH && exhausted.escalated
-      ? ok("Resolver escalates to Flash after free-pool exhaustion")
-      : fail("Resolver escalates to Flash after free-pool exhaustion", [
+    exhausted === undefined
+      ? ok("Free exhaustion blocks paid escalation by default")
+      : fail("Free exhaustion blocks paid escalation by default", [
           exhausted ? `model=${exhausted.model} band=${exhausted.band}` : "no-eligible-candidate",
         ]),
   )
-  const explicitStrong = resolveTier("strong", MAIN)
+  const exhaustedPaid = resolveTier("balanced", MAIN, [FREE_A, FREE_B], true)
+  allChecks.push(
+    exhaustedPaid !== undefined && exhaustedPaid.model === FLASH && exhaustedPaid.escalated
+      ? ok("Free exhaustion escalates to Flash with explicit paid permission")
+      : fail("Free exhaustion escalates to Flash with explicit paid permission", [
+          exhaustedPaid ? `model=${exhaustedPaid.model} band=${exhaustedPaid.band}` : "no-eligible-candidate",
+        ]),
+  )
+  const explicitStrong = resolveTier("strong", MAIN, undefined, true)
   allChecks.push(
     explicitStrong !== undefined && explicitStrong.model === FLASH && explicitStrong.band === "strong_paid"
-      ? ok("Explicit strong routing resolves paid Flash")
-      : fail("Explicit strong routing resolves paid Flash", [
+      ? ok("Explicit strong routing resolves paid Flash with permission")
+      : fail("Explicit strong routing resolves paid Flash with permission", [
           explicitStrong ? `model=${explicitStrong.model} band=${explicitStrong.band}` : "no-eligible-candidate",
+        ]),
+  )
+  const masterFreeOnly = resolveTier("master", MAIN)
+  allChecks.push(
+    masterFreeOnly === undefined || masterFreeOnly.band === "free"
+      ? ok("Master tier does not imply paid permission")
+      : fail("Master tier does not imply paid permission", [
+          masterFreeOnly ? `model=${masterFreeOnly.model} band=${masterFreeOnly.band}` : "no-eligible-candidate",
         ]),
   )
   const stillFree = resolveTier("balanced", MAIN)
@@ -515,6 +541,18 @@ export async function runRoutingCostPolicyScenario(): Promise<{ checks: CheckRes
       : fail("No Flash escalation while the free pool remains", [
           stillFree ? `model=${stillFree.model} band=${stillFree.band}` : "no-eligible-candidate",
         ]),
+  )
+
+  // (8) paid child concurrency is capped at 1 by default
+  const gate = createPaidWorkerGate()
+  const g1 = gate.tryAcquire()
+  const g2 = gate.tryAcquire()
+  gate.release()
+  const g3 = gate.tryAcquire()
+  allChecks.push(
+    g1 === true && g2 === false && g3 === true
+      ? ok("Paid child concurrency capped at 1")
+      : fail("Paid child concurrency capped at 1", [`g1=${g1} g2=${g2} g3=${g3}`]),
   )
 
   run.dispose()

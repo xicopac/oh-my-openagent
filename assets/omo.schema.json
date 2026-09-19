@@ -2242,6 +2242,16 @@
             "enabled": {
               "type": "boolean"
             },
+            "allow_paid_workers": {
+              "default": false,
+              "type": "boolean"
+            },
+            "max_concurrent_paid_workers": {
+              "default": 1,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
             "tiers": {
               "type": "object",
               "properties": {
@@ -2297,6 +2307,10 @@
               "additionalProperties": false
             }
           },
+          "required": [
+            "allow_paid_workers",
+            "max_concurrent_paid_workers"
+          ],
           "additionalProperties": false
         },
         "agents": {
@@ -18325,6 +18339,16 @@
                   "enabled": {
                     "type": "boolean"
                   },
+                  "allow_paid_workers": {
+                    "default": false,
+                    "type": "boolean"
+                  },
+                  "max_concurrent_paid_workers": {
+                    "default": 1,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
                   "tiers": {
                     "type": "object",
                     "properties": {
@@ -18380,6 +18404,10 @@
                     "additionalProperties": false
                   }
                 },
+                "required": [
+                  "allow_paid_workers",
+                  "max_concurrent_paid_workers"
+                ],
                 "additionalProperties": false
               },
               "agents": {

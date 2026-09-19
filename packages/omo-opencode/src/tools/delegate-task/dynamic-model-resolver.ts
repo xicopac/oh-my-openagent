@@ -47,6 +47,7 @@ export type ResolveDynamicWorkerModelInput = {
   pricingCatalog?: PricingCatalog
   /** Additional unavailable model keys (runtime negative cache). */
   extraUnavailable?: Iterable<string>
+  allowPaidWorkers?: boolean
 }
 
 export type DynamicWorkerResolution =
@@ -126,6 +127,7 @@ export async function resolveDynamicWorkerModel(
     required: input.required,
     pinned: input.pinned,
     unavailable,
+    allowPaidWorkers: input.allowPaidWorkers ?? false,
   })
 
   if (!resolved) {

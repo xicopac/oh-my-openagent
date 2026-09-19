@@ -115,6 +115,9 @@ describe("createDelegateTask native skill prompt filtering", () => {
       manager,
       client,
       directory: "/project",
+      // Fixture model is paid; the free-only cost-safety default is covered by
+      // the dedicated cost-safety tests.
+      modelRouting: { allow_paid_workers: true },
       disabledSkills: new Set(["blocked-native-skill", "debugging"]),
       availableSkills: [
         {

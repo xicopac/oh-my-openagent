@@ -71,9 +71,9 @@ describe("resolveModelBand", () => {
         mainModel: MAIN,
         mainPricing: MAIN_PRICE,
       })
-      expect(result?.band).not.toBe("free")
-      expect(result?.band).toBe("strong_paid")
-      expect(result?.escalated).toBe(true)
+      // COST-SAFETY: unknown-cost models are never free; a free-only child
+      // cannot select them (fail closed).
+      expect(result).toBeUndefined()
     })
   })
 
@@ -91,10 +91,8 @@ describe("resolveModelBand", () => {
         ...base(),
         unavailable: new Set([FREE_A, FREE_B]),
       })
-      expect(result?.band).toBe("cheap_paid")
-      expect(result?.model).toBe(CHEAP_A)
-      expect(result?.model).not.toBe(EXPENSIVE)
-      expect(result?.escalated).toBe(true)
+      // COST-SAFETY: paid escalation is blocked by default for free-only children.
+      expect(result).toBeUndefined()
     })
   })
 
@@ -139,7 +137,7 @@ describe("resolveModelBand", () => {
       expect(result?.model).not.toBe(FLASH)
     })
 
-    test("#then with every free model unavailable it escalates to a paid band and returns Flash", () => {
+    test("#then with every free model unavailable a free-only child returns NO_ELIGIBLE_FREE_MODEL", () => {
       const result = resolveModelBand({
         requestedTier: "balanced",
         candidates: balancedPool(),
@@ -147,16 +145,27 @@ describe("resolveModelBand", () => {
         mainPricing: BALANCED_MAIN_PRICE,
         unavailable: new Set(["opencode/free-a", "opencode/free-b"]),
       })
-      expect(result?.band === "cheap_paid" || result?.band === "strong_paid").toBe(true)
-      expect(result?.escalated).toBe(true)
-      expect(result?.model === FLASH || result?.model === PAID_STRONG).toBe(true)
+      // COST-SAFETY: no automatic paid escalation for children.
+      expect(result).toBeUndefined()
+    })
+
+    test("#then with every free model unavailable AND paid permission it may select Flash", () => {
+      const result = resolveModelBand({
+        requestedTier: "balanced",
+        candidates: balancedPool(),
+        mainModel: BALANCED_MAIN,
+        mainPricing: BALANCED_MAIN_PRICE,
+        unavailable: new Set(["opencode/free-a", "opencode/free-b"]),
+        allowPaidWorkers: true,
+      })
       expect(result?.model).toBe(FLASH)
+      expect(result?.escalated).toBe(true)
     })
   })
 
   describe("#given a strong_paid request", () => {
     test("#then it selects a strong paid model instead of jumping straight to MAIN", () => {
-      const result = resolveModelBand({ requestedTier: "strong", ...base() })
+      const result = resolveModelBand({ requestedTier: "strong", ...base(), allowPaidWorkers: true })
       expect(result?.band).toBe("strong_paid")
       expect(result?.model).toBe(STRONG_A)
       expect(result?.model).not.toBe(MAIN)
@@ -172,6 +181,7 @@ describe("resolveModelBand", () => {
         ],
         mainModel: MAIN,
         mainPricing: MAIN_PRICE,
+        allowPaidWorkers: true,
       })
       expect(result?.model).toBe(STRONG_A)
     })
@@ -179,7 +189,7 @@ describe("resolveModelBand", () => {
 
   describe("#given a main_equiv request", () => {
     test("#then it inherits MAIN's concrete model as a child", () => {
-      const result = resolveModelBand({ requestedTier: "master", ...base() })
+      const result = resolveModelBand({ requestedTier: "master", ...base(), allowPaidWorkers: true })
       expect(result?.model).toBe(MAIN)
       expect(result?.band).toBe("main_equiv")
       expect(result?.usedMainModel).toBe(true)
@@ -199,6 +209,7 @@ describe("resolveModelBand", () => {
         mainModel: MAIN,
         mainPricing: MAIN_PRICE,
         required: { vision: true },
+        allowPaidWorkers: true,
       })
       expect(result?.model).toBe("catalog/vision-paid")
       expect(result?.band).toBe("cheap_paid")
@@ -234,6 +245,7 @@ describe("resolveModelBand", () => {
         candidates: [{ model: "opencode/equal", pricing: price(3.5, 10), tool_call: true }],
         mainModel: MAIN,
         mainPricing: MAIN_PRICE,
+        allowPaidWorkers: true,
       })
       expect(result?.band).toBe("strong_paid")
       expect(result?.escalated).toBe(true)
@@ -245,6 +257,7 @@ describe("resolveModelBand", () => {
         candidates: [],
         mainModel: MAIN,
         mainPricing: MAIN_PRICE,
+        allowPaidWorkers: true,
       })
       expect(result?.model).toBe(MAIN)
       expect(result?.band).toBe("main_equiv")

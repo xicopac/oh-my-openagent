@@ -26,6 +26,15 @@ export const ModelTierEntryConfigSchema = z.object({
 export const ModelRoutingConfigSchema = z.object({
   /** Enable per-delegation model tier (band) selection (default: enabled when the section is present). */
   enabled: z.boolean().optional(),
+  /**
+   * COST-SAFETY: may automatically spawned children (explore, librarian,
+   * general, background workers, delegated workers) select PAID models?
+   * Default false. A paid child requires explicit opt-in; capability tier
+   * alone (fast/balanced/strong/master) never implies paid permission.
+   */
+  allow_paid_workers: z.boolean().optional().default(false),
+  /** Maximum concurrent paid child requests when allow_paid_workers is true. Default 1. */
+  max_concurrent_paid_workers: z.number().int().min(1).optional().default(1),
   tiers: z
     .object({
       fast: ModelTierEntryConfigSchema.optional(),

@@ -84,7 +84,10 @@ export type ResolveModelBandInput = {
   pinned?: Partial<Record<ModelTier, string>>
   /** Models known unavailable (disabled / negative-cached); never selected. */
   unavailable?: ReadonlySet<string>
+  allowPaidWorkers?: boolean
 }
+
+export const NO_ELIGIBLE_FREE_MODEL = "no-eligible-free-model"
 
 export type ResolveModelBandResult = {
   model: string
@@ -233,6 +236,15 @@ function pickStrong(strong: PaidEntry[]): ModelBandCandidate | undefined {
  */
 export function resolveModelBand(input: ResolveModelBandInput): ResolveModelBandResult | undefined {
   const requestedBand = tierToBand(input.requestedTier)
+  // COST-SAFETY POLICY BOUNDARY: automatically spawned children are FREE-ONLY
+  // unless the caller explicitly set allowPaidWorkers. When paid workers are
+  // forbidden, the ladder never escalates into a paid band and never inherits
+  // MAIN, so a child resolves to a $0 model or NO_ELIGIBLE_FREE_MODEL. The
+  // requested capability tier stays separate from permission to spend money.
+  const allowPaidWorkers = input.allowPaidWorkers ?? false
+  const ladder: readonly ModelBand[] = allowPaidWorkers
+    ? BAND_ESCALATION[requestedBand]
+    : (["free"] as const)
 
   const result = (model: string, band: ModelBand, usedMainModel: boolean): ResolveModelBandResult => ({
     model,
@@ -246,7 +258,12 @@ export function resolveModelBand(input: ResolveModelBandInput): ResolveModelBand
   // Explicit pin override for the requested tier (honored unless unavailable).
   const requestedPin = input.pinned?.[input.requestedTier]
   if (requestedPin && isAvailable(requestedPin, input.unavailable)) {
-    return result(requestedPin, requestedBand, false)
+    let pinCandidate
+    for (const c of input.candidates) if (c.model === requestedPin) pinCandidate = c
+    const pinIsFree = pinCandidate !== undefined && isFreePricing(pinCandidate.pricing)
+    if (allowPaidWorkers || pinIsFree) {
+      return result(requestedPin, requestedBand, false)
+    }
   }
 
   // Capability-first filter; also drops unavailable models.
@@ -256,7 +273,7 @@ export function resolveModelBand(input: ResolveModelBandInput): ResolveModelBand
 
   const { free, cheap, strong } = classifyBands(eligible, input.mainModel, input.mainPricing)
 
-  for (const band of BAND_ESCALATION[requestedBand]) {
+  for (const band of ladder) {
     if (band === "main_equiv") {
       const masterPin = input.pinned?.master
       if (masterPin && isAvailable(masterPin, input.unavailable)) {

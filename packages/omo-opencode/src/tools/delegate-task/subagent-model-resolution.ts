@@ -75,6 +75,7 @@ export async function resolveSubagentModel(
       ...(executorCtx.delegationFirstRuntime
         ? { extraUnavailable: executorCtx.delegationFirstRuntime.unavailableModels() }
         : {}),
+      allowPaidWorkers: executorCtx.modelRouting?.allow_paid_workers ?? false,
     })
     if (dynamic.kind === "resolved") {
       dynamicDefaultModel = dynamic.model

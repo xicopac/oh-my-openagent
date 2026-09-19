@@ -44,7 +44,7 @@ function clientWithConfig(config: Record<string, unknown>): OpencodeClient {
   } as unknown as OpencodeClient
 }
 
-async function resolveBalanced(extraUnavailable: Iterable<string>) {
+async function resolveBalanced(extraUnavailable: Iterable<string>, allowPaidWorkers = false) {
   const result = await resolveDynamicWorkerModel({
     client: clientWithConfig({}),
     tier: "balanced",
@@ -52,9 +52,8 @@ async function resolveBalanced(extraUnavailable: Iterable<string>) {
     availableModelsOverride: CATALOG,
     pricingCatalog: PRICING,
     extraUnavailable,
+    allowPaidWorkers,
   })
-  expect(result.kind).toBe("resolved")
-  if (result.kind !== "resolved") throw new Error("Expected resolved")
   return result
 }
 
@@ -119,7 +118,7 @@ describe("free-first routing policy with persistent quarantine", () => {
     expect(resolved.band).toBe("free")
   })
 
-  test("PROCESS C escalates to paid Flash only after the entire free pool is quarantined", async () => {
+  test("PROCESS C blocks paid escalation for a free-only child after the entire free pool is quarantined", async () => {
     // given - process A/B quarantined free-a and free-b into the shared file
     const fileC = join(tempDir, "process-c.json")
     const seed = createModelAvailabilityCache({ persistentFilePath: fileC, nowMs: () => NOW })
@@ -133,9 +132,16 @@ describe("free-first routing policy with persistent quarantine", () => {
     // when - an ordinary balanced child resolves with every free candidate unavailable
     const resolved = await resolveBalanced(cacheC.unavailableKeys(NOW))
 
-    // then - the free band is exhausted, so balanced escalates to the paid Flash rung
-    expect(resolved.model).toBe(FLASH)
-    expect(resolved.band).not.toBe("free")
-    expect(resolved.escalated).toBe(true)
+    // then - COST-SAFETY: a free-only child returns NO_ELIGIBLE_FREE_MODEL; the
+    // paid Flash rung is NOT selected without explicit paid permission
+    expect(resolved.kind).toBe("no-eligible-candidate")
+
+    // and - explicit paid permission still allows Flash after exhaustion
+    const paid = await resolveBalanced(cacheC.unavailableKeys(NOW), true)
+    expect(paid.kind).toBe("resolved")
+    if (paid.kind === "resolved") {
+      expect(paid.model).toBe(FLASH)
+      expect(paid.escalated).toBe(true)
+    }
   })
 })

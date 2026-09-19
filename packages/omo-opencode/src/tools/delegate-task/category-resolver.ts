@@ -170,6 +170,7 @@ Available categories: ${allCategoryNames}`)
         ...(executorCtx.delegationFirstRuntime
           ? { extraUnavailable: executorCtx.delegationFirstRuntime.unavailableModels() }
           : {}),
+        allowPaidWorkers: executorCtx.modelRouting?.allow_paid_workers ?? false,
       })
       if (dynamic.kind === "resolved") {
         // A main_equiv escalation (usedMainModel) means the live pool held no candidate suitable

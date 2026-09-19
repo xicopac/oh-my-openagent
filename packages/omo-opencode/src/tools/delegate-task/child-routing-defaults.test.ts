@@ -117,12 +117,12 @@ describe("child routing defaults prefer best-eligible free models", () => {
     })
   })
 
-  test("balanced tier resolves to a free model while strong stays on paid Flash", async () => {
+  test("balanced tier resolves to a free model while strong stays free without paid permission", async () => {
     // given - a controlled enabled pool: one free model plus paid Flash, GPT-old, and fallback-1
 
-    // when / then - balanced is free-first; strong stays paid on Flash
+    // when / then - balanced and strong are both free-first under the cost-safety default
     expect(await resolveTier("balanced")).toBe(FREE)
-    expect(await resolveTier("strong")).toBe(FLASH)
+    expect(await resolveTier("strong")).toBe(FREE)
   })
 
   test("a disabled free model falls back to another free model, not Flash", async () => {
@@ -147,8 +147,8 @@ describe("child routing defaults prefer best-eligible free models", () => {
     }
   })
 
-  test("master tier resolves to Flash when the parent/main model is Flash", async () => {
-    // given - the parent runs plain Flash
+  test("master tier without paid permission resolves to a free model, never Flash", async () => {
+    // given - the parent runs plain Flash, but the child has no paid permission
 
     // when
     const result = await resolveDynamicWorkerModel({
@@ -159,11 +159,12 @@ describe("child routing defaults prefer best-eligible free models", () => {
       pricingCatalog: PRICING,
     })
 
-    // then - main_equiv inherits the parent model
+    // then - COST-SAFETY: master tier does not imply paid permission
     expect(result.kind).toBe("resolved")
     if (result.kind === "resolved") {
-      expect(result.model).toBe(FLASH)
-      expect(result.usedMainModel).toBe(true)
+      expect(result.model).toBe(FREE)
+      expect(result.model).not.toBe(FLASH)
+      expect(result.usedMainModel).toBe(false)
     }
   })
 
@@ -214,11 +215,24 @@ describe("child routing defaults prefer best-eligible free models", () => {
       extraUnavailable: exhausted,
     })
 
-    // then - balanced leaves the free band and lands on the cheapest paid model (Flash)
-    expect(balanced.kind).toBe("resolved")
-    if (balanced.kind === "resolved") {
-      expect(balanced.model).toBe(FLASH)
-      expect(balanced.escalated).toBe(true)
+    // then - COST-SAFETY: a free-only child returns NO_ELIGIBLE_FREE_MODEL; no
+    // automatic paid escalation without explicit allow_paid_workers.
+    expect(balanced.kind).toBe("no-eligible-candidate")
+
+    // and when paid permission is explicitly granted, balanced may escalate to Flash
+    const paid = await resolveDynamicWorkerModel({
+      client: clientWithConfig({}),
+      tier: "balanced",
+      mainModel: MAIN,
+      availableModelsOverride: CATALOG,
+      pricingCatalog: PRICING,
+      extraUnavailable: exhausted,
+      allowPaidWorkers: true,
+    })
+    expect(paid.kind).toBe("resolved")
+    if (paid.kind === "resolved") {
+      expect(paid.model).toBe(FLASH)
+      expect(paid.escalated).toBe(true)
     }
   })
 })
@@ -241,13 +255,14 @@ const MATRIX_FREE_POOL = new Set([FREE_FAST_1, FREE_GENERAL_1, FREE_GENERAL_2])
 
 type MatrixTier = "fast" | "balanced" | "strong" | "master"
 
-async function resolveMatrixRow(tier: MatrixTier, mainModel: string) {
+async function resolveMatrixRow(tier: MatrixTier, mainModel: string, allowPaidWorkers = false) {
   const result = await resolveDynamicWorkerModel({
     client: clientWithConfig({}),
     tier,
     mainModel,
     availableModelsOverride: MATRIX_CATALOG,
     pricingCatalog: MATRIX_PRICING,
+    allowPaidWorkers,
   })
   expect(result.kind).toBe("resolved")
   if (result.kind !== "resolved") throw new Error("Expected resolved")
@@ -291,7 +306,8 @@ describe("routing cost matrix", () => {
     ]
     const resolvedRows = new Map<string, Awaited<ReturnType<typeof resolveMatrixRow>>>()
     for (const row of rows) {
-      const resolved = await resolveMatrixRow(row.tier, row.mainModel)
+      const allowPaid = row.label === "root sisyphus" || row.label === "master" || row.label === "strong" || row.label === "strongest"
+      const resolved = await resolveMatrixRow(row.tier, row.mainModel, allowPaid)
       resolvedRows.set(row.label, resolved)
       console.log(`matrix ${row.label}: tier=${row.tier} main=${row.mainModel} -> model=${resolved.model} band=${resolved.band}`)
     }

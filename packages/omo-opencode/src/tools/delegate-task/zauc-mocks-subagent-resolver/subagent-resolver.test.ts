@@ -61,6 +61,9 @@ function createExecutorContext(
     client,
     manager: {} as ExecutorContext["manager"],
     directory: "/tmp/test",
+    // These fixtures exercise paid agent-resolution mechanics; the free-only
+    // cost-safety default is covered by the dedicated cost-safety tests.
+    modelRouting: { allow_paid_workers: true },
     ...overrides,
   }
 }
