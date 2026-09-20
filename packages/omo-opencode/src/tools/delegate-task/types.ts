@@ -7,6 +7,8 @@ import type { LoadedSkill } from "../../features/opencode-skill-loader/types"
 import type { ResourceGovernorRuntime } from "../../hooks/resource-governor"
 import type { PricingCatalog } from "../../hooks/resource-governor"
 import type { DelegationFirstRuntime } from "../../features/delegation-first"
+import type { PaidConsentRegistry } from "./paid-consent"
+import type { GovernanceAuditWriter } from "../../shared/governance-audit"
 import type { SessionPromptAsyncData, SessionPromptData, SessionStatusData } from "@opencode-ai/sdk"
 import type {
   AvailableCategory,
@@ -26,7 +28,7 @@ type SessionCreateResult =
   | { readonly data?: undefined; readonly error: unknown }
 
 type SessionGetResult = {
-  readonly data?: { readonly directory?: string }
+  readonly data?: { readonly directory?: string; readonly parentID?: string | null }
   readonly error?: unknown
 }
 
@@ -86,6 +88,8 @@ export interface ToolContextWithMetadata {
   callId?: string
   /** @deprecated OpenCode internal naming may vary across versions */
   call_id?: string
+  /** Host-side operator consent prompt (OpenCode ToolContext.ask). Absent in non-interactive contexts. */
+  ask?: (input: { permission: string; patterns: string[]; always: string[]; metadata: Record<string, unknown> }) => Promise<void>
 }
 
 export interface SyncSessionCreatedEvent {
@@ -138,6 +142,12 @@ export interface DelegateTaskToolOptions {
   delegationFirstRuntime?: DelegationFirstRuntime
   /** Live pricing catalog used to derive free-first worker candidates. */
   pricingCatalog?: PricingCatalog
+  /** Shared single-use paid-consent approval store (present with the delegation-first runtime). */
+  paidConsentRegistry?: PaidConsentRegistry
+  /** Governance audit writer for paid-consent events (same journal as delegation/watchdog). */
+  paidConsentAudit?: GovernanceAuditWriter
+  /** Test/harness seam: explicit root-authority hint. Production never sets it; authority is derived from the session hierarchy. */
+  isRootSession?: boolean
 }
 
 import type { DelegatedModelConfig } from "../../shared/model-resolution-types"

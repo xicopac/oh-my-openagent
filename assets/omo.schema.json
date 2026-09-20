@@ -2252,6 +2252,30 @@
               "minimum": 1,
               "maximum": 9007199254740991
             },
+            "paid_workers": {
+              "type": "object",
+              "properties": {
+                "policy": {
+                  "default": "master_with_operator_consent",
+                  "type": "string",
+                  "enum": [
+                    "master_with_operator_consent",
+                    "disabled"
+                  ]
+                },
+                "max_concurrent": {
+                  "default": 1,
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "policy",
+                "max_concurrent"
+              ],
+              "additionalProperties": false
+            },
             "tiers": {
               "type": "object",
               "properties": {
@@ -18348,6 +18372,30 @@
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 9007199254740991
+                  },
+                  "paid_workers": {
+                    "type": "object",
+                    "properties": {
+                      "policy": {
+                        "default": "master_with_operator_consent",
+                        "type": "string",
+                        "enum": [
+                          "master_with_operator_consent",
+                          "disabled"
+                        ]
+                      },
+                      "max_concurrent": {
+                        "default": 1,
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "policy",
+                      "max_concurrent"
+                    ],
+                    "additionalProperties": false
                   },
                   "tiers": {
                     "type": "object",

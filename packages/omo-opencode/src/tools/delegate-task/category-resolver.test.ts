@@ -45,6 +45,8 @@ describe("resolveCategoryExecution", () => {
 		// Fixtures exercise paid category-resolution mechanics; the free-only
 		// cost-safety default is covered by the dedicated cost-safety tests.
 		modelRouting: { allow_paid_workers: true },
+		// Root/master authority: only the root may resolve into the paid band; the launch consent gate still applies.
+		isRootSession: true,
 	})
 
 	test("returns unpinned resolution when category cache is not ready on first run", async () => {

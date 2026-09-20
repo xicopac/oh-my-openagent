@@ -5,8 +5,16 @@ import { log } from "../../shared/logger"
 import { parseModelString } from "../../shared/model-string-parser"
 import { getModelsWithPricingAndMetadataForDelegateTask, getEnabledModelState } from "./available-models"
 import { filterEnabledModelKeys } from "../../shared/model-enable-state"
-import { isFreePricing } from "../../hooks/resource-governor/pricing"
 import { paidWorkerGate } from "./paid-worker-gate"
+import {
+  classifyPaidStatus,
+  consumePaidApproval,
+  createOpenCodePermissionConsentProvider,
+  enforcePaidWorkerLaunch,
+  isRootSessionInfo,
+  maxConcurrentPaidWorkers,
+  paidBandAllowed,
+} from "./paid-consent"
 import { buildSystemContent } from "./prompt-builder"
 import {
   resolveSkillContent,
@@ -94,6 +102,8 @@ const delegateTaskArgsSchema = {
 }
 
 export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefinition {
+  // The no-delegation-first-runtime fallback paid gate honors the configured limit.
+  paidWorkerGate.setMaxConcurrent(maxConcurrentPaidWorkers(options.modelRouting))
   const { availableCategories, availableSkills, categoryExamples, description } = createDelegateTaskPresentation(options)
 
   return tool({
@@ -101,6 +111,8 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
     args: delegateTaskArgsSchema,
     async execute(args, toolContext) {
       const ctx = toolContext as ToolContextWithMetadata
+      const isRootSession = await resolveIsRootSession(options, ctx)
+      const taskID = buildTaskID(ctx)
       const delegateTaskArgs = await prepareDelegateTaskArgs(args, ctx)
 
       const runInBackground = delegateTaskArgs.run_in_background === true
@@ -160,9 +172,12 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         : undefined
 
       const currentModelConfig = options.loadCurrentModelConfig?.()
-      const modelOptions = currentModelConfig === undefined
-        ? options
-        : { ...options, userCategories: currentModelConfig.categories, agentOverrides: currentModelConfig.agents, modelRouting: currentModelConfig.model_routing }
+      const modelOptions = {
+        ...(currentModelConfig === undefined
+          ? options
+          : { ...options, userCategories: currentModelConfig.categories, agentOverrides: currentModelConfig.agents, modelRouting: currentModelConfig.model_routing }),
+        isRootSession,
+      }
 
       let agentToUse: string
       let categoryModel: DelegatedModelConfig | undefined
@@ -232,7 +247,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
           mainPricing,
           pinned,
           unavailable,
-          allowPaidWorkers: modelOptions.modelRouting?.allow_paid_workers ?? false,
+          allowPaidWorkers: paidBandAllowed(modelOptions.modelRouting, isRootSession),
         })
         if (!resolved) {
           log("[delegate-task] model_tier requested but unresolved; keeping existing resolution", {
@@ -279,6 +294,21 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         maxPromptTokens = resolution.maxPromptTokens
         await applyModelTier()
 
+        const unstablePaidGate = await gatePaidChildLaunch({
+          options,
+          ctx,
+          modelOptions,
+          args: delegateTaskArgs,
+          agentToUse,
+          categoryModel,
+          isRootSession,
+          taskID,
+          task: delegateTaskArgs.prompt,
+          reason: "unstable agent forced to background",
+        })
+        if (!unstablePaidGate.ok) return unstablePaidGate.message
+        const unstablePaidNonce = unstablePaidGate.nonce
+
         const isRunInBackgroundExplicitlyFalse = isExplicitSyncRun(delegateTaskArgs.run_in_background)
 
         log("[task] unstable agent detection", {
@@ -303,6 +333,9 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
             availableSkills,
             nativeSkillInfos,
           })
+          if (!consumePaidLaunchApproval(options, ctx, agentToUse, categoryModel, taskID, unstablePaidNonce)) {
+            return "PAID_WORKER_CONSENT_CONSUMED: single-use paid approval did not match the unstable-agent launch identity."
+          }
           return executeUnstableAgentTask(delegateTaskArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, actualModel)
         }
       } else {
@@ -335,24 +368,46 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
       const resolvedPaidKey = categoryModel?.modelID
         ? resolvedModelKey(categoryModel.providerID, categoryModel.modelID)
         : null
-      const allowPaidWorkers = modelOptions.modelRouting?.allow_paid_workers ?? false
+
+      // PAID-WORKER CONSENT GATE: a paid child requires true MASTER/ROOT authority
+      // plus a fresh single-use operator approval for this exact launch.
+      const paidGate = await gatePaidChildLaunch({
+        options,
+        ctx,
+        modelOptions,
+        args: delegateTaskArgs,
+        agentToUse,
+        categoryModel,
+        isRootSession,
+        taskID,
+        task: delegateTaskArgs.prompt,
+      })
+      if (!paidGate.ok) return paidGate.message
+      const paidApprovalNonce = paidGate.nonce
+
       let paidSlotAcquired = false
-      if (resolvedPaidKey && allowPaidWorkers) {
-        const price = options.pricingCatalog?.[resolvedPaidKey]
-        const isPaid = price === undefined || !isFreePricing(price)
-        if (isPaid) {
-          const gate = options.delegationFirstRuntime
-          const ok = gate
-            ? gate.tryAcquirePaidChild()
-            : paidWorkerGate.tryAcquire()
-          if (!ok) {
-            return `PAID_WORKER_CONCURRENCY_LIMIT: maximum ${modelOptions.modelRouting?.max_concurrent_paid_workers ?? 1} concurrent paid child request(s) reached. Wait for an existing paid child to finish, then retry.`
-          }
-          paidSlotAcquired = true
+      if (resolvedPaidKey && classifyPaidStatus(resolvedPaidKey, options.pricingCatalog) !== "free") {
+        if (paidApprovalNonce === null) {
+          return "PAID_WORKER_CONSENT_CONSUMED: internal error, a paid launch reached execution without an approved single-use consent."
         }
+        const gate = options.delegationFirstRuntime
+        const ok = gate
+          ? gate.tryAcquirePaidChild()
+          : paidWorkerGate.tryAcquire()
+        if (!ok) {
+          return `PAID_WORKER_CONCURRENCY_LIMIT: maximum ${maxConcurrentPaidWorkers(modelOptions.modelRouting)} concurrent paid child request(s) reached. Wait for an existing paid child to finish, then retry.`
+        }
+        paidSlotAcquired = true
       }
 
       if (runInBackground) {
+        if (!consumePaidLaunchApproval(options, ctx, agentToUse, categoryModel, taskID, paidApprovalNonce)) {
+          if (paidSlotAcquired) {
+            if (options.delegationFirstRuntime) options.delegationFirstRuntime.releasePaidChild()
+            else paidWorkerGate.release()
+          }
+          return "PAID_WORKER_CONSENT_CONSUMED: single-use paid approval did not match the launch identity."
+        }
         return executeBackgroundTask(delegateTaskArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, fallbackChain, paidSlotAcquired)
       }
 
@@ -368,6 +423,8 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
             systemContent,
             modelInfo,
             fallbackChain,
+            isRootSession,
+            taskID,
           })
         } finally {
           if (paidSlotAcquired) options.delegationFirstRuntime.releasePaidChild()
@@ -385,6 +442,12 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
       if (enforcement.message !== null) return enforcement.message
 
       try {
+        if (!consumePaidLaunchApproval(options, ctx, agentToUse, categoryModel, taskID, paidApprovalNonce)) {
+          if (paidSlotAcquired) {
+            paidWorkerGate.release()
+          }
+          return "PAID_WORKER_CONSENT_CONSUMED: single-use paid approval did not match the launch identity."
+        }
         return await executeSyncTask(delegateTaskArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, modelInfo, fallbackChain, undefined, enforcement.backstop)
       } finally {
         if (paidSlotAcquired) {
@@ -439,6 +502,102 @@ function enforceResourceGovernor(
   }
 }
 
+function buildTaskID(ctx: ToolContextWithMetadata): string {
+  return ctx.callID ?? ctx.callId ?? ctx.call_id ?? ctx.sessionID
+}
+
+async function resolveIsRootSession(options: DelegateTaskToolOptions, ctx: ToolContextWithMetadata): Promise<boolean> {
+  // Test/harness seam: an explicit isRootSession option wins. Production never sets it,
+  // so real launches always derive authority from the OpenCode session hierarchy.
+  if (options.isRootSession !== undefined) return options.isRootSession
+  try {
+    const info = await options.client.session.get({ path: { id: ctx.sessionID } })
+    return isRootSessionInfo((info as { data?: { parentID?: string | null } }).data)
+  } catch {
+    // Fail closed on authority: an unresolvable session cannot request paid launches.
+    return false
+  }
+}
+
+type PaidGateOutcome = { ok: true; nonce: string | null } | { ok: false; message: string }
+
+async function gatePaidChildLaunch(input: {
+  options: DelegateTaskToolOptions
+  ctx: ToolContextWithMetadata
+  modelOptions: DelegateTaskToolOptions
+  args: DelegateTaskArgs
+  agentToUse: string
+  categoryModel: DelegatedModelConfig | undefined
+  isRootSession: boolean
+  taskID: string
+  task: string
+  reason?: string
+  freeCandidatesExhausted?: boolean
+}): Promise<PaidGateOutcome> {
+  const resolvedModelKeyValue = input.categoryModel?.modelID
+    ? resolvedModelKey(input.categoryModel.providerID, input.categoryModel.modelID)
+    : null
+  if (!resolvedModelKeyValue) return { ok: true, nonce: null }
+  if (classifyPaidStatus(resolvedModelKeyValue, input.options.pricingCatalog) === "free") {
+    return { ok: true, nonce: null }
+  }
+  const registry = input.options.paidConsentRegistry
+  if (!registry) {
+    return {
+      ok: false,
+      message: `PAID_WORKER_CONSENT_UNAVAILABLE: paid worker launch requires a single-use operator approval, but no consent registry is available; failing closed for "${resolvedModelKeyValue}".`,
+    }
+  }
+  const ask = (input.ctx as ToolContextWithMetadata).ask
+  const provider = createOpenCodePermissionConsentProvider(ask)
+  const verdict = await enforcePaidWorkerLaunch({
+    resolvedModelKey: resolvedModelKeyValue,
+    pricing: input.options.pricingCatalog,
+    modelRouting: input.modelOptions.modelRouting,
+    isRootSession: input.isRootSession,
+    rootSessionID: input.ctx.sessionID,
+    workerIdentity: input.agentToUse,
+    capabilityTier: input.args.model_tier ?? null,
+    task: input.task,
+    taskID: input.taskID,
+    reason: input.reason,
+    freeCandidatesExhausted: input.freeCandidatesExhausted ?? false,
+    consentProvider: provider,
+    registry,
+    audit: input.options.paidConsentAudit,
+  })
+  if (verdict.action === "block") return { ok: false, message: verdict.message }
+  return { ok: true, nonce: verdict.action === "allow_paid" ? verdict.nonce : null }
+}
+
+function consumePaidLaunchApproval(
+  options: DelegateTaskToolOptions,
+  ctx: ToolContextWithMetadata,
+  agentToUse: string,
+  categoryModel: DelegatedModelConfig | undefined,
+  taskID: string,
+  nonce: string | null,
+): boolean {
+  if (!nonce) return true
+  const registry = options.paidConsentRegistry
+  if (!registry) return false
+  const resolvedModelKeyValue = categoryModel?.modelID
+    ? resolvedModelKey(categoryModel.providerID, categoryModel.modelID)
+    : null
+  const approval = consumePaidApproval(
+    registry,
+    nonce,
+    {
+      rootSessionID: ctx.sessionID,
+      workerIdentity: agentToUse,
+      resolvedModelID: resolvedModelKeyValue ?? "",
+      taskID,
+    },
+    options.paidConsentAudit,
+  )
+  return approval !== null
+}
+
 function isExplicitSyncRun(runInBackground: unknown): boolean {
   return runInBackground === false || runInBackground === "false"
 }
@@ -455,6 +614,8 @@ type DelegationFirstSyncParams = {
   systemContent: string | undefined
   modelInfo?: import("../../features/task-toast-manager/types").ModelFallbackInfo
   fallbackChain?: import("../../shared/model-requirements").FallbackEntry[]
+  isRootSession: boolean
+  taskID: string
 }
 
 async function runDelegationFirstSync(params: DelegationFirstSyncParams): Promise<string> {
@@ -521,6 +682,24 @@ async function runDelegationFirstSync(params: DelegationFirstSyncParams): Promis
     )
     if (enforcement.message !== null) {
       return enforcement.message
+    }
+
+    // Each paid child launch requires its own fresh single-use operator approval.
+    const attemptGate = await gatePaidChildLaunch({
+      options,
+      ctx,
+      modelOptions: options,
+      args: { ...args, prompt: currentPrompt },
+      agentToUse,
+      categoryModel: currentModel,
+      isRootSession: params.isRootSession,
+      taskID: params.taskID,
+      task: currentPrompt,
+      reason: "delegation ladder escalated to a stronger/paid worker",
+    })
+    if (!attemptGate.ok) return attemptGate.message
+    if (!consumePaidLaunchApproval(options, ctx, agentToUse, currentModel, params.taskID, attemptGate.nonce)) {
+      return "PAID_WORKER_CONSENT_CONSUMED: single-use paid approval did not match the escalation launch identity."
     }
 
     const result = await executeSyncTask(

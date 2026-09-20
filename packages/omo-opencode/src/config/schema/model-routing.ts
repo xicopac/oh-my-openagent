@@ -23,6 +23,16 @@ export const ModelTierEntryConfigSchema = z.object({
   inherit_parent: z.boolean().optional(),
 })
 
+export const PAID_WORKER_POLICIES = ["master_with_operator_consent", "disabled"] as const
+export const PaidWorkerPolicySchema = z.enum(PAID_WORKER_POLICIES)
+
+export const PaidWorkersConfigSchema = z.object({
+  /** Policy governing paid child launches. Default requires master authority + fresh operator consent per launch. */
+  policy: PaidWorkerPolicySchema.optional().default("master_with_operator_consent"),
+  /** Maximum concurrent paid children (default 1). One approval never authorizes a second concurrent child. */
+  max_concurrent: z.number().int().min(1).optional().default(1),
+})
+
 export const ModelRoutingConfigSchema = z.object({
   /** Enable per-delegation model tier (band) selection (default: enabled when the section is present). */
   enabled: z.boolean().optional(),
@@ -35,6 +45,12 @@ export const ModelRoutingConfigSchema = z.object({
   allow_paid_workers: z.boolean().optional().default(false),
   /** Maximum concurrent paid child requests when allow_paid_workers is true. Default 1. */
   max_concurrent_paid_workers: z.number().int().min(1).optional().default(1),
+  /**
+   * NEW POLICY: paid children require true MASTER/ROOT authority plus fresh operator
+   * consent for each exact launch (single-use approval). The deprecated allow_paid_workers
+   * boolean cannot bypass this gate.
+   */
+  paid_workers: PaidWorkersConfigSchema.optional(),
   tiers: z
     .object({
       fast: ModelTierEntryConfigSchema.optional(),

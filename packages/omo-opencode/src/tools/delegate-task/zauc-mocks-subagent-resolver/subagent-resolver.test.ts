@@ -44,6 +44,8 @@ function createBaseArgs(overrides?: Partial<DelegateTaskArgs>): DelegateTaskArgs
     load_skills: [],
     subagent_type: "oracle",
     ...overrides,
+    // Root/master authority: only the root may resolve into the paid band; the launch consent gate still applies.
+    isRootSession: true,
   }
 }
 

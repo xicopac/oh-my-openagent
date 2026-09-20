@@ -8,6 +8,8 @@ import { getAgentRoleRequirement } from "../../shared/model-requirements"
 import type { ModelTier } from "@oh-my-opencode/delegate-core"
 import { log } from "../../shared/logger"
 import { getAvailableModelsForDelegateTask, getEnabledModelState } from "./available-models"
+import { paidBandAllowed } from "./paid-consent"
+import { PAID_ESCALATION_REQUIRED } from "./paid-consent"
 import { filterEnabledModelKeys, isModelEnabled } from "../../shared/model-enable-state"
 import { applyCategoryParams } from "./delegated-model-config"
 import { applyFallbackEntrySettings } from "./fallback-entry-settings"
@@ -75,7 +77,7 @@ export async function resolveSubagentModel(
       ...(executorCtx.delegationFirstRuntime
         ? { extraUnavailable: executorCtx.delegationFirstRuntime.unavailableModels() }
         : {}),
-      allowPaidWorkers: executorCtx.modelRouting?.allow_paid_workers ?? false,
+      allowPaidWorkers: paidBandAllowed(executorCtx.modelRouting, executorCtx.isRootSession === true),
     })
     if (dynamic.kind === "resolved") {
       dynamicDefaultModel = dynamic.model
@@ -89,8 +91,8 @@ export async function resolveSubagentModel(
       })
     } else if (dynamic.kind === "no-eligible-candidate" && !dynamic.livePoolEmpty) {
       throw new Error(
-        `No enabled model satisfies role requirements for agent "${agentToUse}" (tier "${roleRequirement.defaultTier}"). ` +
-        `Connect an eligible provider or add an explicit model pin, then retry.`,
+        `${PAID_ESCALATION_REQUIRED}: no eligible free model satisfies role requirements for agent "${agentToUse}" (tier "${roleRequirement.defaultTier}"). ` +
+        `Free worker pool exhausted; report free_pool_exhausted to the master. The master may request a paid worker, which requires explicit operator approval.`,
       )
     }
   }

@@ -30,6 +30,19 @@ import {
   type ModelTier,
 } from "../packages/delegate-core/src/model-band"
 import { createPaidWorkerGate } from "../packages/omo-opencode/src/tools/delegate-task/paid-worker-gate"
+import {
+  PAID_WORKER_AUTHORITY_REJECTED,
+  PAID_WORKER_CONSENT_DENIED,
+  PAID_WORKER_CONSENT_UNAVAILABLE,
+  PaidConsentRegistry,
+  classifyPaidStatus,
+  consumePaidApproval,
+  createOpenCodePermissionConsentProvider,
+  createStaticConsentProvider,
+  enforcePaidWorkerLaunch,
+  isRootSessionInfo,
+  maxConcurrentPaidWorkers,
+} from "../packages/omo-opencode/src/tools/delegate-task/paid-consent"
 
 export type CheckResult = { name: string; passed: boolean; failures: string[] }
 
@@ -561,3 +574,214 @@ export async function runRoutingCostPolicyScenario(): Promise<{ checks: CheckRes
 
 export { startRun, snapshot, readAuditEvents, eventNames, countNamed, makeSink, freeWorker, assignment }
 export type { FailoverRun, Sink, RelaunchRecord, AuditEvent }
+
+/**
+ * PAID CONSENT section: paid children require TRUE master/root authority plus a
+ * fresh single-use operator approval for the exact launch. Drives the REAL
+ * enforcePaidWorkerLaunch + PaidConsentRegistry with a deterministic fake
+ * pricing catalog and deterministic consent providers. No real paid provider
+ * call is ever made.
+ */
+export async function runPaidConsentScenarios(): Promise<{ checks: CheckResult[]; traceDirs: string[] }> {
+  const allChecks: CheckResult[] = []
+  const traceDirs: string[] = []
+  const dir = mkdtempSync(join(tmpdir(), 'oma-paid-consent-'))
+  traceDirs.push(dir)
+  const audit = createGovernanceAuditWriter({ root: join(dir, 'gov') })
+
+  const ROOT = 'ses_root'
+  const TASK = 'paid-consent-e2e-task'
+  const PAID = 'test/deepseek-v4-flash'
+  const PAID_B = 'test/paid-b'
+  const FREE_A = 'test/free-a'
+  const PRICING: Record<string, ModelBandPricing> = {
+    [FREE_A]: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+    [PAID]: { input: 0.3, output: 0.9, cache_read: 0, cache_write: 0 },
+    [PAID_B]: { input: 0.5, output: 1.5, cache_read: 0, cache_write: 0 },
+  }
+
+  const gateInput = (overrides: Record<string, unknown> = {}) => ({
+    resolvedModelKey: PAID,
+    pricing: PRICING,
+    modelRouting: undefined,
+    isRootSession: true,
+    rootSessionID: ROOT,
+    workerIdentity: 'general',
+    capabilityTier: 'strong',
+    task: TASK,
+    taskID: TASK,
+    reason: 'free worker pool exhausted',
+    freeCandidatesExhausted: true,
+    consentProvider: createStaticConsentProvider('approved'),
+    registry: new PaidConsentRegistry(),
+    audit,
+    ...overrides,
+  })
+
+  // 1. Child free-only: a free model never reaches the consent gate.
+  {
+    let prompts = 0
+    const spy = {
+      async request(): Promise<'approved'> {
+        prompts += 1
+        return 'approved'
+      },
+    }
+    const verdict = await enforcePaidWorkerLaunch(
+      gateInput({ resolvedModelKey: FREE_A, consentProvider: spy }),
+    )
+    allChecks.push(
+      verdict.action === 'allow_free' && prompts === 0 && classifyPaidStatus(FREE_A, PRICING) === 'free'
+        ? ok('Child free-only')
+        : fail('Child free-only', [JSON.stringify(verdict), `prompts=${prompts}`]),
+    )
+  }
+
+  // 2. Child cannot authorize paid.
+  {
+    const verdict = await enforcePaidWorkerLaunch(gateInput({ isRootSession: false }))
+    allChecks.push(
+      verdict.action === 'block' && verdict.code === PAID_WORKER_AUTHORITY_REJECTED
+        ? ok('Child cannot authorize paid')
+        : fail('Child cannot authorize paid', [JSON.stringify(verdict)]),
+    )
+  }
+
+  // 3. Master may request paid: approval prompt created and granted.
+  {
+    const verdict = await enforcePaidWorkerLaunch(gateInput({}))
+    allChecks.push(
+      verdict.action === 'allow_paid'
+        ? ok('Master may request paid')
+        : fail('Master may request paid', [JSON.stringify(verdict)]),
+    )
+  }
+
+  // 4. Operator denial blocks launch: zero paid launches.
+  {
+    const verdict = await enforcePaidWorkerLaunch(
+      gateInput({ consentProvider: createStaticConsentProvider('denied') }),
+    )
+    allChecks.push(
+      verdict.action === 'block' && verdict.code === PAID_WORKER_CONSENT_DENIED
+        ? ok('Operator denial blocks launch')
+        : fail('Operator denial blocks launch', [JSON.stringify(verdict)]),
+    )
+  }
+
+  // 5. Single-use approval: exactly one consume succeeds, then the nonce is spent.
+  {
+    const registry = new PaidConsentRegistry()
+    const verdict = await enforcePaidWorkerLaunch(gateInput({ registry }))
+    const identity = {
+      rootSessionID: ROOT,
+      workerIdentity: 'general',
+      resolvedModelID: PAID,
+      taskID: TASK,
+    }
+    const first = verdict.action === 'allow_paid'
+      ? consumePaidApproval(registry, verdict.nonce, identity, audit)
+      : null
+    const second = verdict.action === 'allow_paid'
+      ? consumePaidApproval(registry, verdict.nonce, identity, audit)
+      : null
+    allChecks.push(
+      first !== null && second === null && registry.isConsumed(verdict.action === 'allow_paid' ? verdict.nonce : '')
+        ? ok('Single-use approval')
+        : fail('Single-use approval', [`first=${first !== null}`, `second=${second !== null}`]),
+    )
+  }
+
+  // 6. Paid retry (model B after model A) requires a fresh approval.
+  {
+    const registry = new PaidConsentRegistry()
+    const a = await enforcePaidWorkerLaunch(gateInput({ registry }))
+    const identityA = {
+      rootSessionID: ROOT,
+      workerIdentity: 'general',
+      resolvedModelID: PAID,
+      taskID: TASK,
+    }
+    if (a.action === 'allow_paid') consumePaidApproval(registry, a.nonce, identityA, audit)
+    const b = await enforcePaidWorkerLaunch(gateInput({ registry, resolvedModelKey: PAID_B }))
+    const identityB = {
+      rootSessionID: ROOT,
+      workerIdentity: 'general',
+      resolvedModelID: PAID_B,
+      taskID: TASK,
+    }
+    const bConsumed = b.action === 'allow_paid'
+      ? consumePaidApproval(registry, b.nonce, identityB, audit)
+      : null
+    allChecks.push(
+      a.action === 'allow_paid' && b.action === 'allow_paid' && bConsumed !== null && b.nonce !== a.nonce
+        ? ok('Paid retry requires new approval')
+        : fail('Paid retry requires new approval', [JSON.stringify(a), JSON.stringify(b)]),
+    )
+  }
+
+  // 7. Approval cannot be replayed across a different model or task.
+  {
+    const registry = new PaidConsentRegistry()
+    const a = await enforcePaidWorkerLaunch(gateInput({ registry }))
+    if (a.action === 'allow_paid') {
+      const identityWrongModel = {
+        rootSessionID: ROOT,
+        workerIdentity: 'general',
+        resolvedModelID: PAID_B,
+        taskID: TASK,
+      }
+      const identityWrongTask = {
+        rootSessionID: ROOT,
+        workerIdentity: 'general',
+        resolvedModelID: PAID,
+        taskID: 'other-task',
+      }
+      const wrongModel = consumePaidApproval(registry, a.nonce, identityWrongModel, audit)
+      const wrongTask = consumePaidApproval(registry, a.nonce, identityWrongTask, audit)
+      allChecks.push(
+        wrongModel === null && wrongTask === null
+          ? ok('Approval cannot be replayed')
+          : fail('Approval cannot be replayed', [`wrongModel=${wrongModel !== null}`, `wrongTask=${wrongTask !== null}`]),
+      )
+    } else {
+      allChecks.push(fail('Approval cannot be replayed', ['gate did not approve']))
+    }
+  }
+
+  // 8. Nested child cannot spoof master authority.
+  {
+    const nested = isRootSessionInfo({ parentID: 'ses_parent' })
+    const verdict = await enforcePaidWorkerLaunch(gateInput({ isRootSession: false, rootSessionID: 'ses_child' }))
+    allChecks.push(
+      nested === false && verdict.action === 'block' && verdict.code === PAID_WORKER_AUTHORITY_REJECTED
+        ? ok('Nested child cannot spoof master')
+        : fail('Nested child cannot spoof master', [`nested=${nested}`, JSON.stringify(verdict)]),
+    )
+  }
+
+  // 9. Non-interactive environment fails closed.
+  {
+    const provider = createOpenCodePermissionConsentProvider(undefined)
+    const verdict = await enforcePaidWorkerLaunch(gateInput({ consentProvider: provider }))
+    allChecks.push(
+      verdict.action === 'block' && verdict.code === PAID_WORKER_CONSENT_UNAVAILABLE
+        ? ok('Non-interactive fails closed')
+        : fail('Non-interactive fails closed', [JSON.stringify(verdict)]),
+    )
+  }
+
+  // 10. Paid concurrency never exceeds the configured limit (default 1).
+  {
+    const gate = createPaidWorkerGate(maxConcurrentPaidWorkers(undefined))
+    const first = gate.tryAcquire()
+    const second = gate.tryAcquire()
+    allChecks.push(
+      first === true && second === false && gate.activeCount() === 1
+        ? ok('Paid concurrency <= 1')
+        : fail('Paid concurrency <= 1', [`first=${first}`, `second=${second}`]),
+    )
+  }
+
+  return { checks: allChecks, traceDirs }
+}

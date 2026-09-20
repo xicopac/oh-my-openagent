@@ -21,15 +21,19 @@ import { registerManagerForCleanup } from "./features/background-agent/process-c
 import { createConfigHandler } from "./plugin-handlers"
 import { log } from "./shared"
 import { createGovernanceAuditWriter } from "./shared/governance-audit"
+import type { GovernanceAuditWriter } from "./shared/governance-audit"
 import { markServerRunningInProcess } from "./shared/tmux/tmux-utils/server-health"
 import type { ModelFallbackControllerAccessor } from "./hooks/model-fallback"
 import { authorizeChildDispatch, createResourceGovernorRuntime, loadPricingCatalog, type ResourceGovernorRuntime } from "./hooks/resource-governor"
+import { PaidConsentRegistry } from "./tools/delegate-task/paid-consent"
+import { maxConcurrentPaidWorkers as paidConcurrencyLimit } from "./tools/delegate-task/paid-consent"
 import {
   createDelegationFirstRuntime,
   type DelegationFirstRuntime,
   type ReplayableAssignment,
   type RelaunchOutcome,
 } from "./features/delegation-first"
+import { DEFAULT_RESOURCE_GOVERNOR_CONFIG } from "./config/schema/resource-governor"
 import type { LaunchInput } from "./features/background-agent"
 import { parseModelString } from "./shared/model-string-parser"
 
@@ -75,6 +79,10 @@ export type Managers = {
   stopWatchdogSweep?: () => void
   /** Live OpenGateway pricing catalog (shared by the governor and delegation-first selection). */
   pricingCatalog?: ReturnType<typeof loadPricingCatalog>
+  /** Governance audit journal writer (present when delegation-first is enabled). */
+  governanceAudit?: GovernanceAuditWriter
+  /** Shared single-use paid-consent approval store for the master+consent gate. */
+  paidConsentRegistry?: PaidConsentRegistry
 }
 
 export function createManagers(args: {
@@ -111,13 +119,22 @@ export function createManagers(args: {
     shouldSkipSession: (sessionId) => lookupTeamSession(sessionId) !== undefined,
   })
   const modelFallbackControllerAccessor = createModelFallbackControllerAccessor()
-  const governanceAudit = pluginConfig.resource_governor?.enabled
+  // The delegation-first runtime (ladder + watchdog + grunt guard + disabled-model
+  // failover) is default-enabled: an absent `resource_governor` key must not
+  // silently disable the designed "Model is disabled" remedy (recordModelUnavailable
+  // -> negative availability cache -> auto re-dispatch to the next eligible worker).
+  // The budget/consent governor runtime stays opt-in via an explicit `enabled: true`.
+  const resourceGovernorCfg = pluginConfig.resource_governor ?? DEFAULT_RESOURCE_GOVERNOR_CONFIG
+  const delegationFirstEnabled = resourceGovernorCfg.enabled
+  const budgetGovernorEnabled = pluginConfig.resource_governor?.enabled === true
+  const governanceAudit = delegationFirstEnabled
     ? createGovernanceAuditWriter({})
     : undefined
+  const paidConsentRegistry = new PaidConsentRegistry()
   const pricingCatalog = loadPricingCatalog()
-  const resourceGovernorRuntime = pluginConfig.resource_governor?.enabled
+  const resourceGovernorRuntime = budgetGovernorEnabled
     ? createResourceGovernorRuntime({
-        config: pluginConfig.resource_governor,
+        config: resourceGovernorCfg,
         pricing: pricingCatalog,
         activeChildCount: (sessionID) =>
           (backgroundManager?.getTasksByParentSession(sessionID) ?? [])
@@ -130,9 +147,9 @@ export function createManagers(args: {
       })
     : undefined
 
-  const delegationLadderCfg = pluginConfig.resource_governor?.delegation_ladder
-  const watchdogCfg = pluginConfig.resource_governor?.watchdog
-  const delegationFirstRuntime = pluginConfig.resource_governor?.enabled
+  const delegationLadderCfg = resourceGovernorCfg.delegation_ladder
+  const watchdogCfg = resourceGovernorCfg.watchdog
+  const delegationFirstRuntime = delegationFirstEnabled
     ? createDelegationFirstRuntime(governanceAudit, {
         ladder: delegationLadderCfg
           ? {
@@ -158,6 +175,7 @@ export function createManagers(args: {
           }
           : undefined,
         pricing: pricingCatalog,
+        maxConcurrentPaidWorkers: paidConcurrencyLimit(pluginConfig.model_routing),
       })
     : undefined
 
@@ -305,7 +323,7 @@ export function createManagers(args: {
     authorizeChildDispatch: resourceGovernorRuntime
       ? (input) => authorizeChildDispatch(resourceGovernorRuntime, input)
       : undefined,
-    resourceGovernorDefaultChildTokens: pluginConfig.resource_governor?.delegation.default_child_tokens,
+    resourceGovernorDefaultChildTokens: resourceGovernorCfg.delegation.default_child_tokens,
     settleChildDispatch: resourceGovernorRuntime
       ? (sessionID, escrowID, status) => resourceGovernorRuntime.settleChild(sessionID, escrowID, status)
       : undefined,
@@ -398,5 +416,7 @@ export function createManagers(args: {
     delegationFirstRuntime,
     stopWatchdogSweep,
     pricingCatalog,
+    governanceAudit,
+    paidConsentRegistry,
   }
 }

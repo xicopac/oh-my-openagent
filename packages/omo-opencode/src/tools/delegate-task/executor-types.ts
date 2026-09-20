@@ -22,6 +22,8 @@ export interface ExecutorContext {
   pricingCatalog?: PricingCatalog
   modelRouting?: ModelRoutingConfig
   availableModelsOverride?: Set<string>
+  /** True when the calling session is the true root/master session (no parentID). */
+  isRootSession?: boolean
 }
 
 export interface ParentContext {

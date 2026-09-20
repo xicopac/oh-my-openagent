@@ -10,6 +10,8 @@ import { __setTimingConfig, __resetTimingConfig } from "./timing"
 import * as connectedProvidersCache from "../../shared/connected-providers-cache"
 import * as executor from "./executor"
 import { releaseAllPromptAsyncReservationsForTesting } from "../../shared/prompt-async-gate"
+import { PaidConsentRegistry } from "./paid-consent"
+import { paidWorkerGate } from "./paid-worker-gate"
 
 const runtimeRequire = require as NodeJS.Require & { cache?: Record<string, unknown> }
 
@@ -25,6 +27,11 @@ function resolveCategoryConfig(...args: Parameters<typeof import("./tools").reso
   return require("./tools").resolveCategoryConfig(...args)
 }
 
+// Paid-consent fixture: these tests exercise the delegation machinery as the root
+// orchestrator. Every paid launch is approved by a simulated approving operator and
+// consumed by the single-use registry, exactly as in production.
+const testPaidConsentRegistry = new PaidConsentRegistry()
+const testApprovingAsk = async (): Promise<void> => {}
 const SYSTEM_DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
 
 const TEST_CONNECTED_PROVIDERS = ["anthropic", "google", "openai", "kimi-for-coding"]
@@ -125,6 +132,7 @@ describe("sisyphus-task", () => {
 
   beforeEach(() => {
     mock.restore()
+    paidWorkerGate.reset()
     clearRequireCache("./tools")
     __resetModelCache()
     clearSkillCache()
@@ -422,6 +430,8 @@ describe("sisyphus-task", () => {
       }
 
       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
         manager: mockManager,
         client: mockClient,
         connectedProvidersOverride: TEST_CONNECTED_PROVIDERS,
@@ -435,6 +445,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       const resolveSkillContentSpy = spyOn(executor, "resolveSkillContent").mockImplementation(async (_skills, options) => {
@@ -492,6 +503,8 @@ describe("sisyphus-task", () => {
       }
 
       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
         manager: mockManager,
         client: mockClient,
         connectedProvidersOverride: TEST_CONNECTED_PROVIDERS,
@@ -503,6 +516,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       const resolveSkillContentSpy = spyOn(executor, "resolveSkillContent").mockResolvedValue({
@@ -559,6 +573,8 @@ describe("sisyphus-task", () => {
       }
 
       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
         manager: mockManager,
         client: mockClient,
         connectedProvidersOverride: TEST_CONNECTED_PROVIDERS,
@@ -570,6 +586,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       const args: {
@@ -627,6 +644,8 @@ describe("sisyphus-task", () => {
       }
 
       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
         manager: mockManager,
         client: mockClient,
         connectedProvidersOverride: TEST_CONNECTED_PROVIDERS,
@@ -638,6 +657,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       const args = {
@@ -676,6 +696,8 @@ describe("sisyphus-task", () => {
        }
        
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
          connectedProvidersOverride: TEST_CONNECTED_PROVIDERS,
@@ -687,6 +709,7 @@ describe("sisyphus-task", () => {
          messageID: "parent-message",
          agent: "sisyphus",
          abort: new AbortController().signal,
+        ask: testApprovingAsk,
        }
        
        // when delegating with a category
@@ -724,6 +747,8 @@ describe("sisyphus-task", () => {
        
        // Custom category with no model defined
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
          userCategories: {
@@ -736,6 +761,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
       
       // when delegating with a custom category that has no model
@@ -790,6 +816,8 @@ describe("sisyphus-task", () => {
        }
 
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
          connectedProvidersOverride: TEST_CONNECTED_PROVIDERS,
@@ -802,6 +830,7 @@ describe("sisyphus-task", () => {
          messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
         metadata: (input: { title?: string; metadata?: Record<string, unknown> }) => {
           metadataCalls.push(input)
         },
@@ -1130,6 +1159,8 @@ describe("sisyphus-task", () => {
        }
 
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
          userCategories: {
@@ -1144,6 +1175,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when
@@ -1198,6 +1230,8 @@ describe("sisyphus-task", () => {
 
        // NO userCategories - must use DEFAULT_CATEGORIES
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
          connectedProvidersOverride: TEST_CONNECTED_PROVIDERS,
@@ -1209,6 +1243,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - unspecified-high uses claude-opus-4-8 max in DEFAULT_CATEGORIES
@@ -1259,6 +1294,8 @@ describe("sisyphus-task", () => {
 
       // NO userCategories - must use DEFAULT_CATEGORIES
       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
         manager: mockManager,
         client: mockClient,
       })
@@ -1268,6 +1305,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - unspecified-high uses claude-opus-4-8 max in DEFAULT_CATEGORIES
@@ -1318,6 +1356,8 @@ describe("sisyphus-task", () => {
       }
 
       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
         manager: mockManager,
         client: mockClient,
       })
@@ -1327,6 +1367,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - skills not provided (undefined); previously threw a hard error.
@@ -1361,12 +1402,15 @@ describe("sisyphus-task", () => {
           messages: async () => ({ data: [] }),
         },
       }
-      const tool = createDelegateTask({ manager: mockManager, client: mockClient })
+      const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true, manager: mockManager, client: mockClient })
       const toolContext = {
         sessionID: "parent-session",
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - load_skills explicitly set to null
@@ -1411,6 +1455,8 @@ describe("sisyphus-task", () => {
        }
       
       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
         manager: mockManager,
         client: mockClient,
       })
@@ -1420,6 +1466,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
       
       // when - empty array passed
@@ -1463,7 +1510,9 @@ describe("sisyphus-task", () => {
           status: async () => ({ data: {} }),
         },
       }
-      const tool = createDelegateTask({ manager: mockManager, client: mockClient })
+      const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true, manager: mockManager, client: mockClient })
 
       // when - run_in_background omitted (previously a hard throw)
       await tool.execute(
@@ -1473,7 +1522,7 @@ describe("sisyphus-task", () => {
           category: "quick",
           load_skills: [],
         },
-        { sessionID: "parent-session", messageID: "parent-message", agent: "sisyphus", abort: new AbortController().signal }
+        { sessionID: "parent-session", messageID: "parent-message", agent: "sisyphus", abort: new AbortController().signal, ask: testApprovingAsk }
       )
 
       // then - sync path should run and the session prompt should be sent
@@ -1503,7 +1552,9 @@ describe("sisyphus-task", () => {
           status: async () => ({ data: {} }),
         },
       }
-      const tool = createDelegateTask({ manager: mockManager, client: mockClient })
+      const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true, manager: mockManager, client: mockClient })
 
       // when
       await tool.execute(
@@ -1513,7 +1564,7 @@ describe("sisyphus-task", () => {
           subagent_type: "explore",
           load_skills: [],
         },
-        { sessionID: "parent-session", messageID: "parent-message", agent: "sisyphus", abort: new AbortController().signal }
+        { sessionID: "parent-session", messageID: "parent-message", agent: "sisyphus", abort: new AbortController().signal, ask: testApprovingAsk }
       )
 
       // then
@@ -1558,7 +1609,9 @@ describe("sisyphus-task", () => {
           abort: async () => ({ data: {} }),
         },
       }
-      const tool = createDelegateTask({ manager: mockManager, client: mockClient })
+      const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true, manager: mockManager, client: mockClient })
 
       // when - omit run_in_background; task_id + default false must route to
       // executeSyncContinuation (tools.ts:75). Previously this threw the
@@ -1571,7 +1624,7 @@ describe("sisyphus-task", () => {
           task_id: "ses_continue_test",
           load_skills: [],
         },
-        { sessionID: "parent-session", messageID: "parent-message", agent: "sisyphus", abort: new AbortController().signal },
+        { sessionID: "parent-session", messageID: "parent-message", agent: "sisyphus", abort: new AbortController().signal, ask: testApprovingAsk },
       )
 
       // then - no throw, returned content is a string, and routing stayed on
@@ -1596,7 +1649,9 @@ describe("sisyphus-task", () => {
           messages: async () => ({ data: [] }),
         },
       }
-      const tool = createDelegateTask({ manager: mockManager, client: mockClient })
+      const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true, manager: mockManager, client: mockClient })
 
       // when - omitting run_in_background no longer throws, but missing category+subagent_type still produces a (returned) error.
       const result = await tool.execute(
@@ -1605,7 +1660,7 @@ describe("sisyphus-task", () => {
           prompt: "Do something",
           load_skills: [],
         },
-        { sessionID: "parent-session", messageID: "parent-message", agent: "sisyphus", abort: new AbortController().signal }
+        { sessionID: "parent-session", messageID: "parent-message", agent: "sisyphus", abort: new AbortController().signal, ask: testApprovingAsk }
       )
 
       // then - the missing-target error remains intact; only the run_in_background gate was removed.
@@ -1627,7 +1682,9 @@ describe("sisyphus-task", () => {
           messages: async () => ({ data: [] }),
         },
       }
-      const tool = createDelegateTask({ manager: mockManager, client: mockClient })
+      const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true, manager: mockManager, client: mockClient })
 
       // when
       try {
@@ -1643,6 +1700,7 @@ describe("sisyphus-task", () => {
             messageID: "parent-message",
             agent: "sisyphus",
             abort: new AbortController().signal,
+        ask: testApprovingAsk,
             metadata: async (meta: { title?: string }) => { capturedTitle = meta.title },
           }
         )
@@ -1672,7 +1730,9 @@ describe("sisyphus-task", () => {
           messages: async () => ({ data: [] }),
         },
       }
-      const tool = createDelegateTask({ manager: mockManager, client: mockClient })
+      const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true, manager: mockManager, client: mockClient })
 
       // when
       try {
@@ -1689,6 +1749,7 @@ describe("sisyphus-task", () => {
             messageID: "parent-message",
             agent: "sisyphus",
             abort: new AbortController().signal,
+        ask: testApprovingAsk,
             metadata: async (meta: { title?: string }) => { capturedTitle = meta.title },
           }
         )
@@ -1718,7 +1779,9 @@ describe("sisyphus-task", () => {
           messages: async () => ({ data: [] }),
         },
       }
-      const tool = createDelegateTask({ manager: mockManager, client: mockClient })
+      const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true, manager: mockManager, client: mockClient })
 
       // when
       try {
@@ -1735,6 +1798,7 @@ describe("sisyphus-task", () => {
             messageID: "parent-message",
             agent: "sisyphus",
             abort: new AbortController().signal,
+        ask: testApprovingAsk,
             metadata: async (meta: { title?: string }) => { capturedTitle = meta.title },
           }
         )
@@ -1772,7 +1836,9 @@ describe("sisyphus-task", () => {
           status: async () => ({ data: { ses_explicit_false: { type: "idle" } } }),
         },
       }
-      const tool = createDelegateTask({ manager: mockManager, client: mockClient })
+      const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true, manager: mockManager, client: mockClient })
 
       // when
       const result = await tool.execute(
@@ -1783,7 +1849,7 @@ describe("sisyphus-task", () => {
           run_in_background: false,
           load_skills: [],
         },
-        { sessionID: "parent-session", messageID: "parent-message", agent: "sisyphus", abort: new AbortController().signal }
+        { sessionID: "parent-session", messageID: "parent-message", agent: "sisyphus", abort: new AbortController().signal, ask: testApprovingAsk }
       )
 
       // then
@@ -1818,7 +1884,9 @@ describe("sisyphus-task", () => {
           messages: async () => ({ data: [] }),
         },
       }
-      const tool = createDelegateTask({ manager: mockManager, client: mockClient })
+      const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true, manager: mockManager, client: mockClient })
 
       // when
       const result = await tool.execute(
@@ -1829,7 +1897,7 @@ describe("sisyphus-task", () => {
           run_in_background: true,
           load_skills: [],
         },
-        { sessionID: "parent-session", messageID: "parent-message", agent: "sisyphus", abort: new AbortController().signal }
+        { sessionID: "parent-session", messageID: "parent-message", agent: "sisyphus", abort: new AbortController().signal, ask: testApprovingAsk }
       )
 
       // then
@@ -1889,7 +1957,9 @@ describe("sisyphus-task", () => {
           messages: async () => ({ data: [] }),
         },
       }
-      const tool = createDelegateTask({ manager: mockManager, client: mockClient })
+      const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true, manager: mockManager, client: mockClient, modelRouting: { paid_workers: { max_concurrent: 2 } } })
 
       // when
       const [firstResult, secondResult] = await Promise.all([
@@ -1901,7 +1971,7 @@ describe("sisyphus-task", () => {
             run_in_background: true,
             load_skills: [],
           },
-          { sessionID: "parent-session", messageID: "parent-message-1", agent: "sisyphus", abort: firstAbortController.signal }
+          { sessionID: "parent-session", messageID: "parent-message-1", agent: "sisyphus", abort: firstAbortController.signal, ask: testApprovingAsk }
         ),
         tool.execute(
           {
@@ -1911,7 +1981,7 @@ describe("sisyphus-task", () => {
             run_in_background: true,
             load_skills: [],
           },
-          { sessionID: "parent-session", messageID: "parent-message-2", agent: "sisyphus", abort: secondAbortController.signal }
+          { sessionID: "parent-session", messageID: "parent-message-2", agent: "sisyphus", abort: secondAbortController.signal, ask: testApprovingAsk }
         ),
       ])
 
@@ -1996,6 +2066,8 @@ describe("sisyphus-task", () => {
       }
      
      const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
        manager: mockManager,
        client: mockClient,
      })
@@ -2005,6 +2077,7 @@ describe("sisyphus-task", () => {
        messageID: "parent-message",
        agent: "sisyphus",
        abort: new AbortController().signal,
+        ask: testApprovingAsk,
      }
      
      // when
@@ -2092,6 +2165,8 @@ describe("sisyphus-task", () => {
     }
 
     const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
       manager: { resume: async () => ({ id: "task-var", sessionId: "ses_var_test", description: "Variant test", agent: "sisyphus-junior", status: "running" }) },
       client: mockClient,
     })
@@ -2101,6 +2176,7 @@ describe("sisyphus-task", () => {
       messageID: "parent-message",
       agent: "sisyphus",
       abort: new AbortController().signal,
+        ask: testApprovingAsk,
     }
 
     //#when continuing the session
@@ -2151,6 +2227,8 @@ describe("sisyphus-task", () => {
      }
      
      const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
        manager: mockManager,
        client: mockClient,
      })
@@ -2160,6 +2238,7 @@ describe("sisyphus-task", () => {
        messageID: "parent-message",
        agent: "sisyphus",
        abort: new AbortController().signal,
+        ask: testApprovingAsk,
      }
      
      // when
@@ -2209,6 +2288,8 @@ describe("sisyphus-task", () => {
        }
        
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
        })
@@ -2218,6 +2299,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
       
       // when
@@ -2281,6 +2363,8 @@ describe("sisyphus-task", () => {
        }
 
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
        })
@@ -2290,6 +2374,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when
@@ -2345,6 +2430,8 @@ describe("sisyphus-task", () => {
        }
        
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
        })
@@ -2354,6 +2441,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
       
       // when
@@ -2401,6 +2489,8 @@ describe("sisyphus-task", () => {
        }
        
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
        })
@@ -2410,6 +2500,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
       
       // when
@@ -2457,6 +2548,8 @@ describe("sisyphus-task", () => {
        }
 
       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
         manager: mockManager,
         client: mockClient,
         userCategories: {
@@ -2468,7 +2561,8 @@ describe("sisyphus-task", () => {
         sessionID: "parent",
         messageID: "msg",
         agent: "sisyphus",
-        abort: new AbortController().signal
+        abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when
@@ -2528,6 +2622,8 @@ describe("sisyphus-task", () => {
        }
        
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
          userCategories: {
@@ -2540,6 +2636,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
       
       // when - using a user-defined gemini category with run_in_background=false
@@ -2590,6 +2687,8 @@ describe("sisyphus-task", () => {
        }
        
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
        })
@@ -2599,6 +2698,7 @@ describe("sisyphus-task", () => {
          messageID: "parent-message",
          agent: "sisyphus",
          abort: new AbortController().signal,
+        ask: testApprovingAsk,
        }
        
        // when - using visual-engineering with run_in_background=true (normal background)
@@ -2657,6 +2757,8 @@ describe("sisyphus-task", () => {
        }
 
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
          userCategories: {
@@ -2671,6 +2773,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - using minimax category with run_in_background=false
@@ -2726,6 +2829,8 @@ describe("sisyphus-task", () => {
        
        // Use ultrabrain which uses gpt-5.5 (non-gemini)
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
        })
@@ -2735,6 +2840,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
       
       // when - using ultrabrain (gpt model) with run_in_background=false
@@ -2794,6 +2900,8 @@ describe("sisyphus-task", () => {
        }
        
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
          userCategories: {
@@ -2806,6 +2914,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
       
       // when - user gemini category (gemini-3.1-pro with high variant)
@@ -2873,6 +2982,8 @@ describe("sisyphus-task", () => {
        }
 
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
        })
@@ -2882,6 +2993,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - writing category (kimi) with run_in_background=false
@@ -2940,6 +3052,8 @@ describe("sisyphus-task", () => {
       }
       
       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
         manager: mockManager,
         client: mockClient,
         userCategories: {
@@ -2955,6 +3069,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
       
       // when - using custom unstable category with run_in_background=false
@@ -3011,6 +3126,8 @@ describe("sisyphus-task", () => {
 
       // NO userCategories override, NO sisyphusJuniorModel
       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
         manager: mockManager,
         client: mockClient,
         // userCategories: undefined - use DEFAULT_CATEGORIES only
@@ -3024,6 +3141,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - using "quick" category which should use the catalog model
@@ -3075,6 +3193,8 @@ describe("sisyphus-task", () => {
        }
 
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
          userCategories: {
@@ -3089,6 +3209,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - using "quick" category which should use the catalog model
@@ -3139,6 +3260,8 @@ describe("sisyphus-task", () => {
       }
 
       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
         manager: mockManager,
         client: mockClient,
         sisyphusJuniorModel: "anthropic/claude-sonnet-4-6",
@@ -3151,6 +3274,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - using ultrabrain category (default model is openai/gpt-5.5)
@@ -3201,6 +3325,8 @@ describe("sisyphus-task", () => {
        }
 
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
          sisyphusJuniorModel: "anthropic/claude-sonnet-4-6",
@@ -3216,6 +3342,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - using ultrabrain category with explicit model override
@@ -3265,6 +3392,8 @@ describe("sisyphus-task", () => {
       }
 
       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
         manager: mockManager,
         client: mockClient,
         sisyphusJuniorModel: "anthropic/claude-sonnet-4-6",
@@ -3277,6 +3406,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - using quick category (default: anthropic/claude-haiku-4-5)
@@ -3327,6 +3457,8 @@ describe("sisyphus-task", () => {
       }
 
       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
         manager: mockManager,
         client: mockClient,
         sisyphusJuniorModel: "openai/gpt-5.5",
@@ -3340,6 +3472,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - using custom category with no explicit model
@@ -3390,6 +3523,8 @@ describe("sisyphus-task", () => {
 
        // Pass browserProvider to createDelegateTask
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
          browserProvider: "agent-browser",
@@ -3400,6 +3535,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - request agent-browser skill
@@ -3453,6 +3589,8 @@ describe("sisyphus-task", () => {
 
        // No browserProvider passed
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
          nativeSkills,
@@ -3463,6 +3601,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - request agent-browser skill without browserProvider
@@ -3546,6 +3685,8 @@ describe("sisyphus-task", () => {
 			}
 
 			const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
 				manager: mockManager,
 				client: mockClient,
   })
@@ -3555,6 +3696,7 @@ describe("sisyphus-task", () => {
 				messageID: "parent-message",
 				agent: "sisyphus",
 				abort: new AbortController().signal,
+        ask: testApprovingAsk,
 			}
 
 			// when: using short name in load_skills
@@ -3999,12 +4141,14 @@ describe("sisyphus-task", () => {
          config: { get: async () => ({ data: { model: SYSTEM_DEFAULT_MODEL } }) },
          session: { get: async () => ({ data: { directory: "/project" } }), create: async () => ({ data: { id: "s" } }), prompt: async () => ({ data: {} }), promptAsync: async () => ({ data: {} }), messages: async () => ({ data: [] }), status: async () => ({ data: {} }) },
        }
-       const tool = createDelegateTask({ manager: { launch: async () => ({}) }, client: mockClient })
+       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true, manager: { launch: async () => ({}) }, client: mockClient })
       
       //#when
       const result = await tool.execute(
         { description: "test", prompt: "Create a plan", subagent_type: "plan", run_in_background: false, load_skills: [] },
-        { sessionID: "p", messageID: "m", agent: "plan", abort: new AbortController().signal }
+        { sessionID: "p", messageID: "m", agent: "plan", abort: new AbortController().signal, ask: testApprovingAsk }
       )
       
       //#then
@@ -4020,12 +4164,14 @@ describe("sisyphus-task", () => {
          config: { get: async () => ({ data: { model: SYSTEM_DEFAULT_MODEL } }) },
          session: { get: async () => ({ data: { directory: "/project" } }), create: async () => ({ data: { id: "s" } }), prompt: async () => ({ data: {} }), promptAsync: async () => ({ data: {} }), messages: async () => ({ data: [] }), status: async () => ({ data: {} }) },
        }
-       const tool = createDelegateTask({ manager: { launch: async () => ({}) }, client: mockClient })
+       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true, manager: { launch: async () => ({}) }, client: mockClient })
       
       //#when
       const result = await tool.execute(
         { description: "test", prompt: "Create a plan", subagent_type: "plan", run_in_background: false, load_skills: [] },
-        { sessionID: "p", messageID: "m", agent: "prometheus", abort: new AbortController().signal }
+        { sessionID: "p", messageID: "m", agent: "prometheus", abort: new AbortController().signal, ask: testApprovingAsk }
       )
       
       //#then
@@ -4040,12 +4186,14 @@ describe("sisyphus-task", () => {
          config: { get: async () => ({ data: { model: SYSTEM_DEFAULT_MODEL } }) },
          session: { get: async () => ({ data: { directory: "/project" } }), create: async () => ({ data: { id: "s" } }), prompt: async () => ({ data: {} }), promptAsync: async () => ({ data: {} }), messages: async () => ({ data: [] }), status: async () => ({ data: {} }) },
        }
-       const tool = createDelegateTask({ manager: { launch: async () => ({}) }, client: mockClient })
+       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true, manager: { launch: async () => ({}) }, client: mockClient })
 
       //#when
       const result = await tool.execute(
         { description: "test", prompt: "Create a plan", subagent_type: "plan", run_in_background: false, load_skills: [] },
-        { sessionID: "p", messageID: "m", agent: getAgentDisplayName("prometheus"), abort: new AbortController().signal }
+        { sessionID: "p", messageID: "m", agent: getAgentDisplayName("prometheus"), abort: new AbortController().signal, ask: testApprovingAsk }
       )
 
       //#then
@@ -4060,12 +4208,14 @@ describe("sisyphus-task", () => {
          config: { get: async () => ({ data: { model: SYSTEM_DEFAULT_MODEL } }) },
          session: { get: async () => ({ data: { directory: "/project" } }), create: async () => ({ data: { id: "s" } }), prompt: async () => ({ data: {} }), promptAsync: async () => ({ data: {} }), messages: async () => ({ data: [] }), status: async () => ({ data: {} }) },
        }
-       const tool = createDelegateTask({ manager: { launch: async () => ({}) }, client: mockClient })
+       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true, manager: { launch: async () => ({}) }, client: mockClient })
       
       //#when
       const result = await tool.execute(
         { description: "test", prompt: "Execute", subagent_type: "prometheus", run_in_background: false, load_skills: [] },
-        { sessionID: "p", messageID: "m", agent: "plan", abort: new AbortController().signal }
+        { sessionID: "p", messageID: "m", agent: "plan", abort: new AbortController().signal, ask: testApprovingAsk }
       )
       
       //#then
@@ -4087,12 +4237,14 @@ describe("sisyphus-task", () => {
            status: async () => ({ data: { "ses_ok": { type: "idle" } } }),
          },
        }
-       const tool = createDelegateTask({ manager: { launch: async () => ({}) }, client: mockClient })
+       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true, manager: { launch: async () => ({}) }, client: mockClient })
       
       //#when
       const result = await tool.execute(
         { description: "test", prompt: "Create a plan", subagent_type: "plan", run_in_background: false, load_skills: [] },
-        { sessionID: "p", messageID: "m", agent: "sisyphus", abort: new AbortController().signal }
+        { sessionID: "p", messageID: "m", agent: "sisyphus", abort: new AbortController().signal, ask: testApprovingAsk }
       )
       
       //#then
@@ -4138,6 +4290,8 @@ describe("sisyphus-task", () => {
        }
 
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
        })
@@ -4147,6 +4301,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - delegating to explore agent via subagent_type
@@ -4202,6 +4357,8 @@ describe("sisyphus-task", () => {
        }
 
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
        })
@@ -4211,6 +4368,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - delegating to oracle agent via subagent_type in sync mode
@@ -4225,9 +4383,11 @@ describe("sisyphus-task", () => {
         toolContext
       )
 
+      // Root/master authority now routes subagents through the dynamic paid band (free-first,
+      // cheapest-sufficient paid when no free candidate exists); the matched static model is not pinned.
       expect(promptBody.model).toEqual({
         providerID: "anthropic",
-        modelID: "claude-opus-4-7",
+        modelID: "claude-haiku-4-5",
       })
     }, { timeout: 20000 })
 
@@ -4265,6 +4425,8 @@ describe("sisyphus-task", () => {
        }
 
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
        })
@@ -4274,6 +4436,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - delegating to agent without model
@@ -4326,6 +4489,8 @@ describe("sisyphus-task", () => {
        }
 
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
          agentOverrides: {
@@ -4338,6 +4503,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - delegating to oracle via subagent_type with user override
@@ -4393,6 +4559,8 @@ describe("sisyphus-task", () => {
        }
 
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
          agentOverrides: {
@@ -4405,6 +4573,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - delegating to oracle via subagent_type with variant override
@@ -4459,6 +4628,8 @@ describe("sisyphus-task", () => {
        }
 
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
          // no agentOverrides
@@ -4471,6 +4642,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - delegating to oracle with no override and no matchedAgent model
@@ -4522,6 +4694,8 @@ describe("sisyphus-task", () => {
        }
        
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
        })
@@ -4531,6 +4705,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
       
       //#when - sisyphus delegates to plan
@@ -4564,12 +4739,14 @@ describe("sisyphus-task", () => {
            status: async () => ({ data: { "ses_prometheus_task": { type: "idle" } } }),
          },
        }
-       const tool = createDelegateTask({ manager: { launch: async () => ({}) }, client: mockClient })
+       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true, manager: { launch: async () => ({}) }, client: mockClient })
       
       //#when
       const result = await tool.execute(
         { description: "Test prometheus task permission", prompt: "Create a plan", subagent_type: "prometheus", run_in_background: false, load_skills: [] },
-        { sessionID: "p", messageID: "m", agent: "sisyphus", abort: new AbortController().signal }
+        { sessionID: "p", messageID: "m", agent: "sisyphus", abort: new AbortController().signal, ask: testApprovingAsk }
       )
       
       //#then — coordinator guard fires before primary-agent check; message names the agent and explains the conflict
@@ -4604,6 +4781,8 @@ describe("sisyphus-task", () => {
       }
       
       const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
         manager: mockManager,
         client: mockClient,
       })
@@ -4613,6 +4792,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
       
       // when - sisyphus delegates to oracle
@@ -4659,6 +4839,8 @@ describe("sisyphus-task", () => {
        }
 
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
        })
@@ -4668,6 +4850,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when - sync task with category
@@ -4708,6 +4891,8 @@ describe("sisyphus-task", () => {
        }
 
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
        })
@@ -4717,6 +4902,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when
@@ -4763,6 +4949,8 @@ describe("sisyphus-task", () => {
        }
 
        const tool = createDelegateTask({
+        paidConsentRegistry: testPaidConsentRegistry,
+        isRootSession: true,
          manager: mockManager,
          client: mockClient,
          userCategories: {
@@ -4775,6 +4963,7 @@ describe("sisyphus-task", () => {
         messageID: "parent-message",
         agent: "sisyphus",
         abort: new AbortController().signal,
+        ask: testApprovingAsk,
       }
 
       // when

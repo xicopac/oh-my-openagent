@@ -20,7 +20,7 @@ import { createRuntimeSkillsResolver, readRuntimeHostSkills } from "./runtime-sk
 export function createCoreTools(args: {
   readonly ctx: PluginContext
   readonly pluginConfig: OhMyOpenCodeConfig
-  readonly managers: Pick<Managers, "backgroundManager" | "tmuxSessionManager" | "skillMcpManager" | "modelFallbackControllerAccessor" | "resourceGovernorRuntime" | "delegationFirstRuntime" | "pricingCatalog">
+  readonly managers: Pick<Managers, "backgroundManager" | "tmuxSessionManager" | "skillMcpManager" | "modelFallbackControllerAccessor" | "resourceGovernorRuntime" | "delegationFirstRuntime" | "pricingCatalog" | "governanceAudit" | "paidConsentRegistry">
   readonly skillContext: SkillContext
   readonly availableCategories: AvailableCategory[]
   readonly factories: ToolRegistryFactories
@@ -61,6 +61,8 @@ export function createCoreTools(args: {
     resourceGovernorDefaultChildTokens: pluginConfig.resource_governor?.delegation.default_child_tokens,
     delegationFirstRuntime: managers.delegationFirstRuntime,
     pricingCatalog: managers.pricingCatalog,
+    paidConsentRegistry: managers.paidConsentRegistry,
+    paidConsentAudit: managers.governanceAudit,
     loadCurrentModelConfig: () => {
       const current = loadPluginConfig(ctx.directory, process.env)
       return { agents: current.agents, categories: current.categories, model_routing: current.model_routing }

@@ -34,6 +34,7 @@ import { join } from "node:path"
 import {
   runRuntimeScenarios,
   runRoutingCostPolicyScenario,
+  runPaidConsentScenarios,
   eventNames,
   countNamed,
   type CheckResult,
@@ -319,6 +320,11 @@ async function main(): Promise<void> {
   const costPolicy = await runRoutingCostPolicyScenario()
   checks.push(...costPolicy.checks)
   tempDirs.push(...costPolicy.traceDirs)
+
+  // Tier B4: paid consent (master authority + single-use operator approval)
+  const paidConsent = await runPaidConsentScenarios()
+  checks.push(...paidConsent.checks)
+  tempDirs.push(...paidConsent.traceDirs)
 
   // Tier A: process-level worker-first gate
   let procEnvRoot: string | undefined
