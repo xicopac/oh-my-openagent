@@ -151,6 +151,30 @@ export type DelegationFirstRuntime = {
   ): PreGruntDecision
   /** Current hard worker-first phase for a root session (observability + tests). */
   rootPhase(sessionID: string): RootWorkerPhase
+  /** ROOT_REPAIR_MODE: enter repair (root may perform repo work directly). */
+  enterRootRepair(sessionID: string, reason: string, detail?: Record<string, unknown>): void
+  /** Record a repair action taken by the root (audit only). */
+  noteRootRepairAction(sessionID: string, action: string): void
+  /** Record that the root verified the repair (audit only). */
+  noteRootRepairVerified(sessionID: string, verified: boolean): void
+  /** Record a delegation retry attempt started by the root (audit + transition). */
+  noteDelegationRetryStarted(sessionID: string): void
+  /** Record a successful delegation retry (returns to worker-first). */
+  noteDelegationRetrySucceeded(sessionID: string): void
+  /** Record a failed delegation retry (stays in root_repair). */
+  noteDelegationRetryFailed(sessionID: string, reason: string): void
+  /** Leave ROOT_REPAIR_MODE back into the worker-first lifecycle. */
+  exitRootRepair(sessionID: string): void
+  /** Escalate to EXCEPTIONAL_ROOT_TAKEOVER (root completes the task directly). */
+  enterExceptionalTakeover(sessionID: string, reason: string): void
+  /** Signal a child failed to launch (startup/0ms/EACCES) - triggers repair for its parent. */
+  noteChildStartupFailure(parentSessionID: string, childSessionID: string | null, reason: string): void
+  /** Signal the evidence pipeline broke (worker completed but root never saw evidence). */
+  noteEvidencePipelineBroken(parentSessionID: string, childSessionID: string | null, reason: string): void
+  /** Current repair reason for a root session, if in repair. */
+  rootRepairReason(sessionID: string): string | null
+  /** True when `sessionID` is a registered worker child (nested child detection). */
+  isChildSession(sessionID: string): boolean
   dispose(): void
 }
 
@@ -217,6 +241,22 @@ export function createDelegationFirstRuntime(
 
   function satisfyWorkerRequirement(sessionID: string): void {
     const before = rootState.phase(sessionID)
+    // ROOT_REPAIR_MODE: a replacement/retry child that reaches request-started
+    // is the verified repair retry; leave repair and resume normal worker-first.
+    if (before === "root_repair") {
+      rootState.noteDelegationRetrySucceeded(sessionID)
+      audit?.write(sessionID, {
+        subsystem: "delegation",
+        event: "delegation_retry_succeeded",
+        session_id: sessionID,
+      })
+      audit?.write(sessionID, {
+        subsystem: "delegation",
+        event: "root_repair_mode_exited",
+        session_id: sessionID,
+      })
+      return
+    }
     rootState.noteWorkerRunning(sessionID)
     if (rootState.phase(sessionID) === "worker_active" && before !== "worker_active") {
       audit?.write(sessionID, {
@@ -469,10 +509,13 @@ export function createDelegationFirstRuntime(
           })
         }
         if (action.kind === "give_up") {
-          rootState.noteEscalationExhausted(parent)
+          // Repeated worker failure: enter ROOT_REPAIR_MODE so the root can
+          // diagnose/fix the delegation machinery. Exceptional takeover is
+          // reached explicitly after a verified repair retry still fails.
+          rootState.noteRootRepairEntered(parent, "retry_chain_exhausted")
           audit?.write(parent, {
             subsystem: "delegation",
-            event: "exceptional_root_takeover",
+            event: "root_repair_mode_entered",
             job_id: jobID,
             reason: action.reason,
           })
@@ -513,6 +556,17 @@ export function createDelegationFirstRuntime(
           reason: "no_relaunch_sink_for_disabled_model",
           assignment_id: assignmentID ?? null,
         })
+        const parentID = sessionJob.get(sessionID) ?? assignment?.parent_session_id
+        if (parentID) {
+          rootState.noteRootRepairEntered(parentID, "routing_no_relaunch_sink")
+          audit?.write(parentID, {
+            subsystem: "delegation",
+            event: "root_repair_mode_entered",
+            reason: "routing_no_relaunch_sink",
+            model: modelKey,
+            assignment_id: assignmentID ?? null,
+          })
+        }
         return
       }
 
@@ -530,6 +584,15 @@ export function createDelegationFirstRuntime(
           subsystem: "delegation",
           event: "retry_chain_exhausted",
           reason: "no_eligible_worker",
+          assignment_id: id,
+        })
+        const parentID = sessionJob.get(sessionID) ?? assignment.parent_session_id
+        rootState.noteRootRepairEntered(parentID, "routing_no_eligible_worker")
+        audit?.write(parentID, {
+          subsystem: "delegation",
+          event: "root_repair_mode_entered",
+          reason: "routing_no_eligible_worker",
+          model: modelKey,
           assignment_id: id,
         })
         return
@@ -627,6 +690,17 @@ export function createDelegationFirstRuntime(
             reason: "no_retained_assignment",
             stall_mode: result.stallMode,
           })
+          const parentID = sessionJob.get(sessionID)
+          if (parentID) {
+            rootState.noteRootRepairEntered(parentID, "worker_stall_exhausted")
+            audit?.write(parentID, {
+              subsystem: "delegation",
+              event: "root_repair_mode_entered",
+              reason: "worker_stall_exhausted",
+              stall_mode: result.stallMode,
+              session_id: sessionID,
+            })
+          }
         }
       } else {
         audit?.write(sessionID, {
@@ -636,6 +710,17 @@ export function createDelegationFirstRuntime(
           stall_mode: result.stallMode,
           assignment_id: assignmentID ?? null,
         })
+        const parentID = sessionJob.get(sessionID)
+        if (parentID) {
+          rootState.noteRootRepairEntered(parentID, "worker_stall_exhausted")
+          audit?.write(parentID, {
+            subsystem: "delegation",
+            event: "root_repair_mode_entered",
+            reason: "worker_stall_exhausted",
+            stall_mode: result.stallMode,
+            session_id: sessionID,
+          })
+        }
       }
 
       // Truthful terminal: a reclaimed child is cancelled, never left running.
@@ -780,6 +865,18 @@ export function createDelegationFirstRuntime(
         }
       }
 
+      if (beforePhase === "root_repair" && decision.opClass !== "control" && decision.opClass !== "metadata") {
+        // ROOT_REPAIR_MODE: the root is authorized to perform repository work
+        // directly. Record each substantive action for auditability.
+        audit?.write(sessionID, {
+          subsystem: "delegation",
+          event: "root_repair_action",
+          tool,
+          op_class: decision.opClass,
+          phase: "root_repair",
+        })
+      }
+
       if (beforePhase === "bootstrap" && !bootstrapAudited.has(sessionID)) {
         bootstrapAudited.add(sessionID)
         audit?.write(sessionID, {
@@ -800,8 +897,110 @@ export function createDelegationFirstRuntime(
         selectiveVerification: decision.selectiveVerification,
       }
     },
+    isChildSession(sessionID) {
+      return sessionJob.has(sessionID)
+    },
     rootPhase(sessionID) {
       return rootState.phase(sessionID)
+    },
+    rootRepairReason(sessionID) {
+      return rootState.repairReason(sessionID)
+    },
+    enterRootRepair(sessionID, reason, detail) {
+      // A nested child cannot grant itself root-repair authority. Authority
+      // belongs to the true root/master session (not a registered worker child).
+      if (sessionJob.has(sessionID)) {
+        audit?.write(sessionID, {
+          subsystem: "delegation",
+          event: "nested_child_repair_rejected",
+          session_id: sessionID,
+        })
+        return
+      }
+      rootState.noteRootRepairEntered(sessionID, reason)
+      audit?.write(sessionID, {
+        subsystem: "delegation",
+        event: "root_repair_mode_entered",
+        reason,
+        ...(detail ?? {}),
+      })
+    },
+    noteRootRepairAction(sessionID, action) {
+      audit?.write(sessionID, {
+        subsystem: "delegation",
+        event: "root_repair_action",
+        action,
+      })
+    },
+    noteRootRepairVerified(sessionID, verified) {
+      audit?.write(sessionID, {
+        subsystem: "delegation",
+        event: "root_repair_verified",
+        verified,
+      })
+    },
+    noteDelegationRetryStarted(sessionID) {
+      audit?.write(sessionID, {
+        subsystem: "delegation",
+        event: "delegation_retry_started",
+      })
+    },
+    noteDelegationRetrySucceeded(sessionID) {
+      const wasRepair = rootState.phase(sessionID) === "root_repair"
+      rootState.noteDelegationRetrySucceeded(sessionID)
+      audit?.write(sessionID, {
+        subsystem: "delegation",
+        event: "delegation_retry_succeeded",
+      })
+      if (wasRepair) {
+        audit?.write(sessionID, {
+          subsystem: "delegation",
+          event: "root_repair_mode_exited",
+        })
+      }
+    },
+    noteDelegationRetryFailed(sessionID, reason) {
+      rootState.noteDelegationRetryFailed(sessionID)
+      audit?.write(sessionID, {
+        subsystem: "delegation",
+        event: "delegation_retry_failed",
+        reason,
+      })
+    },
+    exitRootRepair(sessionID) {
+      rootState.noteRootRepairExited(sessionID)
+      audit?.write(sessionID, {
+        subsystem: "delegation",
+        event: "root_repair_mode_exited",
+      })
+    },
+    enterExceptionalTakeover(sessionID, reason) {
+      rootState.noteEscalationExhausted(sessionID)
+      audit?.write(sessionID, {
+        subsystem: "delegation",
+        event: "exceptional_root_takeover",
+        reason,
+      })
+    },
+    noteChildStartupFailure(parentSessionID, childSessionID, reason) {
+      audit?.write(parentSessionID, {
+        subsystem: "delegation",
+        event: "root_repair_mode_entered",
+        reason: "child_startup_failure",
+        child_session_id: childSessionID ?? null,
+        failure_reason: reason,
+      })
+      rootState.noteRootRepairEntered(parentSessionID, "child_startup_failure")
+    },
+    noteEvidencePipelineBroken(parentSessionID, childSessionID, reason) {
+      audit?.write(parentSessionID, {
+        subsystem: "delegation",
+        event: "root_repair_mode_entered",
+        reason: "evidence_pipeline_broken",
+        child_session_id: childSessionID ?? null,
+        failure_reason: reason,
+      })
+      rootState.noteRootRepairEntered(parentSessionID, "evidence_pipeline_broken")
     },
     dispose() {
       watchdog.dispose()

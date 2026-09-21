@@ -168,6 +168,19 @@ export async function executeBackgroundTask(
       ? manager.getTask(task.id)
       : undefined
     if (!sessionId && (updatedTask?.status === "error" || updatedTask?.status === "cancelled" || updatedTask?.status === "interrupt")) {
+      // COST-SAFETY: a paid slot was reserved before launch; a launch that
+      // never produced a session must release it or the cap-1 slot leaks and
+      // blocks all future delegation (ordinary free workers too).
+      if (paidSlotAcquired) {
+        if (executorCtx.delegationFirstRuntime) executorCtx.delegationFirstRuntime.releasePaidChild()
+      }
+      // ROOT_REPAIR_MODE trigger: the worker failed to start at all (startup
+      // exception / 0ms child / provider failure). The root may investigate.
+      executorCtx.delegationFirstRuntime?.noteChildStartupFailure(
+        parentContext.sessionID,
+        task.sessionId ?? null,
+        String(updatedTask?.status),
+      )
       return `Task failed to start (status: ${updatedTask.status}).\n\nTask ID: ${task.id}`
     }
 

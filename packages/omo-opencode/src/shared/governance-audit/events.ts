@@ -84,6 +84,13 @@ export const WORKER_FIRST_AUDIT_EVENTS = [
   "worker_requirement_satisfied",
   "worker_evidence_available",
   "root_additional_delegation_required",
+  "root_repair_mode_entered",
+  "root_repair_action",
+  "root_repair_verified",
+  "delegation_retry_started",
+  "delegation_retry_succeeded",
+  "delegation_retry_failed",
+  "root_repair_mode_exited",
   "exceptional_root_takeover",
 ] as const
 

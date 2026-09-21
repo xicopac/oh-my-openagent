@@ -2551,6 +2551,15 @@ The task was re-queued on a fallback model after a retryable failure.
 
       clearDelegatedChildSessionBootstrap(task.sessionId)
       SessionCategoryRegistry.remove(task.sessionId)
+
+      // COST-SAFETY + lifecycle: the session was aborted directly on cancel, so
+      // the normal session.deleted path (which releases paid-child slots via
+      // detachChildSession) may never fire. Release the runtime slot now so a
+      // cancelled paid child cannot leak the cap-1 slot and block all later
+      // delegation (including ordinary free workers).
+      await this.onSubagentSessionDeleted?.({ sessionID: task.sessionId }).catch((error) => {
+        log("[background-agent] onSubagentSessionDeleted on cancel failed:", { taskId: task.id, sessionID: task.sessionId, error: String(error) })
+      })
     }
     if (task.currentAttemptID) {
       finalizeAttempt(task, task.currentAttemptID, "cancelled", reason)

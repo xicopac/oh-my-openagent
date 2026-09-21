@@ -40,6 +40,7 @@ import {
   type CheckResult,
 } from "./e2e-routing-scenarios"
 import { runPersistenceScenarios } from "./e2e-routing-persistence-scenarios"
+import { runRepairScenarios } from "./e2e-routing-repair-scenarios"
 
 const REPO_ROOT = join(import.meta.dir, "..")
 const MOCK_PATH = join(import.meta.dir, "e2e-routing", "mock-provider.mjs")
@@ -325,6 +326,13 @@ async function main(): Promise<void> {
   const paidConsent = await runPaidConsentScenarios()
   checks.push(...paidConsent.checks)
   tempDirs.push(...paidConsent.traceDirs)
+
+  // Tier B5: ROOT REPAIR / BREAK-GLASS (worker-first preserved, repair entry,
+  // root work allowed, logical task active, repair success/failure, failover,
+  // paid boundary, audit events)
+  const repair = await runRepairScenarios()
+  checks.push(...repair.checks)
+  tempDirs.push(...repair.traceDirs)
 
   // Tier A: process-level worker-first gate
   let procEnvRoot: string | undefined

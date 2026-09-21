@@ -7,9 +7,21 @@
  * another delegation. Only an explicitly-audited escalation exhaustion permits
  * an exceptional root takeover.
  *
+ * ROOT_REPAIR_MODE is a first-class phase, NOT a bypass hack: when the
+ * delegation/worker system itself is unhealthy (child launch failures, stalls,
+ * evidence-pipeline breaks, routing failures, paid-slot exhaustion), the root
+ * transitions to root_repair and is AUTHORIZED to perform repository work
+ * directly in order to diagnose and fix the delegation machinery. Repair mode
+ * does not mark the logical task failed/completed, does not discard assignment
+ * context, and is exited back into the normal worker-first lifecycle once one
+ * delegation retry succeeds. Persistent failure after a verified repair can
+ * escalate to exceptional_takeover (EXCEPTIONAL_ROOT_TAKEOVER).
+ *
  * Deterministic and model-free: phase transitions are driven purely by the
  * operation class of each incoming tool call and by explicit lifecycle
  * notifications (`noteWorkerRunning`, `noteWorkerEvidence`,
+ * `noteRootRepairEntered`, `noteRootRepairExited`,
+ * `noteDelegationRetrySucceeded`, `noteDelegationRetryFailed`,
  * `noteEscalationExhausted`). Never blocks control/delegation/result-retrieval
  * tools, so MAIN can always delegate, inspect worker state, receive results,
  * and respond to the user.
@@ -28,6 +40,7 @@ export type RootWorkerPhase =
   | "worker_required"
   | "worker_active"
   | "worker_evidence_available"
+  | "root_repair"
   | "exceptional_takeover"
 
 export type RootWorkerStateConfig = {
@@ -62,14 +75,20 @@ type SessionRecord = {
   targets: Set<string>
   modules: Set<string>
   evidenceAnchors: Set<string>
+  repairReason: string | null
 }
 
 export type RootWorkerState = {
   decide(sessionID: string, tool: string | undefined, hint?: GruntToolHint): RootWorkerGateDecision
   noteWorkerRunning(sessionID: string): void
   noteWorkerEvidence(sessionID: string, anchors?: readonly string[]): void
+  noteRootRepairEntered(sessionID: string, reason: string): void
+  noteRootRepairExited(sessionID: string): void
+  noteDelegationRetrySucceeded(sessionID: string): void
+  noteDelegationRetryFailed(sessionID: string): void
   noteEscalationExhausted(sessionID: string): void
   phase(sessionID: string): RootWorkerPhase
+  repairReason(sessionID: string): string | null
   evidenceAnchors(sessionID: string): string[]
   reset(sessionID: string): void
   clear(): void
@@ -109,6 +128,7 @@ export function createRootWorkerState(
         targets: new Set(),
         modules: new Set(),
         evidenceAnchors: new Set(),
+        repairReason: null,
       }
       records.set(sessionID, rec)
     }
@@ -175,6 +195,17 @@ export function createRootWorkerState(
 
       // Exceptional takeover permits direct root work (audited at transition).
       if (rec.phase === "exceptional_takeover") {
+        recordTarget(rec, hint)
+        if (opClass === "narrow") rec.narrowOps += 1
+        return allow(rec, { opClass })
+      }
+
+      // ROOT_REPAIR_MODE permits direct root work. This is the break-glass for
+      // fixing the delegation machinery itself: the root may read/grep/bash/
+      // edit/test freely while repairing. Repair is NOT exceptional takeover:
+      // the logical task stays active and the root returns to worker-first after
+      // a verified delegation retry.
+      if (rec.phase === "root_repair") {
         recordTarget(rec, hint)
         if (opClass === "narrow") rec.narrowOps += 1
         return allow(rec, { opClass })
@@ -255,6 +286,33 @@ export function createRootWorkerState(
       rec.phase = "worker_evidence_available"
     },
 
+    noteRootRepairEntered(sessionID, reason) {
+      const rec = recordFor(sessionID)
+      if (rec.phase === "exceptional_takeover") return
+      rec.phase = "root_repair"
+      rec.repairReason = reason
+    },
+
+    noteRootRepairExited(sessionID) {
+      const rec = recordFor(sessionID)
+      if (rec.phase !== "root_repair") return
+      rec.phase = "worker_required"
+      rec.repairReason = null
+    },
+
+    noteDelegationRetrySucceeded(sessionID) {
+      const rec = recordFor(sessionID)
+      if (rec.phase !== "root_repair") return
+      rec.phase = "worker_active"
+      rec.repairReason = null
+    },
+
+    noteDelegationRetryFailed(sessionID) {
+      const rec = recordFor(sessionID)
+      if (rec.phase !== "root_repair") return
+      // stay in root_repair: root continues diagnosis
+    },
+
     noteEscalationExhausted(sessionID) {
       const rec = recordFor(sessionID)
       rec.phase = "exceptional_takeover"
@@ -262,6 +320,10 @@ export function createRootWorkerState(
 
     phase(sessionID) {
       return recordFor(sessionID).phase
+    },
+
+    repairReason(sessionID) {
+      return recordFor(sessionID).repairReason
     },
 
     evidenceAnchors(sessionID) {
