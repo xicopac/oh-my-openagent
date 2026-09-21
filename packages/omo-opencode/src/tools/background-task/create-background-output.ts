@@ -4,6 +4,7 @@ import { publishToolMetadata } from "../../features/tool-metadata-store"
 import { log } from "../../shared/logger"
 import type { BackgroundOutputArgs } from "./types"
 import type { BackgroundOutputClient, BackgroundOutputManager } from "./clients"
+import type { DelegationFirstRuntime } from "../../features/delegation-first"
 import { BACKGROUND_OUTPUT_DESCRIPTION } from "./constants"
 import { delay } from "./delay"
 import { formatFullSession } from "./full-session-format"
@@ -90,7 +91,11 @@ Use the \`background_task_id\` / \`Background Task ID\` from the task launch out
 To inspect this session directly, use \`session_read(session_id="${taskId}")\`, \`session_info\`, or \`session_search\`.`
 }
 
-export function createBackgroundOutput(manager: BackgroundOutputManager, client: BackgroundOutputClient): ToolDefinition {
+export function createBackgroundOutput(
+  manager: BackgroundOutputManager,
+  client: BackgroundOutputClient,
+  delegationFirstRuntime?: DelegationFirstRuntime,
+): ToolDefinition {
   return tool({
     description: BACKGROUND_OUTPUT_DESCRIPTION,
     args: {
@@ -189,7 +194,11 @@ export function createBackgroundOutput(manager: BackgroundOutputManager, client:
 
         if (resolvedTask.status === "completed") {
           recordBackgroundOutputConsumption(ctx.sessionID, ctx.messageID, resolvedTask.sessionId)
-          return await formatTaskResult(resolvedTask, client)
+          const resultText = await formatTaskResult(resolvedTask, client)
+          // Register worker evidence so the root may perform anchored
+          // post-evidence verification reads for this completed child.
+          delegationFirstRuntime?.noteChildEvidence(resolvedTask.parentSessionId, resultText)
+          return resultText
         }
 
         if (resolvedTask.status === "error" || resolvedTask.status === "cancelled" || resolvedTask.status === "interrupt") {

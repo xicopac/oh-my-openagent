@@ -56,6 +56,7 @@ import { selectNextEligibleWorker } from "./availability-failover"
 import { createModelAvailabilityCache, type ModelAvailabilityCache } from "./model-availability-cache"
 import { createPaidWorkerGate } from "../../tools/delegate-task/paid-worker-gate"
 import { resolveModelAvailabilityFilePath } from "./persistent-model-availability"
+import { extractEvidenceAnchors } from "./worker-evidence"
 import {
   buildReplacementPrompt,
   initialLineage,
@@ -116,6 +117,13 @@ export type DelegationFirstRuntime = {
   /** Record that the provider request for `sessionID` was dispatched. */
   markRequestStarted(sessionID: string): void
   /**
+   * Register worker evidence for a completed background child. Unlike the
+   * sync ladder path (`recordWorkerResult`), background children return plain
+   * text; the anchors are extracted deterministically from that text so the
+   * root may perform anchored verification reads after the child completes.
+   */
+  noteChildEvidence(parentSessionID: string, resultText: string): void
+  /**
    * Record a disabled-model (availability) failure: mark the model unavailable
    * so concurrent/new workers skip it, then auto-dispatch the next eligible
    * worker. Hard-fails the child when no eligible worker remains.
@@ -151,6 +159,8 @@ export type DelegationFirstRuntime = {
   ): PreGruntDecision
   /** Current hard worker-first phase for a root session (observability + tests). */
   rootPhase(sessionID: string): RootWorkerPhase
+  /** Registered worker-evidence anchors for a root session (observability + tests). */
+  evidenceAnchors(sessionID: string): string[]
   /** ROOT_REPAIR_MODE: enter repair (root may perform repo work directly). */
   enterRootRepair(sessionID: string, reason: string, detail?: Record<string, unknown>): void
   /** Record a repair action taken by the root (audit only). */
@@ -535,6 +545,16 @@ export function createDelegationFirstRuntime(
         pendingRequestStarted.add(sessionID)
       }
     },
+    noteChildEvidence(parentSessionID, resultText) {
+      const anchors = extractEvidenceAnchors(resultText)
+      if (anchors.length === 0) return
+      rootState.noteWorkerEvidence(parentSessionID, anchors)
+      audit?.write(parentSessionID, {
+        subsystem: "delegation",
+        event: "worker_evidence_available",
+        anchor_count: anchors.length,
+      })
+    },
     recordModelUnavailable(sessionID, modelKey, reason) {
       availability.markUnavailable(modelKey, reason)
       audit?.write(sessionID, {
@@ -902,6 +922,9 @@ export function createDelegationFirstRuntime(
     },
     rootPhase(sessionID) {
       return rootState.phase(sessionID)
+    },
+    evidenceAnchors(sessionID) {
+      return rootState.evidenceAnchors(sessionID)
     },
     rootRepairReason(sessionID) {
       return rootState.repairReason(sessionID)

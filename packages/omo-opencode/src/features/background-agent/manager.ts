@@ -232,6 +232,14 @@ export interface SubagentSessionCreatedEvent {
 
 export type OnSubagentSessionCreated = (event: SubagentSessionCreatedEvent) => Promise<void>
 
+/**
+ * Fired unconditionally when a child session is created, regardless of tmux
+ * integration. The delegation-first runtime uses this to attach the child to
+ * its watchdog and satisfy the worker requirement; the tmux-gated
+ * `onSubagentSessionCreated` remains for pane/orchestration side effects.
+ */
+export type OnSubagentSessionAttached = (event: SubagentSessionCreatedEvent) => void
+
 export interface SubagentSessionDeletedEvent {
   sessionID: string
 }
@@ -250,6 +258,7 @@ export interface BackgroundManagerConfig {
   config?: BackgroundTaskConfig
   tmuxConfig?: TmuxConfig
   onSubagentSessionCreated?: OnSubagentSessionCreated
+  onSubagentSessionAttached?: OnSubagentSessionAttached
   onSubagentSessionDeleted?: OnSubagentSessionDeleted
   onSubagentModelUnavailable?: OnSubagentModelUnavailable
   /** Fired once the provider request for a child session has been dispatched. */
@@ -298,6 +307,7 @@ export class BackgroundManager {
   private config?: BackgroundTaskConfig
   private tmuxEnabled: boolean
   private onSubagentSessionCreated?: OnSubagentSessionCreated
+  private onSubagentSessionAttached?: OnSubagentSessionAttached
   private onSubagentSessionDeleted?: OnSubagentSessionDeleted
   private onSubagentModelUnavailable?: OnSubagentModelUnavailable
   private onSubagentRequestStarted?: (sessionID: string) => void
@@ -344,6 +354,7 @@ export class BackgroundManager {
     this.config = options.config
     this.tmuxEnabled = options?.tmuxConfig?.enabled ?? false
     this.onSubagentSessionCreated = options?.onSubagentSessionCreated
+    this.onSubagentSessionAttached = options?.onSubagentSessionAttached
     this.onSubagentSessionDeleted = options?.onSubagentSessionDeleted
     this.onSubagentModelUnavailable = options?.onSubagentModelUnavailable
     this.onSubagentRequestStarted = options?.onSubagentRequestStarted
@@ -1156,6 +1167,14 @@ The fallback retry session is now created and can be inspected directly.
     })
 
     this.onSubagentRequestStarted?.(sessionID)
+
+    // Unconditional: without tmux, attachChildSession never fires and the root
+    // worker-first phase deadlocks at worker_required after child completion.
+    this.onSubagentSessionAttached?.({
+      sessionID,
+      parentID: input.parentSessionId,
+      title: input.description,
+    })
 
     invokeTmuxSessionCreatedCallback({
       callback: this.onSubagentSessionCreated,

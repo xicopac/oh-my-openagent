@@ -42,6 +42,10 @@ import {
 } from "./e2e-routing-scenarios"
 import { runPersistenceScenarios } from "./e2e-routing-persistence-scenarios"
 import { runRepairScenarios } from "./e2e-routing-repair-scenarios"
+import {
+  runPostEvidenceVerificationScenario,
+  runFreeWorkerConcurrencyScenario,
+} from "./e2e-routing-post-evidence-scenarios"
 
 const REPO_ROOT = join(import.meta.dir, "..")
 const MOCK_PATH = join(import.meta.dir, "e2e-routing", "mock-provider.mjs")
@@ -340,6 +344,18 @@ async function main(): Promise<void> {
   const repair = await runRepairScenarios()
   checks.push(...repair.checks)
   tempDirs.push(...repair.traceDirs)
+
+  // Tier B7: POST-EVIDENCE ROOT VERIFICATION (worker returns anchors; the root
+  // may verify exact files/symbols/nearby context but not unrelated discovery)
+  const postEvidence = await runPostEvidenceVerificationScenario()
+  checks.push(...postEvidence.checks)
+  tempDirs.push(...postEvidence.traceDirs)
+
+  // Tier B8: FREE WORKER CONCURRENCY (ordinary free children never acquire
+  // paid-worker slots and are never serialized by max_concurrent_paid_workers)
+  const freeConcurrency = await runFreeWorkerConcurrencyScenario()
+  checks.push(...freeConcurrency.checks)
+  tempDirs.push(...freeConcurrency.traceDirs)
 
   // Tier A: process-level worker-first gate
   let procEnvRoot: string | undefined

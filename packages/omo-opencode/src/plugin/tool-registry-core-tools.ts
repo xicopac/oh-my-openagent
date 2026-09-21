@@ -26,7 +26,7 @@ export function createCoreTools(args: {
   readonly factories: ToolRegistryFactories
 }): Record<string, ToolDefinition> {
   const { ctx, pluginConfig, managers, skillContext, availableCategories, factories } = args
-  const backgroundTools = factories.createBackgroundTools(managers.backgroundManager, ctx.client)
+  const backgroundTools = factories.createBackgroundTools(managers.backgroundManager, ctx.client, managers.delegationFirstRuntime)
   const callOmoAgent = factories.createCallOmoAgent(
     ctx,
     managers.backgroundManager,

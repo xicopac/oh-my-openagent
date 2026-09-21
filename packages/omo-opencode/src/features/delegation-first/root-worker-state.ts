@@ -256,10 +256,16 @@ export function createRootWorkerState(
       }
 
       // worker_evidence_available
+      // Post-evidence verification authority: narrow ops stay anchored to
+      // registered evidence; an unrelated narrow op is new investigation.
       if (opClass === "narrow") {
+        const anchored = hint?.selective === true || isKnownAnchor(rec, hint)
+        if (!anchored) {
+          rec.phase = "worker_required"
+          return block(rec, REASON_ADDITIONAL, opClass, hint?.target ?? null)
+        }
         recordTarget(rec, hint)
-        const selectiveVerification = hint?.selective === true || isKnownAnchor(rec, hint)
-        return { ...allow(rec, { opClass, selectiveVerification }) }
+        return { ...allow(rec, { opClass, selectiveVerification: true }) }
       }
       if (opClass === "test_build") {
         return allow(rec, { opClass })
@@ -342,10 +348,31 @@ export function createRootWorkerState(
 
 function isKnownAnchor(rec: SessionRecord, hint?: GruntToolHint): boolean {
   const target = hint?.target
-  if (!target) return false
+  if (!target || target.length === 0) return false
   if (rec.evidenceAnchors.has(target)) return true
   for (const anchor of rec.evidenceAnchors) {
-    if (anchor.includes(target) || target.includes(anchor)) return true
+    if (sameAnchorFile(target, anchor)) return true
+    if (anchor.includes(target) && !target.includes("/")) return true
   }
   return false
+}
+
+/**
+ * Compare anchors by their FILE portion. Anchors may carry a `:line`,
+ * `:line:col`, or `:line-line` suffix; a bare symbol (no slash/extension)
+ * only matches itself so a registered symbol never authorizes a file read.
+ */
+function sameAnchorFile(a: string, b: string): boolean {
+  const fileA = anchorFilePath(a)
+  const fileB = anchorFilePath(b)
+  if (fileA && fileB) return fileA === fileB
+  return a === b
+}
+
+function anchorFilePath(value: string): string | undefined {
+  if (!value || value.length === 0) return undefined
+  const file = value.match(/^([^:\s]+(?:\.\w+)?):\d+(?:-\d+)?(?::\S*)?$/)
+  if (file) return file[1]
+  if (value.includes("/") && value.includes(".")) return value
+  return undefined
 }

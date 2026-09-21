@@ -251,14 +251,18 @@ export function createManagers(args: {
     onSubagentModelUnavailable: (sessionID, providerModel, reason) => {
         delegationFirstRuntime?.recordModelUnavailable(sessionID, providerModel, reason)
     },
+    onSubagentSessionAttached: (event: SubagentSessionCreatedEvent) => {
+      // Unconditional (unlike the tmux-gated onSubagentSessionCreated): the
+      // delegation-first runtime must learn about the child even without tmux,
+      // or the root worker-first phase never leaves worker_required.
+      delegationFirstRuntime?.attachChildSession(event.parentID, event.sessionID)
+    },
     onSubagentSessionCreated: async (event: SubagentSessionCreatedEvent) => {
         log("[create-managers] onSubagentSessionCreated callback received", {
           sessionID: event.sessionID,
           parentID: event.parentID,
           title: event.title,
         })
-
-        delegationFirstRuntime?.attachChildSession(event.parentID, event.sessionID)
 
         await tmuxSessionManager.onSessionCreated({
           type: "session.created",

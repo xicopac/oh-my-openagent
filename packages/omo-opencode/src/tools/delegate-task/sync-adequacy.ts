@@ -7,6 +7,7 @@
  */
 
 import type { AttemptResult, Finding } from "../../features/delegation-ladder"
+import { extractEvidenceAnchors } from "../../features/delegation-first/worker-evidence"
 
 const FAILURE_MARKERS = [
   "failed to",
@@ -90,7 +91,11 @@ export function judgeSyncAdequacy(result: string): SyncAdequacy {
     }
   }
 
-  const findings: Finding[] = [{ type: "note", summary: "worker completed the subtask" }]
+  const anchors = extractEvidenceAnchors(result)
+  const findings: Finding[] = [
+    { type: "note", summary: "worker completed the subtask" },
+    ...(anchors.length > 0 ? [{ type: "anchor" as const, summary: "worker-reported source anchors", anchors }] : []),
+  ]
   return {
     adequate: true,
     objective: "delegated subtask",

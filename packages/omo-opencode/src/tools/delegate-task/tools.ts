@@ -1,6 +1,6 @@
 import { tool, type ToolDefinition } from "@opencode-ai/plugin"
 import { MODEL_TIERS, resolveModelBand, type ModelBandCandidate, type ModelTier } from "@oh-my-opencode/delegate-core"
-import type { DelegatedModelConfig, ToolContextWithMetadata, DelegateTaskToolOptions, DelegateTaskArgs } from "./types"
+import type { DelegatedModelConfig, ToolContextWithMetadata, DelegateTaskToolOptions, DelegateTaskArgs, OpencodeClient } from "./types"
 import { log } from "../../shared/logger"
 import { parseModelString } from "../../shared/model-string-parser"
 import { getModelsWithPricingAndMetadataForDelegateTask, getEnabledModelState } from "./available-models"
@@ -36,6 +36,27 @@ import { authorizeChildDispatch, blockMessage, lookupPricing, resolvedModelKey, 
 import { buildDelegationWorkerCandidates, type ModelCapabilityInfo } from "../../features/delegation-first"
 import { refineAssignment } from "../../features/delegation-ladder"
 import { judgeSyncAdequacy } from "./sync-adequacy"
+import type { PricingCatalog } from "../../hooks/resource-governor/pricing"
+
+/**
+ * Effective pricing used for paid/unknown classification of a resolved child.
+ * The model resolver merges the static opengateway catalog with LIVE pricing
+ * from the provider cache; a model that the resolver proved free (e.g. a
+ * connected "contributor-free" model absent from the static catalog) must be
+ * classified the SAME way here, otherwise an ordinary free child is treated as
+ * paid and consumes a paid-worker slot. Best-effort: on any live-pricing
+ * failure, fall back to the static catalog (conservative, never assumes free).
+ */
+export async function resolveEffectivePricing(
+  options: { client: OpencodeClient; pricingCatalog?: PricingCatalog },
+): Promise<PricingCatalog> {
+  try {
+    const live = await getModelsWithPricingAndMetadataForDelegateTask(options.client)
+    return options.pricingCatalog ? { ...options.pricingCatalog, ...live.pricing } : live.pricing
+  } catch {
+    return options.pricingCatalog ?? {}
+  }
+}
 
 async function loadNativeSkillEntries(
   nativeSkills: DelegateTaskToolOptions["nativeSkills"] | undefined,
@@ -309,6 +330,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
           taskID,
           task: delegateTaskArgs.prompt,
           reason: "unstable agent forced to background",
+          pricingCatalog: await resolveEffectivePricing(options),
         })
         if (!unstablePaidGate.ok) {
           notifyChildLaunchBlocked(options, ctx, "paid_gate_block")
@@ -378,6 +400,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
 
       // PAID-WORKER CONSENT GATE: a paid child requires true MASTER/ROOT authority
       // plus a fresh single-use operator approval for this exact launch.
+      const effectivePricing = await resolveEffectivePricing(options)
       const paidGate = await gatePaidChildLaunch({
         options,
         ctx,
@@ -388,6 +411,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         isRootSession,
         taskID,
         task: delegateTaskArgs.prompt,
+        pricingCatalog: effectivePricing,
       })
       if (!paidGate.ok) {
         notifyChildLaunchBlocked(options, ctx, "paid_gate_block")
@@ -396,7 +420,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
       const paidApprovalNonce = paidGate.nonce
 
       let paidSlotAcquired = false
-      if (resolvedPaidKey && classifyPaidStatus(resolvedPaidKey, options.pricingCatalog) !== "free") {
+      if (resolvedPaidKey && classifyPaidStatus(resolvedPaidKey, effectivePricing) !== "free") {
         if (paidApprovalNonce === null) {
           return "PAID_WORKER_CONSENT_CONSUMED: internal error, a paid launch reached execution without an approved single-use consent."
         }
@@ -558,12 +582,15 @@ async function gatePaidChildLaunch(input: {
   task: string
   reason?: string
   freeCandidatesExhausted?: boolean
+  /** Effective (static + live) pricing; falls back to the static catalog. */
+  pricingCatalog?: PricingCatalog
 }): Promise<PaidGateOutcome> {
   const resolvedModelKeyValue = input.categoryModel?.modelID
     ? resolvedModelKey(input.categoryModel.providerID, input.categoryModel.modelID)
     : null
   if (!resolvedModelKeyValue) return { ok: true, nonce: null }
-  if (classifyPaidStatus(resolvedModelKeyValue, input.options.pricingCatalog) === "free") {
+  const pricing = input.pricingCatalog ?? input.options.pricingCatalog
+  if (classifyPaidStatus(resolvedModelKeyValue, pricing) === "free") {
     return { ok: true, nonce: null }
   }
   const registry = input.options.paidConsentRegistry
@@ -577,7 +604,7 @@ async function gatePaidChildLaunch(input: {
   const provider = createOpenCodePermissionConsentProvider(ask)
   const verdict = await enforcePaidWorkerLaunch({
     resolvedModelKey: resolvedModelKeyValue,
-    pricing: input.options.pricingCatalog,
+    pricing,
     modelRouting: input.modelOptions.modelRouting,
     isRootSession: input.isRootSession,
     rootSessionID: input.ctx.sessionID,
@@ -721,6 +748,7 @@ async function runDelegationFirstSync(params: DelegationFirstSyncParams): Promis
       taskID: params.taskID,
       task: currentPrompt,
       reason: "delegation ladder escalated to a stronger/paid worker",
+      pricingCatalog: pricing,
     })
     if (!attemptGate.ok) return attemptGate.message
     if (!consumePaidLaunchApproval(options, ctx, agentToUse, currentModel, params.taskID, attemptGate.nonce)) {
