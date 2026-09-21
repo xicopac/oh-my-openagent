@@ -8,7 +8,6 @@ import { getAgentRoleRequirement } from "../../shared/model-requirements"
 import type { ModelTier } from "@oh-my-opencode/delegate-core"
 import { log } from "../../shared/logger"
 import { getAvailableModelsForDelegateTask, getEnabledModelState } from "./available-models"
-import { paidBandAllowed } from "./paid-consent"
 import { PAID_ESCALATION_REQUIRED } from "./paid-consent"
 import { filterEnabledModelKeys, isModelEnabled } from "../../shared/model-enable-state"
 import { applyCategoryParams } from "./delegated-model-config"
@@ -77,7 +76,12 @@ export async function resolveSubagentModel(
       ...(executorCtx.delegationFirstRuntime
         ? { extraUnavailable: executorCtx.delegationFirstRuntime.unavailableModels() }
         : {}),
-      allowPaidWorkers: paidBandAllowed(executorCtx.modelRouting, executorCtx.isRootSession === true),
+      // ORDINARY CHILD POLICY (free-only): automatically spawned children are
+      // FREE-ONLY. Root/master parent authority must NOT mutate an ordinary
+      // child into a paid child. Paid execution requires a separate explicit
+      // MASTER paid-worker request plus fresh operator consent, enforced at
+      // launch by gatePaidChildLaunch / enforcePaidWorkerLaunch.
+      allowPaidWorkers: false,
     })
     if (dynamic.kind === "resolved") {
       dynamicDefaultModel = dynamic.model

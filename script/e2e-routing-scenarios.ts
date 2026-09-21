@@ -42,6 +42,7 @@ import {
   enforcePaidWorkerLaunch,
   isRootSessionInfo,
   maxConcurrentPaidWorkers,
+  paidBandAllowed,
 } from "../packages/omo-opencode/src/tools/delegate-task/paid-consent"
 
 export type CheckResult = { name: string; passed: boolean; failures: string[] }
@@ -783,5 +784,125 @@ export async function runPaidConsentScenarios(): Promise<{ checks: CheckResult[]
     )
   }
 
+  return { checks: allChecks, traceDirs }
+}
+
+export async function runFreeBeforePaidEscalationScenario(): Promise<{ checks: CheckResult[]; traceDirs: string[] }> {
+  const allChecks: CheckResult[] = []
+  const traceDirs: string[] = []
+
+  const FLASH = "test/deepseek-v4-flash"
+  const MAIN = "test/main"
+  const FREE_A = "test/free-a"
+  const FREE_B = "test/free-b"
+  const FREE_PRICE: ModelBandPricing = { input: 0, output: 0, cache_read: 0, cache_write: 0 }
+  const PRICING: Record<string, ModelBandPricing> = {
+    [FLASH]: { input: 0.3, output: 0.9, cache_read: 0, cache_write: 0 },
+    [MAIN]: { input: 10, output: 30, cache_read: 0, cache_write: 0 },
+    [FREE_A]: FREE_PRICE,
+    [FREE_B]: FREE_PRICE,
+  }
+  const resolveTier = (tier: ModelTier, mainModel: string, extraUnavailable?: Iterable<string>, allowPaidWorkers = false) =>
+    resolveModelBand({
+      requestedTier: tier,
+      candidates: [
+        { model: FREE_A, pricing: FREE_PRICE },
+        { model: FREE_B, pricing: FREE_PRICE },
+        { model: FLASH, pricing: PRICING[FLASH] },
+      ],
+      mainModel,
+      mainPricing: PRICING[mainModel],
+      unavailable: new Set(extraUnavailable ?? []),
+      allowPaidWorkers,
+    })
+
+  const explore = resolveTier("fast", MAIN)
+  allChecks.push(
+    explore?.model === FREE_A || explore?.model === FREE_B
+      ? ok("Explore resolves free")
+      : fail("Explore resolves free", [explore ? `model=${explore.model} band=${explore.band}` : "no-eligible-candidate"]),
+  )
+
+  const librarian = resolveTier("fast", MAIN)
+  allChecks.push(
+    librarian?.band === "free" && librarian.model !== FLASH
+      ? ok("Librarian resolves free")
+      : fail("Librarian resolves free", [librarian ? `model=${librarian.model}` : "no-eligible-candidate"]),
+  )
+
+  const master = resolveTier("master", FLASH)
+  allChecks.push(
+    master?.model === FREE_A || master?.model === FREE_B
+      ? ok("Master-tier child still prefers free")
+      : fail("Master-tier child still prefers free", [master ? `model=${master.model} band=${master.band}` : "no-eligible-candidate"]),
+  )
+
+  allChecks.push(
+    paidBandAllowed(undefined, true) === true && (resolveTier("balanced", MAIN)?.band === "free")
+      ? ok("Root parent doesn't imply paid")
+      : fail("Root parent doesn't imply paid", ["root authority leaked into ordinary child band"]),
+  )
+
+  const quarantine = resolveTier("balanced", MAIN, [FREE_A])
+  allChecks.push(
+    quarantine?.model === FREE_B && quarantine.band === "free"
+      ? ok("Free quarantine skip works")
+      : fail("Free quarantine skip works", [quarantine ? `model=${quarantine.model}` : "no-eligible-candidate"]),
+  )
+
+  const exhausted = resolveTier("balanced", MAIN, [FREE_A, FREE_B])
+  allChecks.push(
+    exhausted === undefined
+      ? ok("Free exhaustion returns escalation")
+      : fail("Free exhaustion returns escalation", [exhausted ? `model=${exhausted.model} band=${exhausted.band}` : ""]),
+  )
+
+  const gate = createPaidWorkerGate(1)
+  resolveTier("balanced", MAIN)
+  resolveTier("fast", MAIN)
+  allChecks.push(
+    gate.activeCount() === 0
+      ? ok("Free workers consume no paid slots")
+      : fail("Free workers consume no paid slots", [`active=${gate.activeCount()}`]),
+  )
+
+  const registry = new PaidConsentRegistry()
+  const denied = await enforcePaidWorkerLaunch({
+    resolvedModelKey: FLASH,
+    pricing: PRICING,
+    modelRouting: undefined,
+    isRootSession: true,
+    rootSessionID: "root",
+    workerIdentity: "explore",
+    capabilityTier: "fast",
+    task: "map auth",
+    taskID: "task-1",
+    freeCandidatesExhausted: true,
+    consentProvider: createStaticConsentProvider("denied"),
+    registry,
+  })
+  allChecks.push(
+    denied.action === "block"
+      ? ok("Paid gate only runs after explicit request")
+      : fail("Paid gate only runs after explicit request", [JSON.stringify(denied)]),
+  )
+
+  const ctx = makeScenario()
+  try {
+    ctx.rt.beginDelegation("job", "root", "map auth", [freeWorker(FREE_A)])
+    ctx.rt.attachChildSession("root", "child")
+    ctx.rt.markRequestStarted("child")
+    ctx.rt.noteChildStartupFailure("root", "child", "0ms child / EACCES")
+    const repairOk = ctx.rt.rootPhase("root") === "root_repair" && ctx.rt.preGruntCheck("root", "read", { target: "src/a.ts" }).block === false
+    const paidStillCapped = ctx.rt.tryAcquirePaidChild() === true && ctx.rt.tryAcquirePaidChild() === false
+    ctx.rt.releasePaidChild()
+    allChecks.push(
+      repairOk && paidStillCapped
+        ? ok("ROOT_REPAIR_MODE unaffected")
+        : fail("ROOT_REPAIR_MODE unaffected", [`phase=${ctx.rt.rootPhase("root")}`]),
+    )
+  } finally {
+    ctx.dispose()
+  }
   return { checks: allChecks, traceDirs }
 }

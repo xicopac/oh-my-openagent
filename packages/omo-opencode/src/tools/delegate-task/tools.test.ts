@@ -4383,12 +4383,10 @@ describe("sisyphus-task", () => {
         toolContext
       )
 
-      // Root/master authority now routes subagents through the dynamic paid band (free-first,
-      // cheapest-sufficient paid when no free candidate exists); the matched static model is not pinned.
-      expect(promptBody.model).toEqual({
-        providerID: "anthropic",
-        modelID: "claude-haiku-4-5",
-      })
+      // ORDINARY CHILD POLICY (free-only): an ordinary subagent child under a
+      // root/master parent still resolves FREE-ONLY. With no free candidate it
+      // returns PAID_ESCALATION_REQUIRED and never selects a paid model.
+      expect(promptBody.model).toBeUndefined()
     }, { timeout: 20000 })
 
     test("agent without model resolves via fallback chain", async () => {
@@ -4451,8 +4449,9 @@ describe("sisyphus-task", () => {
         toolContext
       )
 
-      // then - model should be resolved via AGENT_MODEL_REQUIREMENTS fallback chain
-      expect(promptBody.model).toBeDefined()
+      // then - ORDINARY CHILD POLICY (free-only): with no free candidate the child
+      // returns PAID_ESCALATION_REQUIRED and never selects a paid model.
+      expect(promptBody.model).toBeUndefined()
     }, { timeout: 20000 })
 
     test("agentOverrides model takes priority over matchedAgent.model (#1357)", async () => {

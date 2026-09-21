@@ -14,7 +14,6 @@ import { getAvailableModelsForDelegateTask, getEnabledModelState } from "./avail
 import { filterEnabledModelKeys, isModelEnabled } from "../../shared/model-enable-state"
 import { resolveModelForDelegateTask } from "./model-selection"
 import { resolveDynamicWorkerModel, buildModelRoutingPins } from "./dynamic-model-resolver"
-import { paidBandAllowed } from "./paid-consent"
 import type { ModelTier } from "@oh-my-opencode/delegate-core"
 import type { DelegatedModelConfig } from "./types"
 import { applyCategoryParams } from "./delegated-model-config"
@@ -171,7 +170,12 @@ Available categories: ${allCategoryNames}`)
         ...(executorCtx.delegationFirstRuntime
           ? { extraUnavailable: executorCtx.delegationFirstRuntime.unavailableModels() }
           : {}),
-        allowPaidWorkers: paidBandAllowed(executorCtx.modelRouting, executorCtx.isRootSession === true),
+        // ORDINARY CATEGORY CHILD POLICY (free-only): categories spawn ordinary
+        // children and are FREE-ONLY. Root/master parent authority must NOT
+        // mutate them into paid children. Paid execution requires a separate
+        // explicit MASTER paid-worker request plus fresh operator consent,
+        // enforced at launch by gatePaidChildLaunch / enforcePaidWorkerLaunch.
+        allowPaidWorkers: false,
       })
       if (dynamic.kind === "resolved") {
         // A main_equiv escalation (usedMainModel) means the live pool held no candidate suitable

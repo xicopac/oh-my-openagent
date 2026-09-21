@@ -13,7 +13,6 @@ import {
   enforcePaidWorkerLaunch,
   isRootSessionInfo,
   maxConcurrentPaidWorkers,
-  paidBandAllowed,
 } from "./paid-consent"
 import { buildSystemContent } from "./prompt-builder"
 import {
@@ -247,7 +246,12 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
           mainPricing,
           pinned,
           unavailable,
-          allowPaidWorkers: paidBandAllowed(modelOptions.modelRouting, isRootSession),
+          // ORDINARY CHILD POLICY (free-only): an explicit `model_tier` on an
+          // ordinary child request does NOT grant paid permission, even when the
+          // parent is the root/master session. Paid execution requires a
+          // separate explicit MASTER paid-worker request plus fresh operator
+          // consent (gatePaidChildLaunch / enforcePaidWorkerLaunch).
+          allowPaidWorkers: false,
         })
         if (!resolved) {
           log("[delegate-task] model_tier requested but unresolved; keeping existing resolution", {

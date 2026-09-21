@@ -35,6 +35,7 @@ import {
   runRuntimeScenarios,
   runRoutingCostPolicyScenario,
   runPaidConsentScenarios,
+  runFreeBeforePaidEscalationScenario,
   eventNames,
   countNamed,
   type CheckResult,
@@ -326,6 +327,12 @@ async function main(): Promise<void> {
   const paidConsent = await runPaidConsentScenarios()
   checks.push(...paidConsent.checks)
   tempDirs.push(...paidConsent.traceDirs)
+
+  // Tier B6: FREE ROUTING BEFORE PAID ESCALATION (ordinary children are
+  // free-only; paid execution requires a separate MASTER request + consent)
+  const freeBeforePaid = await runFreeBeforePaidEscalationScenario()
+  checks.push(...freeBeforePaid.checks)
+  tempDirs.push(...freeBeforePaid.traceDirs)
 
   // Tier B5: ROOT REPAIR / BREAK-GLASS (worker-first preserved, repair entry,
   // root work allowed, logical task active, repair success/failure, failover,
