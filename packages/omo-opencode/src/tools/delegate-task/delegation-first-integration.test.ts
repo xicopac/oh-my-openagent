@@ -28,7 +28,7 @@ function pricingCatalog() {
 function mockClient() {
   return {
     app: { agents: async () => ({ data: [] }) },
-    config: { get: async () => ({ data: { model: "kimi-for-coding/kimi-for-coding-highspeed" } }) },
+    config: { get: async () => ({ data: { model: "anthropic/claude-sonnet-4-6" } }) },
     model: { list: async () => ({ data: [{ provider: "kimi-for-coding", id: "kimi-for-coding-highspeed" }] }) },
     session: {
       create: async () => ({ data: { id: "test-session" } }),

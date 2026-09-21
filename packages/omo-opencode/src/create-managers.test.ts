@@ -1,6 +1,9 @@
 /// <reference types="bun-types" />
 
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { PluginInput } from "@opencode-ai/plugin"
 
 import { OhMyOpenCodeConfigSchema } from "./config/schema/oh-my-opencode-config"
@@ -44,6 +47,18 @@ class MockBackgroundManager {
 
   async shutdown(): Promise<void> {
     await backgroundManagerOptions?.onShutdown?.()
+  }
+
+  findBySession(): undefined {
+    return undefined
+  }
+
+  async cancelTask(): Promise<boolean> {
+    return false
+  }
+
+  launch(): Promise<unknown> {
+    return Promise.resolve({ id: "bg-mock", sessionId: "ses-mock" })
   }
 }
 
@@ -384,5 +399,62 @@ describe("createManagers", () => {
     for (const managers of results) {
       expect(managers.resourceGovernorRuntime).toBeDefined()
     }
+  })
+
+  it("#given resource_governor is absent #when managers are created #then the delegation-first runtime is built but the budget governor stays opt-in", () => {
+    // given: no resource_governor key at all (fork default: delegation-first live)
+    // when
+    const managers = createManagers({
+      ctx: createContext("/tmp/project"),
+      pluginConfig: OhMyOpenCodeConfigSchema.parse({}),
+      tmuxConfig: createTmuxConfig(false),
+      modelCacheState: createModelCacheState(),
+      backgroundNotificationHookEnabled: false,
+      deps: createDeps(),
+    })
+
+    // then
+    expect(managers.delegationFirstRuntime).toBeDefined()
+    expect(managers.resourceGovernorRuntime).toBeUndefined()
+  })
+
+  it("#given resource_governor is explicitly disabled #when managers are created #then the delegation-first runtime is not built", () => {
+    // given
+    const managers = createManagers({
+      ctx: createContext("/tmp/project"),
+      pluginConfig: OhMyOpenCodeConfigSchema.parse({ resource_governor: { enabled: false } }),
+      tmuxConfig: createTmuxConfig(false),
+      modelCacheState: createModelCacheState(),
+      backgroundNotificationHookEnabled: false,
+      deps: createDeps(),
+    })
+
+    // then
+    expect(managers.delegationFirstRuntime).toBeUndefined()
+    expect(managers.resourceGovernorRuntime).toBeUndefined()
+  })
+
+  it("#given a background worker fails with a disabled model #when the manager error callback fires #then the delegation-first runtime quarantines the model automatically", () => {
+    // given: default config (no resource_governor key) builds the delegation-first runtime
+    const availabilityDir = mkdtempSync(join(tmpdir(), "create-managers-availability-"))
+    process.env.OMO_MODEL_AVAILABILITY_FILE = join(availabilityDir, "model-availability.json")
+    const managers = createManagers({
+      ctx: createContext("/tmp/project"),
+      pluginConfig: OhMyOpenCodeConfigSchema.parse({}),
+      tmuxConfig: createTmuxConfig(false),
+      modelCacheState: createModelCacheState(),
+      backgroundNotificationHookEnabled: false,
+      deps: createDeps(),
+    })
+    expect(managers.delegationFirstRuntime).toBeDefined()
+
+    // when: the background manager reports a disabled model through the production callback
+    const onModelUnavailable = backgroundManagerOptions?.onSubagentModelUnavailable
+    expect(onModelUnavailable).toBeTypeOf("function")
+    onModelUnavailable?.("ses-child", "opencode/gpt-5.4", "Model is disabled")
+
+    // then: the runtime's negative availability cache records it (auto re-dispatch is governed by the runtime)
+    expect(managers.delegationFirstRuntime?.unavailableModels()).toContain("opencode/gpt-5.4")
+    rmSync(availabilityDir, { recursive: true, force: true })
   })
 })

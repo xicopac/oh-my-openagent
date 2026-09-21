@@ -310,7 +310,10 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
           task: delegateTaskArgs.prompt,
           reason: "unstable agent forced to background",
         })
-        if (!unstablePaidGate.ok) return unstablePaidGate.message
+        if (!unstablePaidGate.ok) {
+          notifyChildLaunchBlocked(options, ctx, "paid_gate_block")
+          return unstablePaidGate.message
+        }
         const unstablePaidNonce = unstablePaidGate.nonce
 
         const isRunInBackgroundExplicitlyFalse = isExplicitSyncRun(delegateTaskArgs.run_in_background)
@@ -386,7 +389,10 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         taskID,
         task: delegateTaskArgs.prompt,
       })
-      if (!paidGate.ok) return paidGate.message
+      if (!paidGate.ok) {
+        notifyChildLaunchBlocked(options, ctx, "paid_gate_block")
+        return paidGate.message
+      }
       const paidApprovalNonce = paidGate.nonce
 
       let paidSlotAcquired = false
@@ -399,6 +405,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
           ? gate.tryAcquirePaidChild()
           : paidWorkerGate.tryAcquire()
         if (!ok) {
+          notifyChildLaunchBlocked(options, ctx, "paid_slot_exhaustion")
           return `PAID_WORKER_CONCURRENCY_LIMIT: maximum ${maxConcurrentPaidWorkers(modelOptions.modelRouting)} concurrent paid child request(s) reached. Wait for an existing paid child to finish, then retry.`
         }
         paidSlotAcquired = true
@@ -410,6 +417,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
             if (options.delegationFirstRuntime) options.delegationFirstRuntime.releasePaidChild()
             else paidWorkerGate.release()
           }
+          notifyChildLaunchBlocked(options, ctx, "paid_consent_consumed")
           return "PAID_WORKER_CONSENT_CONSUMED: single-use paid approval did not match the launch identity."
         }
         return executeBackgroundTask(delegateTaskArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, fallbackChain, paidSlotAcquired)
@@ -450,6 +458,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
           if (paidSlotAcquired) {
             paidWorkerGate.release()
           }
+          notifyChildLaunchBlocked(options, ctx, "paid_consent_consumed")
           return "PAID_WORKER_CONSENT_CONSUMED: single-use paid approval did not match the launch identity."
         }
         return await executeSyncTask(delegateTaskArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, modelInfo, fallbackChain, undefined, enforcement.backstop)
@@ -508,6 +517,18 @@ function enforceResourceGovernor(
 
 function buildTaskID(ctx: ToolContextWithMetadata): string {
   return ctx.callID ?? ctx.callId ?? ctx.call_id ?? ctx.sessionID
+}
+
+// A paid-gate block returns before a child session exists, so background-task.ts
+// never fires noteChildStartupFailure. This helper fires it so the parent root
+// enters ROOT_REPAIR_MODE (repair does NOT grant paid authority; it only unlocks
+// root repo work + validation). No-op when no delegation-first runtime is wired.
+function notifyChildLaunchBlocked(
+  options: DelegateTaskToolOptions,
+  ctx: ToolContextWithMetadata,
+  reasonCode: string,
+): void {
+  options.delegationFirstRuntime?.noteChildStartupFailure(ctx.sessionID, null, reasonCode)
 }
 
 async function resolveIsRootSession(options: DelegateTaskToolOptions, ctx: ToolContextWithMetadata): Promise<boolean> {

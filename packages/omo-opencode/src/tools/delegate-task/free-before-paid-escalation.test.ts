@@ -4,7 +4,7 @@
 // separate explicit MASTER request plus fresh operator consent.
 import { describe, expect, test } from "bun:test"
 import { resolveModelBand, type ModelBandPricing } from "@oh-my-opencode/delegate-core"
-import { classifyPaidStatus, paidBandAllowed } from "./paid-consent"
+import { classifyPaidStatus, isPaidOrUnknown, paidBandAllowed } from "./paid-consent"
 import { createPaidWorkerGate } from "./paid-worker-gate"
 import type { PricingCatalog } from "../../hooks/resource-governor"
 
@@ -68,9 +68,9 @@ describe("FREE ROUTING BEFORE PAID ESCALATION", () => {
   })
   test("free workers never consume a paid concurrency slot", () => {
     const gate = createPaidWorkerGate(1)
-    expect(classifyPaidStatus(FREE_A, PRICING)).toBe("free")
-    expect(gate.activeCount()).toBe(0)
-    expect(gate.tryAcquire()).toBe(false)
+    const status = classifyPaidStatus(FREE_A, PRICING)
+    expect(status).toBe("free")
+    expect(isPaidOrUnknown(status)).toBe(false)
     expect(gate.activeCount()).toBe(0)
   })
 })

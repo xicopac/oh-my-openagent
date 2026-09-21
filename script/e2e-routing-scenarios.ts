@@ -11,7 +11,7 @@
  * behavior are fully scripted, which is exactly what a product-provider run
  * cannot guarantee.
  */
-import { mkdtempSync, readFileSync, readdirSync } from "node:fs"
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
@@ -46,6 +46,36 @@ import {
 } from "../packages/omo-opencode/src/tools/delegate-task/paid-consent"
 
 export type CheckResult = { name: string; passed: boolean; failures: string[] }
+
+type ScenarioContext = {
+  rt: DelegationFirstRuntime
+  audit: GovernanceAuditWriter
+  auditRoot: string
+  availabilityRoot: string
+  flush: () => Promise<void>
+  dispose: () => void
+}
+
+function makeScenario(): ScenarioContext {
+  const auditRoot = mkdtempSync(join(tmpdir(), "e2e-routing-audit-"))
+  const availabilityRoot = mkdtempSync(join(tmpdir(), "e2e-routing-avail-"))
+  const audit = createGovernanceAuditWriter({ root: auditRoot })
+  const rt = createDelegationFirstRuntime(audit, {
+    modelAvailabilityFilePath: join(availabilityRoot, "model-availability.json"),
+  })
+  return {
+    rt,
+    audit,
+    auditRoot,
+    availabilityRoot,
+    flush: () => audit.flush(),
+    dispose: () => {
+      rt.dispose()
+      rmSync(auditRoot, { recursive: true, force: true })
+      rmSync(availabilityRoot, { recursive: true, force: true })
+    },
+  }
+}
 
 function freeWorker(id: string): WorkerCandidate {
   return { model_id: id, tier: "free", capability: 0.7, free: true }

@@ -579,6 +579,7 @@ describe("sisyphus-task", () => {
         client: mockClient,
         connectedProvidersOverride: TEST_CONNECTED_PROVIDERS,
         availableModelsOverride: createTestAvailableModels(),
+        pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
       })
 
       const toolContext = {
@@ -650,6 +651,7 @@ describe("sisyphus-task", () => {
         client: mockClient,
         connectedProvidersOverride: TEST_CONNECTED_PROVIDERS,
         availableModelsOverride: createTestAvailableModels(),
+        pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
       })
 
       const toolContext = {
@@ -822,6 +824,7 @@ describe("sisyphus-task", () => {
          client: mockClient,
          connectedProvidersOverride: TEST_CONNECTED_PROVIDERS,
          availableModelsOverride: createTestAvailableModels(),
+         pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
        })
 
        const metadataCalls: Array<{ title?: string; metadata?: Record<string, unknown> }> = []
@@ -1247,7 +1250,7 @@ describe("sisyphus-task", () => {
       }
 
       // when - unspecified-high uses claude-opus-4-8 max in DEFAULT_CATEGORIES
-      await tool.execute(
+      const result = await tool.execute(
         {
           description: "Test unspecified-high default variant",
           prompt: "Do something",
@@ -1258,10 +1261,12 @@ describe("sisyphus-task", () => {
         toolContext
       )
 
-      // then - canonical dynamic resolver selects from the enabled pool
-      expect(launchInput.model).toBeDefined()
-      expect(TEST_CONNECTED_PROVIDERS).toContain(launchInput.model?.providerID)
-      expect(launchInput.model?.modelID).not.toBe("gpt-6-astra")
+      // then - ORDINARY CHILD POLICY (free-only): the mocked pool has no free
+      // candidate, so the free-only resolver refuses to auto-escalate to a paid
+      // model and returns PAID_ESCALATION_REQUIRED semantics (no launch input).
+      expect(launchInput.model).toBeUndefined()
+      expect(result).toBeTypeOf("string")
+      expect(result as string).toMatch(/No enabled model satisfies role requirements/i)
     }, { timeout: 20000 })
 
      test("DEFAULT_CATEGORIES explicit high model passes to sync prompt request WITHOUT userCategories", async () => {
@@ -1309,7 +1314,7 @@ describe("sisyphus-task", () => {
       }
 
       // when - unspecified-high uses claude-opus-4-8 max in DEFAULT_CATEGORIES
-      await tool.execute(
+      const result = await tool.execute(
         {
           description: "Test unspecified-high sync variant",
           prompt: "Do something",
@@ -1320,10 +1325,12 @@ describe("sisyphus-task", () => {
         toolContext
       )
 
-      // then - canonical dynamic resolver selects from the enabled pool
-      expect(promptBody.model).toBeDefined()
-      expect(TEST_CONNECTED_PROVIDERS).toContain(promptBody.model?.providerID)
-      expect(promptBody.model?.modelID).not.toBe("gpt-6-astra")
+      // then - ORDINARY CHILD POLICY (free-only): the mocked pool has no free
+      // candidate, so the free-only resolver refuses to auto-escalate to a paid
+      // model and returns PAID_ESCALATION_REQUIRED semantics (no prompt model).
+      expect(promptBody.model).toBeUndefined()
+      expect(result).toBeTypeOf("string")
+      expect(result as string).toMatch(/No enabled model satisfies role requirements/i)
     }, { timeout: 20000 })
   })
 
@@ -1838,7 +1845,8 @@ describe("sisyphus-task", () => {
       }
       const tool = createDelegateTask({
         paidConsentRegistry: testPaidConsentRegistry,
-        isRootSession: true, manager: mockManager, client: mockClient })
+        isRootSession: true, manager: mockManager, client: mockClient,
+        pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } } })
 
       // when
       const result = await tool.execute(
@@ -1886,7 +1894,8 @@ describe("sisyphus-task", () => {
       }
       const tool = createDelegateTask({
         paidConsentRegistry: testPaidConsentRegistry,
-        isRootSession: true, manager: mockManager, client: mockClient })
+        isRootSession: true, manager: mockManager, client: mockClient,
+        pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } } })
 
       // when
       const result = await tool.execute(
@@ -1959,7 +1968,8 @@ describe("sisyphus-task", () => {
       }
       const tool = createDelegateTask({
         paidConsentRegistry: testPaidConsentRegistry,
-        isRootSession: true, manager: mockManager, client: mockClient, modelRouting: { paid_workers: { max_concurrent: 2 } } })
+        isRootSession: true, manager: mockManager, client: mockClient, modelRouting: { paid_workers: { max_concurrent: 2 } },
+        pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } } })
 
       // when
       const [firstResult, secondResult] = await Promise.all([
@@ -2168,13 +2178,14 @@ describe("sisyphus-task", () => {
         paidConsentRegistry: testPaidConsentRegistry,
         isRootSession: true,
       manager: { resume: async () => ({ id: "task-var", sessionId: "ses_var_test", description: "Variant test", agent: "sisyphus-junior", status: "running" }) },
-      client: mockClient,
-    })
-
-    const toolContext = {
-      sessionID: "parent-session",
-      messageID: "parent-message",
-      agent: "sisyphus",
+         client: mockClient,
+         pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
+       })
+        
+        const toolContext = {
+          sessionID: "parent-session",
+          messageID: "parent-message",
+          agent: "sisyphus",
       abort: new AbortController().signal,
         ask: testApprovingAsk,
     }
@@ -2292,8 +2303,9 @@ describe("sisyphus-task", () => {
         isRootSession: true,
          manager: mockManager,
          client: mockClient,
+         pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
        })
-      
+       
       const toolContext = {
         sessionID: "parent-session",
         messageID: "parent-message",
@@ -2301,7 +2313,7 @@ describe("sisyphus-task", () => {
         abort: new AbortController().signal,
         ask: testApprovingAsk,
       }
-      
+       
       // when
       const result = await tool.execute(
         {
@@ -2367,6 +2379,7 @@ describe("sisyphus-task", () => {
         isRootSession: true,
          manager: mockManager,
          client: mockClient,
+         pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
        })
 
       const toolContext = {
@@ -2434,8 +2447,9 @@ describe("sisyphus-task", () => {
         isRootSession: true,
          manager: mockManager,
          client: mockClient,
+         pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
        })
-      
+       
       const toolContext = {
         sessionID: "parent-session",
         messageID: "parent-message",
@@ -2443,7 +2457,7 @@ describe("sisyphus-task", () => {
         abort: new AbortController().signal,
         ask: testApprovingAsk,
       }
-      
+       
       // when
       const result = await tool.execute(
         {
@@ -2493,8 +2507,9 @@ describe("sisyphus-task", () => {
         isRootSession: true,
          manager: mockManager,
          client: mockClient,
+         pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
        })
-      
+       
       const toolContext = {
         sessionID: "parent-session",
         messageID: "parent-message",
@@ -2502,7 +2517,7 @@ describe("sisyphus-task", () => {
         abort: new AbortController().signal,
         ask: testApprovingAsk,
       }
-      
+       
       // when
       const result = await tool.execute(
         {
@@ -2686,22 +2701,23 @@ describe("sisyphus-task", () => {
          },
        }
        
-       const tool = createDelegateTask({
-        paidConsentRegistry: testPaidConsentRegistry,
-        isRootSession: true,
-         manager: mockManager,
-         client: mockClient,
-       })
-       
-       const toolContext = {
-         sessionID: "parent-session",
-         messageID: "parent-message",
-         agent: "sisyphus",
-         abort: new AbortController().signal,
-        ask: testApprovingAsk,
-       }
-       
-       // when - using visual-engineering with run_in_background=true (normal background)
+        const tool = createDelegateTask({
+         paidConsentRegistry: testPaidConsentRegistry,
+         isRootSession: true,
+          manager: mockManager,
+          client: mockClient,
+          pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
+        })
+        
+        const toolContext = {
+          sessionID: "parent-session",
+          messageID: "parent-message",
+          agent: "sisyphus",
+          abort: new AbortController().signal,
+         ask: testApprovingAsk,
+        }
+        
+        // when - using visual-engineering with run_in_background=true (normal background)
        const result = await tool.execute(
          {
            description: "Test normal background",
@@ -2713,8 +2729,8 @@ describe("sisyphus-task", () => {
          toolContext
        )
       
-      // then - should NOT show unstable message (it's normal background flow)
-      expect(launchCalled).toBe(true)
+       // then - should NOT show unstable message (it's normal background flow)
+       expect(launchCalled).toBe(true)
       expect(result).not.toContain("UNSTABLE AGENT MODE")
       expect(result).toContain("task-normal-bg")
     })
@@ -2827,14 +2843,15 @@ describe("sisyphus-task", () => {
          },
        }
        
-       // Use ultrabrain which uses gpt-5.5 (non-gemini)
-       const tool = createDelegateTask({
-        paidConsentRegistry: testPaidConsentRegistry,
-        isRootSession: true,
-         manager: mockManager,
-         client: mockClient,
-       })
-      
+        // Use ultrabrain which uses gpt-5.5 (non-gemini)
+        const tool = createDelegateTask({
+         paidConsentRegistry: testPaidConsentRegistry,
+         isRootSession: true,
+          manager: mockManager,
+          client: mockClient,
+          pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
+        })
+       
       const toolContext = {
         sessionID: "parent-session",
         messageID: "parent-message",
@@ -2986,6 +3003,7 @@ describe("sisyphus-task", () => {
         isRootSession: true,
          manager: mockManager,
          client: mockClient,
+         pricingCatalog: { "anthropic/claude-haiku-4-5": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
        })
 
       const toolContext = {
@@ -3197,12 +3215,13 @@ describe("sisyphus-task", () => {
         isRootSession: true,
          manager: mockManager,
          client: mockClient,
-         userCategories: {
-           "fallback-test": { model: "anthropic/claude-opus-4-7" },
-         },
-         connectedProvidersOverride: TEST_CONNECTED_PROVIDERS,
-         availableModelsOverride: createTestAvailableModels(),
-       })
+          userCategories: {
+            "fallback-test": { model: "anthropic/claude-opus-4-7" },
+          },
+          connectedProvidersOverride: TEST_CONNECTED_PROVIDERS,
+          availableModelsOverride: createTestAvailableModels(),
+          pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
+        })
 
       const toolContext = {
         sessionID: "parent-session",
@@ -3528,6 +3547,7 @@ describe("sisyphus-task", () => {
          manager: mockManager,
          client: mockClient,
          browserProvider: "agent-browser",
+         pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
        })
 
       const toolContext = {
@@ -3594,6 +3614,7 @@ describe("sisyphus-task", () => {
          manager: mockManager,
          client: mockClient,
          nativeSkills,
+         pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
        })
 
       const toolContext = {
@@ -3689,6 +3710,7 @@ describe("sisyphus-task", () => {
         isRootSession: true,
 				manager: mockManager,
 				client: mockClient,
+				pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
   })
 
 			const toolContext = {
@@ -4294,6 +4316,7 @@ describe("sisyphus-task", () => {
         isRootSession: true,
          manager: mockManager,
          client: mockClient,
+         pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
        })
 
       const toolContext = {
@@ -4316,10 +4339,10 @@ describe("sisyphus-task", () => {
         toolContext
       )
 
-      // then - matched agent's model should be passed to manager.launch
+      // then - free-only resolver picks the strongest free candidate, not the matched agent model
       expect(launchInput.model).toEqual({
-        providerID: "anthropic",
-        modelID: "claude-haiku-4-5",
+        providerID: "kimi-for-coding",
+        modelID: "kimi-for-coding-highspeed",
       })
     })
 
@@ -4645,7 +4668,7 @@ describe("sisyphus-task", () => {
       }
 
       // when - delegating to oracle with no override and no matchedAgent model
-      await tool.execute(
+      const result = await tool.execute(
         {
           description: "Consult oracle with fallback",
           prompt: "Review architecture",
@@ -4656,11 +4679,12 @@ describe("sisyphus-task", () => {
         toolContext
       )
 
-      // then - resolved from the enabled pool via the canonical resolver, not
-      // the legacy openai hardcoded chain (oracle strong tier picks alphabetically
-      // first strong-band candidate here: an anthropic model).
-      expect(promptBody.model).toBeDefined()
-      expect(promptBody.model.providerID).toBe("anthropic")
+      // then - ORDINARY CHILD POLICY (free-only): the mocked pool has no free
+      // candidate, so the free-only resolver throws PAID_ESCALATION_REQUIRED
+      // and the sync path surfaces it as an error with no prompt model.
+      expect(promptBody.model).toBeUndefined()
+      expect(result).toBeTypeOf("string")
+      expect(result as string).toMatch(/PAID_ESCALATION_REQUIRED/i)
     }, { timeout: 20000 })
   })
 
@@ -4784,6 +4808,7 @@ describe("sisyphus-task", () => {
         isRootSession: true,
         manager: mockManager,
         client: mockClient,
+        pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
       })
       
       const toolContext = {
@@ -4842,6 +4867,7 @@ describe("sisyphus-task", () => {
         isRootSession: true,
          manager: mockManager,
          client: mockClient,
+         pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
        })
 
       const toolContext = {
@@ -4894,6 +4920,7 @@ describe("sisyphus-task", () => {
         isRootSession: true,
          manager: mockManager,
          client: mockClient,
+         pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
        })
 
       const toolContext = {
@@ -4955,6 +4982,7 @@ describe("sisyphus-task", () => {
          userCategories: {
            "sisyphus-junior": { model: "anthropic/claude-sonnet-4-6" },
          },
+         pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
        })
 
       const toolContext = {

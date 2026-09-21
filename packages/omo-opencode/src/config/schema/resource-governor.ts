@@ -163,3 +163,14 @@ export type ResourceGovernorConsentConfig = z.infer<typeof ResourceGovernorConse
 export type ResourceGovernorDelegationLadderConfig = z.infer<typeof ResourceGovernorDelegationLadderConfigSchema>
 export type ResourceGovernorWatchdogConfig = z.infer<typeof ResourceGovernorWatchdogConfigSchema>
 export type ResourceGovernorConfig = z.infer<typeof ResourceGovernorConfigSchema>
+
+/**
+ * Default resource-governor config used when the top-level `resource_governor`
+ * key is absent. Mirrors the context-governor default (the fork enables the
+ * governor by default): an absent key must not silently disable the
+ * delegation-first runtime, watchdog, and disabled-model failover that the
+ * schema's own `enabled` default intends. An explicit `enabled: false` still
+ * disables everything.
+ */
+export const DEFAULT_RESOURCE_GOVERNOR_CONFIG: ResourceGovernorConfig =
+  ResourceGovernorConfigSchema.parse({})
