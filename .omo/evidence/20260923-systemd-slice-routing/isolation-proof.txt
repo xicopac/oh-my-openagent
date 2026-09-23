@@ -1,0 +1,3 @@
+Real DB sessions (isolation): 335
+Sandbox DB sessions (acceptance): 7
+Acceptance process cgroup: process exited (collected)

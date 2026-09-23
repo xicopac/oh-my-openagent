@@ -1,0 +1,35 @@
+{
+  "type": "tool_use",
+  "timestamp": 1790190690082,
+  "sessionID": "ses_f3051f806ffehtFQZawfy4vLBQ",
+  "part": {
+    "type": "tool",
+    "tool": "bash",
+    "callID": "call_mock_bash_1",
+    "state": {
+      "status": "completed",
+      "input": {
+        "command": "printf '[ai-routing] class=%s type=%s slice=%s\\n' BUILD build ai-work.slice && /usr/local/bin/ai-job run build --timeout 1800 -- /bin/bash -lc 'bunx tsgo --noEmit -p packages/omo-opencode/tsconfig.json'"
+      },
+      "output": "[ai-routing] class=BUILD type=build slice=ai-work.slice\nai-job: launching ai-build-9e858a.service (type=build timeout=1800s background=0)\nAI_JOB_UNIT=ai-build-9e858a.service\nAI_JOB_SLICE=ai-work.slice\nAI_JOB_LOG=/var/log/ai-job/ai-build-9e858a.service.log\nAI_JOB_PID=1741310\nai-job: unit ai-build-9e858a.service finished: result=success exec_main_status=0\n",
+      "metadata": {
+        "output": "[ai-routing] class=BUILD type=build slice=ai-work.slice\nai-job: launching ai-build-9e858a.service (type=build timeout=1800s background=0)\nAI_JOB_UNIT=ai-build-9e858a.service\nAI_JOB_SLICE=ai-work.slice\nAI_JOB_LOG=/var/log/ai-job/ai-build-9e858a.service.log\nAI_JOB_PID=1741310\nai-job: unit ai-build-9e858a.service finished: result=success exec_main_status=0\n",
+        "exit": 0,
+        "truncated": false
+      },
+      "title": "printf '[ai-routing] class=%s type=%s slice=%s\\n' BUILD build ai-work.slice && /usr/local/bin/ai-job run build --timeout 1800 -- /bin/bash -lc 'bunx tsgo --noEmit -p packages/omo-opencode/tsconfig.json'",
+      "time": {
+        "start": 1790190686659,
+        "end": 1790190690066
+      }
+    },
+    "metadata": {
+      "openai": {
+        "itemId": "fc_mock_bash_1"
+      }
+    },
+    "id": "prt_0cfae1189001nmqoDT0R7BUVva",
+    "sessionID": "ses_f3051f806ffehtFQZawfy4vLBQ",
+    "messageID": "msg_0cfae0a3b001oSzGOUatWi6cGt"
+  }
+}

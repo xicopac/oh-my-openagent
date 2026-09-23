@@ -1,7 +1,15 @@
+import { existsSync } from "node:fs"
+
 import type { PluginContext } from "./types"
 
 import { isTrackedBtwSideSession } from "../features/btw-side"
 import { getMainSessionID, subagentSessions } from "../features/claude-code-session-state"
+import {
+  AI_JOB_BIN,
+  classifyResourceCommand,
+  decideHeavyCommandRouting,
+  isInsideControlSlice,
+} from "../features/heavy-command-routing"
 import { log, replaceToolArgs } from "../shared"
 import { resolveSessionAgent } from "./session-agent-resolver"
 import { stopContinuation } from "./stop-continuation"
@@ -123,16 +131,42 @@ export function createToolExecuteBeforeHandler(args: {
     }
 
     if (input.tool.toLowerCase() === "bash" && typeof output.args.command === "string") {
-      if (output.args.command.includes("\x00")) {
-        replaceToolArgs(output, { command: output.args.command.replace(/\x00/g, "") })
+      const command = output.args.command
+      if (command.includes("\x00")) {
+        replaceToolArgs(output, { command: command.replace(/\x00/g, "") })
         log("[tool-execute-before] Stripped null bytes from bash command", {
           sessionID: input.sessionID,
           callID: input.callID,
         })
       }
 
+      const bashTimeoutMs = typeof output.args.timeout === "number" ? output.args.timeout : undefined
+      const routing = decideHeavyCommandRouting(command, {
+        classify: classifyResourceCommand,
+        aiJobAvailable: existsSync(AI_JOB_BIN),
+        inControlSlice: isInsideControlSlice(),
+        bashToolTimeoutMs: bashTimeoutMs,
+      })
+      if (routing.action === "refuse") {
+        throw new Error(routing.reason)
+      }
+      if (routing.action === "rewrite") {
+        // In-place only: opencode executes from the closure `args`, ignoring a
+        // reassigned output.args (so replaceToolArgs would lose the rewrite).
+        output.args.command = routing.command
+        log("[heavy-command-routing] routed heavy command", {
+          class: routing.kind,
+          type: routing.type,
+          slice: routing.slice,
+          timeoutSec: routing.timeoutSec,
+          sessionID: input.sessionID,
+          callID: input.callID,
+        })
+      }
+
+      const finalCommand = typeof output.args.command === "string" ? output.args.command : command
       if (
-        isPureSleepCommand(output.args.command)
+        isPureSleepCommand(finalCommand)
         && (
           backgroundManager?.hasActiveChildTasks(input.sessionID) === true
           || backgroundManager?.hasPendingParentWake(input.sessionID) === true

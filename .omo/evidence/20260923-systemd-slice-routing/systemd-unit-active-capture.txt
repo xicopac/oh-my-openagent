@@ -1,0 +1,8 @@
+Captured while unit active (t=2s after launch):
+  UNIT LOAD ACTIVE SUB DESCRIPTION
+0 loaded units listed.
+To show all installed unit files use 'systemctl list-unit-files'.
+
+ai-work.slice while running:
+      Tasks: 0 (limit: 768)
+     Memory: 773.1M (high: 3.5G max: 5.0G swap max: 2.0G available: 1.7G peak: 2.2G swap: 0B swap peak: 1.5G)
