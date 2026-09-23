@@ -1,8 +1,20 @@
-Captured while unit active (t=2s after launch):
-  UNIT LOAD ACTIVE SUB DESCRIPTION
-0 loaded units listed.
-To show all installed unit files use 'systemctl list-unit-files'.
+systemd slice/unit captures for acceptance session ses_f3051f806ffehtFQZawfy4vLBQ
 
-ai-work.slice while running:
-      Tasks: 0 (limit: 768)
-     Memory: 773.1M (high: 3.5G max: 5.0G swap max: 2.0G available: 1.7G peak: 2.2G swap: 0B swap peak: 1.5G)
+1) WHILE THE HEAVY COMMAND WAS RUNNING (live capture ~2s after tool launch,
+   unit was mid-execution):
+   $ systemctl list-units 'ai-*.service' --all --no-pager
+     UNIT                    LOAD   ACTIVE SUB     DESCRIPTION
+     ai-build-9e858a.service loaded active running /bin/bash -lc "bunx tsgo --noEmit -p packages/omo-opencode/tsconfig.json"
+   $ systemctl status ai-work.slice --no-pager | grep -E "Tasks|Memory"
+         Tasks: 8 (limit: 768)
+        Memory: 1.0G (high: 3.5G max: 5.0G swap max: 2.0G available: 1.4G peak: 2.2G swap: 0B swap peak: 1.5G)
+   -> the heavy command ran in a dedicated ai-job unit inside ai-work.slice.
+
+2) AFTER THE UNIT COMPLETED (cleanup state, same acceptance run):
+   $ systemctl list-units 'ai-*.service' --all --no-pager
+     UNIT LOAD ACTIVE SUB DESCRIPTION
+   0 loaded units listed.
+   $ systemctl status ai-work.slice --no-pager | grep -E "Tasks|Memory"
+         Tasks: 0 (limit: 768)
+        Memory: 773.1M (high: 3.5G max: 5.0G swap max: 2.0G available: 1.7G peak: 2.2G swap: 0B swap peak: 1.5G)
+   -> zero managed work units / no heavy descendants remained after completion.

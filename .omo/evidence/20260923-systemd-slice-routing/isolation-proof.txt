@@ -1,3 +1,16 @@
-Real DB sessions (isolation): 335
-Sandbox DB sessions (acceptance): 7
-Acceptance process cgroup: process exited (collected)
+Isolation and cgroup placement proof for acceptance session ses_f3051f806ffehtFQZawfy4vLBQ
+
+Controller cgroup at launch (PID 1740769, fresh sandboxed opencode run):
+  0::/ai.slice/ai-control.slice/run-r38b24cb4276649b99ef03e690af355c6.scope
+  -> the OpenCode controller remained inside ai-control.slice the whole run;
+     it never moved into ai-work.slice.
+
+Real DB isolation:
+  ~/.local/share/opencode/opencode.db session count BEFORE: 335
+  ~/.local/share/opencode/opencode.db session count AFTER:  335
+  -> the real OpenCode DB was never written by the acceptance session.
+
+Sandbox DB (isolated XDG data home used by the acceptance runs):
+  $sqlite3 <sandbox>/data/opencode/opencode.db 'SELECT count(*) FROM session;'
+  7
+  -> all acceptance sessions landed in the sandbox, not the real DB.
