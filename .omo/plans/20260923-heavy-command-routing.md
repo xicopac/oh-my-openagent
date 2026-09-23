@@ -83,7 +83,7 @@ HEAVY/EMULATOR + would-run-in-ai-control + cannot route -> throw from the hook
 ## 3. Files changed
 
 New:
-- `packages/omo-opencode/src/features/heavy-command-routing/{classify,router,cgroup,index,classify.test,router.test,cgroup.test,systemd-integration.test}.ts`
+- `packages/omo-opencode/src/features/heavy-command-routing/{classify,patterns,router,cgroup,index,classify.test,router.test,cgroup.test,systemd-integration.test}.ts`
 Modified:
 - `packages/omo-opencode/src/plugin/tool-execute-before.ts` (bash block wiring)
 - `.omo/plans/20260923-heavy-command-routing.md` (this plan)
