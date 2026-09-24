@@ -1,30 +1,8 @@
 /**
- * Hard worker-first root-execution state machine. Tracks, per root (MAIN)
- * session, whether broad delegable work is permitted. The invariant: a
- * non-trivial repository task must not be performed by the root — broad
- * exploration is hard-blocked until a real child reaches the request-started
- * lifecycle milestone, and renewed broad work after worker evidence requires
- * another delegation. Only an explicitly-audited escalation exhaustion permits
- * an exceptional root takeover.
- *
- * ROOT_REPAIR_MODE is a first-class phase, NOT a bypass hack: when the
- * delegation/worker system itself is unhealthy (child launch failures, stalls,
- * evidence-pipeline breaks, routing failures, paid-slot exhaustion), the root
- * transitions to root_repair and is AUTHORIZED to perform repository work
- * directly in order to diagnose and fix the delegation machinery. Repair mode
- * does not mark the logical task failed/completed, does not discard assignment
- * context, and is exited back into the normal worker-first lifecycle once one
- * delegation retry succeeds. Persistent failure after a verified repair can
- * escalate to exceptional_takeover (EXCEPTIONAL_ROOT_TAKEOVER).
- *
- * Deterministic and model-free: phase transitions are driven purely by the
- * operation class of each incoming tool call and by explicit lifecycle
- * notifications (`noteWorkerRunning`, `noteWorkerEvidence`,
- * `noteRootRepairEntered`, `noteRootRepairExited`,
- * `noteDelegationRetrySucceeded`, `noteDelegationRetryFailed`,
- * `noteEscalationExhausted`). Never blocks control/delegation/result-retrieval
- * tools, so MAIN can always delegate, inspect worker state, receive results,
- * and respond to the user.
+ * Hard worker-first root execution state plus its evidence-gated recovery
+ * extension. Normal phases preserve the existing delegation invariant.
+ * Recovery authority is derived only from deduplicated machine observations;
+ * no public "enter recovery" assertion exists.
  */
 
 import {
@@ -34,25 +12,83 @@ import {
   type GruntToolHint,
   type OperationClass,
 } from "../grunt-guard"
+import { evaluateRecoveryScope, type RecoveryScopeCategory } from "./recovery-scope"
+import { evaluateMaterializationScope, type MaterializationScopeCategory } from "./materialization-scope"
+import {
+  createHumanAuthorizationRegistry,
+  isHardSafetyViolation,
+  type HumanAuthorizationClaim,
+  type HumanExplicitAuthorization,
+} from "./human-explicit-authorization"
 
-export type RootWorkerPhase =
+export type NormalRootWorkerPhase =
   | "bootstrap"
   | "worker_required"
   | "worker_active"
   | "worker_evidence_available"
-  | "root_repair"
-  | "exceptional_takeover"
+
+export type DelegationRecoveryPhase =
+  | "normal"
+  | "delegation_degraded"
+  | "recovery_mode"
+  | "recovery_verified"
+  | "handoff"
+  | "halt"
+
+export type RootWorkerPhase = NormalRootWorkerPhase | Exclude<DelegationRecoveryPhase, "normal">
+
+export type DelegationFailureKind =
+  | "child_startup_failure"
+  | "watchdog_reclaim_exhausted"
+  | "routing_exhausted"
+  | "evidence_pipeline_failure"
+  | "control_plane_failure"
+  | "circular_deadlock"
+
+export type DelegationFailureEvidence = {
+  /** Stable machine identity for deduplication, such as a task/session/attempt id. */
+  id: string
+  kind: DelegationFailureKind
+  reason: string
+  observedAtMs: number
+  taskID?: string
+  childSessionID?: string | null
+}
+
+export type RecoveryProbeState = {
+  probeID: string
+  nonce: string
+}
+
+export type DelegationRecoverySnapshot = {
+  phase: DelegationRecoveryPhase
+  evidence: DelegationFailureEvidence[]
+  activeProbe: RecoveryProbeState | null
+  verificationAttempts: number
+  verified: boolean
+  handoffPath: string | null
+  failureReason: string | null
+}
+
+export type DelegationFailureTransition = {
+  accepted: boolean
+  before: RootWorkerPhase
+  after: RootWorkerPhase
+  evidenceCount: number
+}
 
 export type RootWorkerStateConfig = {
-  /** Narrow lookups/reads allowed before a delegation is required (bootstrap grace). */
   bootstrapNarrowBudget: number
-  /** Single direct edits/writes allowed before implementation becomes delegable. */
   bootstrapImplementationBudget: number
+  recoveryEvidenceThreshold: number
+  maxRecoveryVerificationAttempts: number
 }
 
 export const DEFAULT_ROOT_WORKER_STATE_CONFIG: RootWorkerStateConfig = {
   bootstrapNarrowBudget: 3,
   bootstrapImplementationBudget: 1,
+  recoveryEvidenceThreshold: 2,
+  maxRecoveryVerificationAttempts: 2,
 }
 
 export type RootWorkerGateDecision = {
@@ -61,35 +97,49 @@ export type RootWorkerGateDecision = {
   selectiveVerification: boolean
   phase: RootWorkerPhase
   opClass: OperationClass
-  /** Stable reason code (for the audit journal); null when not blocked. */
   reason: string | null
-  /** Best bounded description of the blocked scope (for the steering message). */
   scope: string | null
   signal: GruntSignal
+  recoveryCategory: RecoveryScopeCategory | null
+  materializationCategory?: MaterializationScopeCategory | null
+  humanAuthorized?: boolean
+  authorizationId?: string | null
+  authorizationScope?: string | null
 }
 
 type SessionRecord = {
-  phase: RootWorkerPhase
+  workPhase: NormalRootWorkerPhase
+  recoveryPhase: DelegationRecoveryPhase
   narrowOps: number
   implOps: number
   targets: Set<string>
   modules: Set<string>
   evidenceAnchors: Set<string>
-  repairReason: string | null
+  recoveryEvidence: Map<string, DelegationFailureEvidence>
+  activeProbe: RecoveryProbeState | null
+  verificationAttempts: number
+  verified: boolean
+  handoffPath: string | null
+  failureReason: string | null
 }
 
 export type RootWorkerState = {
   decide(sessionID: string, tool: string | undefined, hint?: GruntToolHint): RootWorkerGateDecision
   noteWorkerRunning(sessionID: string): void
   noteWorkerEvidence(sessionID: string, anchors?: readonly string[]): void
-  noteRootRepairEntered(sessionID: string, reason: string): void
-  noteRootRepairExited(sessionID: string): void
-  noteDelegationRetrySucceeded(sessionID: string): void
-  noteDelegationRetryFailed(sessionID: string): void
-  noteEscalationExhausted(sessionID: string): void
+  noteDelegationHealthy(sessionID: string): void
+  recordDelegationFailure(sessionID: string, evidence: DelegationFailureEvidence): DelegationFailureTransition
+  beginRecoveryProbe(sessionID: string, probeID: string, nonce: string): boolean
+  markRecoveryVerified(sessionID: string, probeID: string): boolean
+  recordRecoveryProbeFailure(sessionID: string, probeID: string, reason: string): RootWorkerPhase
+  markRecoveryHandoff(sessionID: string, path: string): boolean
+  markRecoveryHalted(sessionID: string): void
+  recoverySnapshot(sessionID: string): DelegationRecoverySnapshot
   phase(sessionID: string): RootWorkerPhase
   repairReason(sessionID: string): string | null
   evidenceAnchors(sessionID: string): string[]
+  grantHumanAuthorization(sessionID: string, auth: HumanExplicitAuthorization): void
+  humanAuthorizations(sessionID: string): readonly HumanExplicitAuthorization[]
   reset(sessionID: string): void
   clear(): void
 }
@@ -99,6 +149,10 @@ export const REASON_NARROW = "multiple_reads_before_delegation"
 export const REASON_IMPL = "implementation_loop_before_delegation"
 export const REASON_ADDITIONAL = "additional_delegation_required"
 export const REASON_WAIT = "worker_running_wait_for_result"
+export const REASON_RECOVERY_SCOPE = "outside_delegation_recovery_scope"
+export const REASON_RECOVERY_TERMINAL = "delegation_recovery_halted"
+export const REASON_HARD_SAFETY = "hard_safety_restriction"
+export const REASON_HUMAN_AUTHORIZED = "human_explicit_authorization"
 
 function emptySignal(): GruntSignal {
   return {
@@ -117,22 +171,33 @@ export function createRootWorkerState(
 ): RootWorkerState {
   const cfg: RootWorkerStateConfig = { ...DEFAULT_ROOT_WORKER_STATE_CONFIG, ...config }
   const records = new Map<string, SessionRecord>()
+  const humanRegistry = createHumanAuthorizationRegistry()
 
   function recordFor(sessionID: string): SessionRecord {
     let rec = records.get(sessionID)
     if (!rec) {
       rec = {
-        phase: "bootstrap",
+        workPhase: "bootstrap",
+        recoveryPhase: "normal",
         narrowOps: 0,
         implOps: 0,
         targets: new Set(),
         modules: new Set(),
         evidenceAnchors: new Set(),
-        repairReason: null,
+        recoveryEvidence: new Map(),
+        activeProbe: null,
+        verificationAttempts: 0,
+        verified: false,
+        handoffPath: null,
+        failureReason: null,
       }
       records.set(sessionID, rec)
     }
     return rec
+  }
+
+  function phaseFor(rec: SessionRecord): RootWorkerPhase {
+    return rec.recoveryPhase === "normal" ? rec.workPhase : rec.recoveryPhase
   }
 
   function signalFor(rec: SessionRecord): GruntSignal {
@@ -147,40 +212,148 @@ export function createRootWorkerState(
     }
   }
 
-  function allow(rec: SessionRecord, opts: Partial<RootWorkerGateDecision> = {}): RootWorkerGateDecision {
+  function allow(
+    rec: SessionRecord,
+    opts: Partial<RootWorkerGateDecision> = {},
+  ): RootWorkerGateDecision {
     return {
       block: false,
       delegated: false,
       selectiveVerification: false,
-      phase: rec.phase,
+      phase: phaseFor(rec),
       opClass: "control",
       reason: null,
       scope: null,
       signal: signalFor(rec),
+      recoveryCategory: null,
       ...opts,
     }
   }
 
-  function block(rec: SessionRecord, reason: string, opClass: OperationClass, scope: string | null): RootWorkerGateDecision {
+  function block(
+    rec: SessionRecord,
+    reason: string,
+    opClass: OperationClass,
+    scope: string | null,
+  ): RootWorkerGateDecision {
     return {
       block: true,
       delegated: false,
       selectiveVerification: false,
-      phase: rec.phase,
+      phase: phaseFor(rec),
       opClass,
       reason,
       scope,
       signal: signalFor(rec),
+      recoveryCategory: null,
     }
   }
 
   function recordTarget(rec: SessionRecord, hint?: GruntToolHint): void {
     const target = hint?.target
-    if (target && target.length > 0) {
-      rec.targets.add(target)
-      const root = moduleRoot(target)
-      if (root) rec.modules.add(root)
+    if (!target) return
+    rec.targets.add(target)
+    const root = moduleRoot(target)
+    if (root) rec.modules.add(root)
+  }
+
+  function recordFailure(
+    rec: SessionRecord,
+    evidence: DelegationFailureEvidence,
+  ): boolean {
+    const id = evidence.id.trim()
+    if (!id || rec.recoveryEvidence.has(id) || rec.recoveryPhase === "halt") return false
+    rec.recoveryEvidence.set(id, { ...evidence, id })
+    rec.failureReason = evidence.reason
+    rec.workPhase = "worker_required"
+    if (rec.recoveryPhase === "normal") rec.recoveryPhase = "delegation_degraded"
+    if (rec.recoveryEvidence.size >= cfg.recoveryEvidenceThreshold) {
+      rec.recoveryPhase = "recovery_mode"
     }
+    return true
+  }
+
+  function addCircularDeadlockEvidence(
+    rec: SessionRecord,
+    tool: string | undefined,
+    hint?: GruntToolHint,
+  ): void {
+    const identity = hint?.target ?? hint?.command ?? tool ?? "unknown"
+    recordFailure(rec, {
+      id: `circular-deadlock:${identity}`,
+      kind: "circular_deadlock",
+      reason: "watchdog_required_delegation_for_delegation_repair",
+      observedAtMs: Date.now(),
+    })
+  }
+
+  function decideNormal(
+    rec: SessionRecord,
+    opClass: OperationClass,
+    hint?: GruntToolHint,
+  ): RootWorkerGateDecision {
+    if (opClass === "delegation" || opClass === "control" || opClass === "metadata") {
+      return allow(rec, { delegated: opClass === "delegation", opClass })
+    }
+
+    if (rec.workPhase === "bootstrap") {
+      if (opClass === "narrow") {
+        rec.narrowOps += 1
+        recordTarget(rec, hint)
+        const selectiveVerification = hint?.selective === true
+        if (rec.narrowOps > cfg.bootstrapNarrowBudget) {
+          rec.workPhase = "worker_required"
+          return block(rec, REASON_NARROW, opClass, hint?.target ?? null)
+        }
+        return allow(rec, { opClass, selectiveVerification })
+      }
+      if (opClass === "broad") {
+        rec.workPhase = "worker_required"
+        return block(rec, REASON_BROAD, opClass, hint?.target ?? hint?.command ?? null)
+      }
+      if (opClass === "implementation") {
+        rec.implOps += 1
+        if (rec.implOps > cfg.bootstrapImplementationBudget) {
+          rec.workPhase = "worker_required"
+          return block(rec, REASON_IMPL, opClass, hint?.target ?? null)
+        }
+        return allow(rec, { opClass })
+      }
+      if (opClass === "test_build") {
+        rec.workPhase = "worker_required"
+        return block(rec, REASON_IMPL, opClass, hint?.command ?? null)
+      }
+      return allow(rec, { opClass })
+    }
+
+    if (rec.workPhase === "worker_required") {
+      return block(rec, REASON_BROAD, opClass, hint?.target ?? hint?.command ?? null)
+    }
+
+    if (rec.workPhase === "worker_active") {
+      if (opClass === "narrow") {
+        rec.narrowOps += 1
+        recordTarget(rec, hint)
+        return allow(rec, { opClass, selectiveVerification: hint?.selective === true })
+      }
+      return block(rec, REASON_WAIT, opClass, hint?.target ?? hint?.command ?? null)
+    }
+
+    if (opClass === "narrow") {
+      const anchored = hint?.selective === true || isKnownAnchor(rec, hint)
+      if (!anchored) {
+        rec.workPhase = "worker_required"
+        return block(rec, REASON_ADDITIONAL, opClass, hint?.target ?? null)
+      }
+      recordTarget(rec, hint)
+      return allow(rec, { opClass, selectiveVerification: true })
+    }
+    if (opClass === "test_build") return allow(rec, { opClass })
+    if (opClass === "broad" || opClass === "implementation") {
+      rec.workPhase = "worker_required"
+      return block(rec, REASON_ADDITIONAL, opClass, hint?.target ?? hint?.command ?? null)
+    }
+    return allow(rec, { opClass })
   }
 
   return {
@@ -188,99 +361,87 @@ export function createRootWorkerState(
       const opClass = classifyOperation(tool, hint)
       const rec = recordFor(sessionID)
 
-      if (opClass === "delegation" || opClass === "control" || opClass === "metadata") {
-        const delegated = opClass === "delegation"
-        return allow(rec, { delegated, opClass })
+      // 1. Hard safety/integrity restriction — never overridden by human auth
+      const hardSafety = isHardSafetyViolation(tool, hint)
+      if (hardSafety) {
+        return block(rec, REASON_HARD_SAFETY, opClass, hint?.target ?? hint?.command ?? null)
       }
 
-      // Exceptional takeover permits direct root work (audited at transition).
-      if (rec.phase === "exceptional_takeover") {
+      // 2. Terminal/HALT restrictions — authoritative even over human claim
+      if (rec.recoveryPhase === "recovery_verified" || rec.recoveryPhase === "handoff" || rec.recoveryPhase === "halt") {
+        return block(rec, REASON_RECOVERY_TERMINAL, opClass, hint?.target ?? hint?.command ?? null)
+      }
+
+      // 3. Explicit human authorization — overrides delegation policy, not safety/terminal
+      const humanClaim = (hint as { humanAuthorization?: HumanAuthorizationClaim })?.humanAuthorization
+      if (
+        humanClaim &&
+        typeof humanClaim.scope === "string" &&
+        typeof humanClaim.reason === "string" &&
+        humanClaim.scope.trim().length > 0 &&
+        humanClaim.reason.trim().length > 0
+      ) {
+        const action = { tool, target: hint?.target, command: hint?.command }
+        const covering = humanRegistry.coveringAuthorization(sessionID, humanClaim, action)
+        if (covering) {
+          recordTarget(rec, hint)
+          if (opClass === "narrow") rec.narrowOps += 1
+          return allow(rec, {
+            opClass,
+            humanAuthorized: true,
+            authorizationId: covering.id,
+            authorizationScope: covering.scope,
+          })
+        }
+      }
+
+      if (rec.recoveryPhase === "recovery_mode") {
+        const scope = evaluateRecoveryScope(tool, hint)
+        if (!scope.allowed) {
+          return block(rec, REASON_RECOVERY_SCOPE, opClass, hint?.target ?? hint?.command ?? null)
+        }
         recordTarget(rec, hint)
         if (opClass === "narrow") rec.narrowOps += 1
-        return allow(rec, { opClass })
+        return allow(rec, {
+          delegated: opClass === "delegation",
+          opClass,
+          recoveryCategory: scope.category,
+        })
       }
 
-      // ROOT_REPAIR_MODE permits direct root work. This is the break-glass for
-      // fixing the delegation machinery itself: the root may read/grep/bash/
-      // edit/test freely while repairing. Repair is NOT exceptional takeover:
-      // the logical task stays active and the root returns to worker-first after
-      // a verified delegation retry.
-      if (rec.phase === "root_repair") {
+      const mc = evaluateMaterializationScope(tool, hint)
+      if (mc.allowed) {
         recordTarget(rec, hint)
         if (opClass === "narrow") rec.narrowOps += 1
-        return allow(rec, { opClass })
+        return allow(rec, { opClass, materializationCategory: mc.category })
+      }
+      if ((hint as { materialization?: boolean })?.materialization === true) {
+        return block(rec, mc.reason ?? "materialization_denied", opClass, hint?.target ?? hint?.command ?? null)
       }
 
-      if (rec.phase === "bootstrap") {
-        if (opClass === "narrow") {
-          rec.narrowOps += 1
-          recordTarget(rec, hint)
-          const selectiveVerification = hint?.selective === true
-          if (rec.narrowOps > cfg.bootstrapNarrowBudget) {
-            rec.phase = "worker_required"
-            return block(rec, REASON_NARROW, opClass, hint?.target ?? null)
+      if (rec.recoveryPhase === "delegation_degraded") {
+        const recoveryScope = evaluateRecoveryScope(tool, hint)
+        const normalDecision = decideNormal(rec, opClass, hint)
+        if (normalDecision.block && recoveryScope.allowed && opClass !== "delegation") {
+          addCircularDeadlockEvidence(rec, tool, hint)
+          // re-read via phaseFor (function call, un-narrowed): the circular
+          // deadlock evidence may have promoted the session to recovery_mode.
+          if (phaseFor(rec) === "recovery_mode") {
+            recordTarget(rec, hint)
+            return allow(rec, { opClass, recoveryCategory: recoveryScope.category })
           }
-          return { ...allow(rec, { opClass, selectiveVerification }) }
         }
-        if (opClass === "broad") {
-          rec.phase = "worker_required"
-          return block(rec, REASON_BROAD, opClass, hint?.target ?? hint?.command ?? null)
-        }
-        if (opClass === "implementation") {
-          rec.implOps += 1
-          if (rec.implOps > cfg.bootstrapImplementationBudget) {
-            rec.phase = "worker_required"
-            return block(rec, REASON_IMPL, opClass, hint?.target ?? null)
-          }
-          return allow(rec, { opClass })
-        }
-        if (opClass === "test_build") {
-          rec.phase = "worker_required"
-          return block(rec, REASON_IMPL, opClass, hint?.command ?? null)
-        }
-        return allow(rec, { opClass })
+        return normalDecision
       }
 
-      if (rec.phase === "worker_required") {
-        return block(rec, REASON_BROAD, opClass, hint?.target ?? hint?.command ?? null)
-      }
-
-      if (rec.phase === "worker_active") {
-        if (opClass === "narrow") {
-          rec.narrowOps += 1
-          recordTarget(rec, hint)
-          const selectiveVerification = hint?.selective === true
-          return { ...allow(rec, { opClass, selectiveVerification }) }
-        }
-        return block(rec, REASON_WAIT, opClass, hint?.target ?? hint?.command ?? null)
-      }
-
-      // worker_evidence_available
-      // Post-evidence verification authority: narrow ops stay anchored to
-      // registered evidence; an unrelated narrow op is new investigation.
-      if (opClass === "narrow") {
-        const anchored = hint?.selective === true || isKnownAnchor(rec, hint)
-        if (!anchored) {
-          rec.phase = "worker_required"
-          return block(rec, REASON_ADDITIONAL, opClass, hint?.target ?? null)
-        }
-        recordTarget(rec, hint)
-        return { ...allow(rec, { opClass, selectiveVerification: true }) }
-      }
-      if (opClass === "test_build") {
-        return allow(rec, { opClass })
-      }
-      if (opClass === "broad" || opClass === "implementation") {
-        rec.phase = "worker_required"
-        return block(rec, REASON_ADDITIONAL, opClass, hint?.target ?? hint?.command ?? null)
-      }
-      return allow(rec, { opClass })
+      return decideNormal(rec, opClass, hint)
     },
 
     noteWorkerRunning(sessionID) {
       const rec = recordFor(sessionID)
-      if (rec.phase === "bootstrap" || rec.phase === "worker_required" || rec.phase === "worker_active") {
-        rec.phase = "worker_active"
+      if (rec.recoveryPhase !== "normal") return
+      if (rec.workPhase === "bootstrap" || rec.workPhase === "worker_required" || rec.workPhase === "worker_active") {
+        rec.workPhase = "worker_active"
       }
     },
 
@@ -289,66 +450,121 @@ export function createRootWorkerState(
       for (const anchor of anchors ?? []) {
         if (anchor) rec.evidenceAnchors.add(anchor)
       }
-      rec.phase = "worker_evidence_available"
+      if (rec.recoveryPhase === "normal") rec.workPhase = "worker_evidence_available"
     },
 
-    noteRootRepairEntered(sessionID, reason) {
+    noteDelegationHealthy(sessionID) {
       const rec = recordFor(sessionID)
-      if (rec.phase === "exceptional_takeover") return
-      rec.phase = "root_repair"
-      rec.repairReason = reason
+      if (rec.recoveryPhase !== "delegation_degraded") return
+      rec.recoveryPhase = "normal"
+      rec.recoveryEvidence.clear()
+      rec.failureReason = null
+      rec.workPhase = "worker_active"
     },
 
-    noteRootRepairExited(sessionID) {
+    recordDelegationFailure(sessionID, evidence) {
       const rec = recordFor(sessionID)
-      if (rec.phase !== "root_repair") return
-      rec.phase = "worker_required"
-      rec.repairReason = null
+      const before = phaseFor(rec)
+      const accepted = recordFailure(rec, evidence)
+      return {
+        accepted,
+        before,
+        after: phaseFor(rec),
+        evidenceCount: rec.recoveryEvidence.size,
+      }
     },
 
-    noteDelegationRetrySucceeded(sessionID) {
+    beginRecoveryProbe(sessionID, probeID, nonce) {
       const rec = recordFor(sessionID)
-      if (rec.phase !== "root_repair") return
-      rec.phase = "worker_active"
-      rec.repairReason = null
+      if (rec.recoveryPhase !== "recovery_mode" || rec.activeProbe || !probeID || !nonce) return false
+      rec.activeProbe = { probeID, nonce }
+      return true
     },
 
-    noteDelegationRetryFailed(sessionID) {
+    markRecoveryVerified(sessionID, probeID) {
       const rec = recordFor(sessionID)
-      if (rec.phase !== "root_repair") return
-      // stay in root_repair: root continues diagnosis
+      if (rec.recoveryPhase !== "recovery_mode" || rec.activeProbe?.probeID !== probeID) return false
+      rec.verified = true
+      rec.failureReason = null
+      rec.recoveryPhase = "recovery_verified"
+      return true
     },
 
-    noteEscalationExhausted(sessionID) {
+    recordRecoveryProbeFailure(sessionID, probeID, reason) {
       const rec = recordFor(sessionID)
-      rec.phase = "exceptional_takeover"
+      if (rec.recoveryPhase !== "recovery_mode" || rec.activeProbe?.probeID !== probeID) return phaseFor(rec)
+      rec.verificationAttempts += 1
+      rec.failureReason = reason
+      rec.activeProbe = null
+      if (rec.verificationAttempts >= cfg.maxRecoveryVerificationAttempts) {
+        rec.recoveryPhase = "halt"
+      }
+      return phaseFor(rec)
+    },
+
+    markRecoveryHandoff(sessionID, path) {
+      const rec = recordFor(sessionID)
+      if (rec.recoveryPhase !== "recovery_verified" || !path) return false
+      rec.handoffPath = path
+      rec.recoveryPhase = "handoff"
+      return true
+    },
+
+    markRecoveryHalted(sessionID) {
+      const rec = recordFor(sessionID)
+      if (rec.recoveryPhase === "handoff" || rec.recoveryPhase === "halt") {
+        rec.recoveryPhase = "halt"
+      }
+    },
+
+    recoverySnapshot(sessionID) {
+      const rec = recordFor(sessionID)
+      return {
+        phase: rec.recoveryPhase,
+        evidence: [...rec.recoveryEvidence.values()],
+        activeProbe: rec.activeProbe ? { ...rec.activeProbe } : null,
+        verificationAttempts: rec.verificationAttempts,
+        verified: rec.verified,
+        handoffPath: rec.handoffPath,
+        failureReason: rec.failureReason,
+      }
     },
 
     phase(sessionID) {
-      return recordFor(sessionID).phase
+      return phaseFor(recordFor(sessionID))
     },
 
     repairReason(sessionID) {
-      return recordFor(sessionID).repairReason
+      return recordFor(sessionID).failureReason
     },
 
     evidenceAnchors(sessionID) {
       return [...recordFor(sessionID).evidenceAnchors]
     },
 
+    grantHumanAuthorization(sessionID, auth) {
+      humanRegistry.grant(sessionID, auth)
+    },
+
+    humanAuthorizations(sessionID) {
+      return humanRegistry.authorizations(sessionID)
+    },
+
     reset(sessionID) {
       records.delete(sessionID)
+      humanRegistry.clear(sessionID)
     },
 
     clear() {
       records.clear()
+      humanRegistry.clear()
     },
   }
 }
 
 function isKnownAnchor(rec: SessionRecord, hint?: GruntToolHint): boolean {
   const target = hint?.target
-  if (!target || target.length === 0) return false
+  if (!target) return false
   if (rec.evidenceAnchors.has(target)) return true
   for (const anchor of rec.evidenceAnchors) {
     if (sameAnchorFile(target, anchor)) return true
@@ -357,11 +573,6 @@ function isKnownAnchor(rec: SessionRecord, hint?: GruntToolHint): boolean {
   return false
 }
 
-/**
- * Compare anchors by their FILE portion. Anchors may carry a `:line`,
- * `:line:col`, or `:line-line` suffix; a bare symbol (no slash/extension)
- * only matches itself so a registered symbol never authorizes a file read.
- */
 function sameAnchorFile(a: string, b: string): boolean {
   const fileA = anchorFilePath(a)
   const fileB = anchorFilePath(b)
@@ -370,7 +581,7 @@ function sameAnchorFile(a: string, b: string): boolean {
 }
 
 function anchorFilePath(value: string): string | undefined {
-  if (!value || value.length === 0) return undefined
+  if (!value) return undefined
   const file = value.match(/^([^:\s]+(?:\.\w+)?):\d+(?:-\d+)?(?::\S*)?$/)
   if (file) return file[1]
   if (value.includes("/") && value.includes(".")) return value

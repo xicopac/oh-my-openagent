@@ -7,6 +7,8 @@ import {
   isSyntheticOrInternalOnlyTextParts,
   log,
 } from "../shared"
+import { handleUserMessageHumanAuthorization } from "../features/delegation-first/handle-user-message-authorization"
+import type { DelegationFirstRuntime } from "../features/delegation-first/runtime"
 import { applyUltraworkModelOverrideOnMessage } from "./ultrawork-model-override"
 import type { PluginContext } from "./types"
 import { handleGoalMessage } from "./chat-message/loop-commands"
@@ -80,11 +82,12 @@ export function createChatMessageHandler(args: {
   pluginConfig: OhMyOpenCodeConfig
   firstMessageVariantGate: FirstMessageVariantGate
   hooks: ChatMessageHooks
+  delegationFirstRuntime?: DelegationFirstRuntime
 }): (
   input: ChatMessageInput,
   output: ChatMessageHandlerOutput
 ) => Promise<void> {
-  const { ctx, pluginConfig, firstMessageVariantGate, hooks } = args
+  const { ctx, pluginConfig, firstMessageVariantGate, hooks, delegationFirstRuntime } = args
   const pluginContext = ctx as PluginContextWithTui
   const runtimeFallbackEnabled = isRuntimeFallbackEnabled(hooks, pluginConfig)
 
@@ -105,6 +108,16 @@ export function createChatMessageHandler(args: {
 
     if (input.agent) {
       updateSessionAgent(input.sessionID, input.agent)
+    }
+
+    if (delegationFirstRuntime) {
+      const promptText = extractPromptText(output.parts)
+      if (promptText.trim().length > 0) {
+        handleUserMessageHumanAuthorization(delegationFirstRuntime, input.sessionID, {
+          role: "user",
+          content: promptText,
+        })
+      }
     }
 
     const slashCommand = detectSlashCommand(extractPromptText(output.parts))

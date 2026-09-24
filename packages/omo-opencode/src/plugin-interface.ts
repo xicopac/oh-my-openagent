@@ -70,6 +70,7 @@ export function createPluginInterface(args: {
       pluginConfig,
       firstMessageVariantGate,
       hooks,
+      delegationFirstRuntime: managers.delegationFirstRuntime,
     }),
 
     "experimental.chat.messages.transform": createMessagesTransformHandler({

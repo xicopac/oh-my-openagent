@@ -27,6 +27,12 @@ export type GruntToolHint = {
   selective?: boolean
   /** Raw shell command for `bash` calls (semantic classification of the command). */
   command?: string
+  /** Machine-consumed sentinel for the one allowed end-to-end recovery probe. */
+  recoveryProbe?: boolean
+  /** Mechanical materialization claim: payload already determined, only persistence needed. */
+  materialization?: boolean
+  /** Human explicit authorization claim — object { scope, reason }, never a bare boolean. */
+  humanAuthorization?: { scope: string; reason: string }
 }
 
 export type PreGruntDecision = {
@@ -43,6 +49,20 @@ export type PreGruntDecision = {
   delegated: boolean
   /** True when the call was an allowed anchored read (verification). */
   selectiveVerification: boolean
+  /**
+   * True when the root session is in recovery_mode and this action is inside
+   * the approved recovery scope. Watchdog-authoritative: once true, later
+   * normal delegation guards (write-existing-file, heavy-command routing,
+   * notepad guard) must NOT re-block this already-authorized action.
+   */
+  recoveryAuthorized?: boolean
+  /** Recovery scope category when recoveryAuthorized (inspection/repair/validation/cleanup/verification). */
+  recoveryCategory?: string | null
+  materializationAuthorized?: boolean
+  materializationCategory?: string | null
+  humanAuthorized?: boolean
+  authorizationId?: string | null
+  authorizationScope?: string | null
 }
 
 export type PreGruntGateOptions = Partial<EarlyDelegationOptions> & {

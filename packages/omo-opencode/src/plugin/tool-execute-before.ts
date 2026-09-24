@@ -48,6 +48,16 @@ function isPureSleepCommand(command: string): boolean {
     && commandLines.every((line) => /^sleep\s+\d+(?:\.\d+)?[smhd]?\s*$/i.test(line))
 }
 
+function isHumanAuthorizationClaim(value: unknown): { scope: string; reason: string } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  const obj = value as Record<string, unknown>
+  if (typeof obj["scope"] !== "string" || typeof obj["reason"] !== "string") return undefined
+  const scope = (obj["scope"] as string).trim()
+  const reason = (obj["reason"] as string).trim()
+  if (scope.length === 0 || reason.length === 0) return undefined
+  return { scope, reason }
+}
+
 function gruntHintForTool(tool: string, args: Record<string, unknown>): GruntToolHint | undefined {
   const firstString = (keys: string[]): string | undefined => {
     for (const key of keys) {
@@ -57,17 +67,21 @@ function gruntHintForTool(tool: string, args: Record<string, unknown>): GruntToo
     return undefined
   }
   const target = firstString(["filePath", "file_path", "path", "pattern", "query"])
+  const materializationClaim = args["materialization"] === true || args["materialize"] === true
+  const materializationHint = materializationClaim ? { materialization: true as const } : {}
+  const humanClaim = isHumanAuthorizationClaim(args["humanAuthorization"])
+  const humanHint = humanClaim ? { humanAuthorization: humanClaim } : {}
   if (tool.toLowerCase() === "bash") {
     const command = typeof args.command === "string" ? args.command : undefined
-    return { ...(command ? { command } : {}) }
+    return { ...(command ? { command } : {}), ...materializationHint, ...humanHint }
   }
   if (tool.toLowerCase() === "read") {
-    return { ...(target ? { target } : {}), selective: hasNumericRange(args) }
+    return { ...(target ? { target } : {}), selective: hasNumericRange(args), ...materializationHint, ...humanHint }
   }
   if (tool.toLowerCase() === "session_read") {
-    return { ...(target ? { target } : {}) }
+    return { ...(target ? { target } : {}), ...materializationHint, ...humanHint }
   }
-  return { ...(target ? { target } : {}) }
+  return { ...(target ? { target } : {}), ...materializationHint, ...humanHint }
 }
 
 function hasNumericRange(args: Record<string, unknown>): boolean {
@@ -117,20 +131,40 @@ export function createToolExecuteBeforeHandler(args: {
       throw new Error("BTW side conversations cannot delegate work.")
     }
 
+    let recoveryAuthorized = false
+    let materializationAuthorized = false
+    let humanAuthorized = false
     if (delegationFirstRuntime && !subagentSessions.has(input.sessionID)) {
       const contextPressure = rootContextPressure(hooks, input.sessionID)
+      const hint = gruntHintForTool(input.tool, output.args)
+      if (output.args["materialization"] === true) delete output.args["materialization"]
+      if (output.args["materialize"] === true) delete output.args["materialize"]
+      // Strip humanAuthorization claim marker before tool executes; only a structured { scope, reason }
+      // object that is covered by a session grant will be honored. Bare booleans are ignored.
+      if ("humanAuthorization" in output.args) delete output.args["humanAuthorization"]
+      // Also strip forged bare markers — they grant nothing but must not leak to the tool
+      if ("humanAuthorized" in output.args) delete output.args["humanAuthorized"]
+      if ("human" in output.args) delete output.args["human"]
       const decision = delegationFirstRuntime.preGruntCheck(
         input.sessionID,
         input.tool,
-        gruntHintForTool(input.tool, output.args),
+        hint,
         contextPressure,
       )
       if (decision.block && decision.steering) {
         throw new Error(decision.steering)
       }
+      recoveryAuthorized = decision.recoveryAuthorized === true
+      materializationAuthorized = decision.materializationAuthorized === true
+      humanAuthorized = decision.humanAuthorized === true
     }
 
-    if (input.tool.toLowerCase() === "bash" && typeof output.args.command === "string") {
+    const authorized = recoveryAuthorized || materializationAuthorized || humanAuthorized
+    if (
+      !authorized
+      && input.tool.toLowerCase() === "bash"
+      && typeof output.args.command === "string"
+    ) {
       const command = output.args.command
       if (command.includes("\x00")) {
         replaceToolArgs(output, { command: command.replace(/\x00/g, "") })
@@ -146,6 +180,8 @@ export function createToolExecuteBeforeHandler(args: {
         aiJobAvailable: existsSync(AI_JOB_BIN),
         inControlSlice: isInsideControlSlice(),
         bashToolTimeoutMs: bashTimeoutMs,
+        recoveryAuthorized: recoveryAuthorized || materializationAuthorized,
+        humanAuthorized,
       })
       if (routing.action === "refuse") {
         throw new Error(routing.reason)
@@ -176,8 +212,16 @@ export function createToolExecuteBeforeHandler(args: {
       }
     }
 
-    await hooks.writeExistingFileGuard?.["tool.execute.before"]?.(input, output)
-    await hooks.notepadWriteGuard?.["tool.execute.before"]?.(input, output)
+    if (!authorized) {
+      await hooks.writeExistingFileGuard?.["tool.execute.before"]?.(input, output)
+      await hooks.notepadWriteGuard?.["tool.execute.before"]?.(input, output)
+    } else {
+      log("[tool-execute-before] recovery/materialization/human-authorized action skips write/notepad guards", {
+        sessionID: input.sessionID,
+        tool: input.tool,
+        callID: input.callID,
+      })
+    }
     await hooks.questionLabelTruncator?.["tool.execute.before"]?.(input, output)
     await hooks.claudeCodeHooks?.["tool.execute.before"]?.(input, output)
     await hooks.nonInteractiveEnv?.["tool.execute.before"]?.(input, output)
