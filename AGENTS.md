@@ -3,6 +3,18 @@
 > **HOLD THE FUCK UP. THIS ENTIRE GODDAMN CODEBASE IS BEING RIPPED APART AND REBUILT RIGHT NOW. A MASSIVE MULTI-HARNESS AGENT OS REFACTOR IS IN PROGRESS — WE ARE RESTRUCTURING EVERYTHING TO SUPPORT MULTIPLE AGENT HARNESSES (OPENCODE, CODEX, PI, AND OTHERS). DO NOT TRUST THE STRUCTURE BELOW AS STABLE. READ THE [ROADMAP](./ROADMAP.md) BEFORE YOU TOUCH ANYTHING OR SO HELP ME GOD.**
 
 **Generated:** 2026-08-24 | **Source snapshot:** f3642fcda | **Branch:** initdeep-refresh-20260824 | **Release:** v5.0.0-beta.18
+## DEPLOYMENT GIT CONVENTIONS (HOME SERVER)
+
+This checkout is the **live home-server deployment** of the plugin. Git rules are non-negotiable here:
+
+- **ALWAYS merge completed work into the fork's `dev` branch** — `xicopac/oh-my-openagent` (`origin`). Never leave finished work stranded on a random feature branch; fast-forward or merge it into `dev` before moving on.
+- **`dev` is the built/live version.** The running OpenCode loads this checkout's `dist/index.js` via `file:///srv/dev/oh-my-openagent`. A committed source change only becomes live after the bundle is rebuilt (`bun run build` or `bun build ./packages/omo-opencode/src/index.ts --outfile ./dist/index.js --external zod`).
+- **`dist/index.js` is gitignored** — rebuild it locally after committing source changes that must take effect immediately.
+- **Never push to `upstream` (`code-yeongyu/oh-my-openagent`)** from this checkout. The upstream repo is not part of this deployment.
+- When you commit, stage only the files you changed. Do not sweep unrelated modified files (e.g. `.omo/evidence/`, `delegation-first/`, `grunt-guard/`, `senpi` extensions) into your commit.
+- `GIT_MASTER=1` must prefix every `git` invocation (git-master skill hook contract).
+
+
 
 ## STOP. QA IS MANDATORY. NON-NEGOTIABLE. EVERY SINGLE TIME YOU TOUCH AN OPENCODE-, CODEX-, OR SENPI-CONNECTED COMPONENT.
 
