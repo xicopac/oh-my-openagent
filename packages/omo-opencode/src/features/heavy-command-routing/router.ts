@@ -85,10 +85,7 @@ export function decideHeavyCommandRouting(command: string, deps?: RoutingDeps): 
   const kind = (deps?.classify ?? classifyResourceCommand)(command)
   if (kind === "light") return { action: "direct", reason: "light" }
   if (deps?.aiJobAvailable === false) {
-    return {
-      action: "refuse",
-      reason: "[routing] HEAVY command refused: ai-job unavailable; cannot route away from ai-control.slice",
-    }
+    return { action: "direct", reason: "ai-job-unavailable-fallback" }
   }
 
   const normalized = normalizeShellCommand(command)

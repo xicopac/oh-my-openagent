@@ -14,6 +14,9 @@ const SHELL_COMMAND_RE = /^(?:bash|sh)\s+-c\s+(.*)$/s
 const CD_PREFIX_RE = /^cd\s+\S+\s*(?:&&|;)\s+/
 const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/
 const SHELL_WRAPPERS = new Set(["sudo", "nice", "nohup", "time"])
+const CONTROL_PLANE_TOOLS = new Set([
+  "sleep", "true", "false", "date", "uptime", "time", "ps", "pstree", "top", "htop",
+])
 const OPTIONS_WITH_VALUES = new Set([
   "-u",
   "--user",
@@ -116,6 +119,16 @@ function isLightShellCommand(command: string): boolean {
   return semantics === "metadata" || semantics === "narrow_read"
 }
 
+function isControlPlaneCommand(command: string): boolean {
+  const segments = command.split(/&&|;|\n/)
+  for (const segment of segments) {
+    const parsed = parseToolAndArgs(segment)
+    if (parsed === null) return false
+    if (!CONTROL_PLANE_TOOLS.has(parsed.tool)) return false
+  }
+  return true
+}
+
 export function classifyResourceCommand(command: string): ResourceClass {
   if (isLightShellCommand(command)) return "light"
   const normalized = normalizeShellCommand(command)
@@ -134,5 +147,7 @@ export function classifyResourceCommand(command: string): ResourceClass {
       bestPriority = priority
     }
   }
-  return best ?? "light"
+  if (best !== null) return best
+  if (isControlPlaneCommand(normalized.command)) return "light"
+  return "heavy"
 }

@@ -13,7 +13,7 @@ describe("classifyResourceCommand", () => {
     expect(result).toBe("light")
   })
 
-  test.each(["grep foo src", "rg foo"])("%s stays light", (command) => {
+  test.each(["grep foo src", "rg foo"])("%s classifies as heavy", (command) => {
     // given
     const input = command
 
@@ -21,7 +21,7 @@ describe("classifyResourceCommand", () => {
     const result = classifyResourceCommand(input)
 
     // then
-    expect(result).toBe("light")
+    expect(result).toBe("heavy")
   })
 
   test("bunx tsgo is a build", () => {
@@ -87,7 +87,7 @@ describe("classifyResourceCommand", () => {
     expect(result).toBe("gradle")
   })
 
-  test("emulator and adb install route to emulator while adb devices stays light", () => {
+  test("emulator and adb install route to emulator while adb devices stays heavy", () => {
     // given
     const emulatorCommand = "emulator -avd Pixel_2"
     const adbInstallCommand = "adb install app.apk"
@@ -97,13 +97,13 @@ describe("classifyResourceCommand", () => {
     const results = [emulatorCommand, adbInstallCommand, adbDevicesCommand].map(classifyResourceCommand)
 
     // then
-    expect(results).toEqual(["emulator", "emulator", "light"])
+    expect(results).toEqual(["emulator", "emulator", "heavy"])
   })
 
   test.each([
     ["npx tsgo --noEmit", "build"],
-    ["npm tsgo", "light"],
-    ["pnpm tsgo", "light"],
+    ["npm tsgo", "heavy"],
+    ["pnpm tsgo", "heavy"],
     ["npm run build", "build"],
     ["npm run test", "test"],
     ["yarn install", "heavy"],
@@ -118,7 +118,7 @@ describe("classifyResourceCommand", () => {
     expect(result).toBe(expected)
   })
 
-  test("make jobs build unless a help or dry-run flag is present", () => {
+  test("make jobs build and make --help classifies as heavy", () => {
     // given
     const buildCommand = "make -j8"
     const helpCommand = "make --help"
@@ -127,7 +127,7 @@ describe("classifyResourceCommand", () => {
     const results = [buildCommand, helpCommand].map(classifyResourceCommand)
 
     // then
-    expect(results).toEqual(["build", "light"])
+    expect(results).toEqual(["build", "heavy"])
   })
 
   test("env assignments are transparent", () => {
@@ -214,5 +214,60 @@ describe("classifyResourceCommand", () => {
 
     // then
     expect(normalized.command).toBe(command)
+  })
+
+  test("generic tools with no known classification classify as heavy", () => {
+    // given
+    const commands = ["node script.js", "bash script.sh", "./smoke-test.sh", "grep -r foo .", "find / -name '*.ts'"]
+
+    // when
+    const results = commands.map(classifyResourceCommand)
+
+    // then
+    expect(results).toEqual(["heavy", "heavy", "heavy", "heavy", "heavy"])
+  })
+
+  test("timeout wrapping a generic tool keeps it heavy", () => {
+    // given
+    const command = "timeout 60 node script.js"
+
+    // when
+    const result = classifyResourceCommand(command)
+
+    // then
+    expect(result).toBe("heavy")
+  })
+
+  test("control-plane tools stay light", () => {
+    // given
+    const commands = ["sleep 30", "ps aux", "date"]
+
+    // when
+    const results = commands.map(classifyResourceCommand)
+
+    // then
+    expect(results).toEqual(["light", "light", "light"])
+  })
+
+  test("control-plane segments joined with && stay light", () => {
+    // given
+    const command = "sleep 3 && ps aux"
+
+    // when
+    const result = classifyResourceCommand(command)
+
+    // then
+    expect(result).toBe("light")
+  })
+
+  test("mixed control-plane and non-control-plane segments classify as heavy", () => {
+    // given
+    const command = "sleep 3 && node script.js"
+
+    // when
+    const result = classifyResourceCommand(command)
+
+    // then
+    expect(result).toBe("heavy")
   })
 })

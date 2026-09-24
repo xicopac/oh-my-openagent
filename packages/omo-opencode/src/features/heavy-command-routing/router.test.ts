@@ -118,7 +118,7 @@ describe("decideHeavyCommandRouting", () => {
     expect(decision.slice).toBe(AI_EMULATOR_SLICE)
   })
 
-  test("a heavy command fails closed when ai-job is unavailable", () => {
+  test("a heavy command falls back to direct execution when ai-job is unavailable", () => {
     // given
     const command = "yarn install"
 
@@ -129,10 +129,7 @@ describe("decideHeavyCommandRouting", () => {
     })
 
     // then
-    expect(decision).toEqual({
-      action: "refuse",
-      reason: "[routing] HEAVY command refused: ai-job unavailable; cannot route away from ai-control.slice",
-    })
+    expect(decision).toEqual({ action: "direct", reason: "ai-job-unavailable-fallback" })
   })
 
   test("bash tool timeout is rounded up to seconds", () => {
