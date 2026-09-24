@@ -326,4 +326,136 @@ describe("automatic child failover (reclaim -> governed re-dispatch)", () => {
     expect(harness.relaunches.length).toBe(0)
     expect(eventNames(events)).toContain("retry_chain_exhausted")
   })
+
+  test("episode budget is shared across replacement children — second stall exhausts and records parent failure", () => {
+    // given: assignment job1 bound to child1, then redispatch creates child2 with same assignment_id
+    const { writer, events } = captureAudit()
+    const rt = createDelegationFirstRuntime(writer, TIGHT)
+    const harness = fakeSink()
+    rt.setRecoverySink(harness.sink as never)
+    const t0 = Date.now()
+    rt.retainAssignment(makeAssignment(), "child1")
+    rt.attachChildSession("root", "child1")
+    // when: first stall -> retry true + relaunch creates child2
+    stallAndReclaim(rt, "child1", "openai/free-a", t0)
+    expect(harness.relaunches.length).toBe(1)
+    expect(harness.cancelled).toEqual(["child1"])
+    rt.noteReplacementSession("job1", "child2")
+    rt.attachChildSession("root", "child2")
+    // when: second stall on replacement child2 in SAME episode job1
+    stallAndReclaim(rt, "child2", "openai/free-a", t0)
+    // then: budget exhausted -> no second relaunch, parent delegation_failure_recorded, truthful terminal
+    expect(harness.relaunches.length).toBe(1)
+    expect(harness.cancelled).toContain("child2")
+    const names = eventNames(events)
+    expect(names).toContain("retry_chain_exhausted")
+    const exhausted = events.filter((e) => e.fields.event === "retry_chain_exhausted")
+    const lastExhausted = exhausted[exhausted.length - 1]
+    expect(lastExhausted.fields.reason).toBe("same_worker_reclaim_budget_exhausted")
+    expect(lastExhausted.fields.assignment_id).toBe("job1")
+    const parentFailures = events.filter(
+      (e) => e.fields.event === "delegation_failure_recorded" && e.sessionID === "root",
+    )
+    expect(parentFailures.length).toBe(1)
+    expect(parentFailures[0].fields.kind).toBe("watchdog_reclaim_exhausted")
+    expect(parentFailures[0].fields.reason).toBe("worker_stall_exhausted")
+    expect(rt.checkWatchdog("child2").health).toBe("TERMINAL")
+    // recovery evidence id must be stable per episode
+    const evidence = rt.recoverySnapshot("root").evidence
+    expect(evidence.some((e) => e.id === "reclaim-budget:job1")).toBe(true)
+  })
+
+  test("episode budget survives old-child detach during redispatch", () => {
+    // given: assignment job1 bound to child1, then redispatch creates child2 in SAME episode
+    const { writer, events } = captureAudit()
+    const rt = createDelegationFirstRuntime(writer, TIGHT)
+    const harness = fakeSink()
+    rt.setRecoverySink(harness.sink as never)
+    const t0 = Date.now()
+    rt.retainAssignment(makeAssignment(), "child1")
+    rt.attachChildSession("root", "child1")
+    // when: first stall -> retry true + relaunch creates child2; live opencode cancels the old child
+    stallAndReclaim(rt, "child1", "openai/free-a", t0)
+    expect(harness.relaunches.length).toBe(1)
+    expect(harness.cancelled).toEqual(["child1"])
+    // the cancelled old child session is deleted -> onSubagentSessionDeleted -> detachChildSession(child1)
+    rt.detachChildSession("child1")
+    // replacement attaches in the same logical episode
+    rt.noteReplacementSession("job1", "child2")
+    rt.attachChildSession("root", "child2")
+    // when: second stall on replacement child2 in SAME episode job1 (after old-child detach)
+    stallAndReclaim(rt, "child2", "openai/free-a", t0)
+    // then: budget still exhausted (NOT reset by old-child detach) -> no second relaunch, truthful terminal
+    expect(harness.relaunches.length).toBe(1)
+    expect(harness.cancelled).toContain("child2")
+    const names = eventNames(events)
+    expect(names).toContain("retry_chain_exhausted")
+    const exhausted = events.filter((e) => e.fields.event === "retry_chain_exhausted")
+    const lastExhausted = exhausted[exhausted.length - 1]
+    expect(lastExhausted.fields.reason).toBe("same_worker_reclaim_budget_exhausted")
+    expect(lastExhausted.fields.assignment_id).toBe("job1")
+    const parentFailures = events.filter(
+      (e) => e.fields.event === "delegation_failure_recorded" && e.sessionID === "root",
+    )
+    expect(parentFailures.length).toBe(1)
+    expect(parentFailures[0].fields.kind).toBe("watchdog_reclaim_exhausted")
+    expect(rt.checkWatchdog("child2").health).toBe("TERMINAL")
+    const evidence = rt.recoverySnapshot("root").evidence
+    expect(evidence.some((e) => e.id === "reclaim-budget:job1")).toBe(true)
+  })
+
+  test("hard circuit breaker hard-terminals a wedged child regardless of retry budget and records evidence", () => {
+    // given: breaker set to 50s, stall duration 200s exceeds it
+    const { writer, events } = captureAudit()
+    const rt = createDelegationFirstRuntime(writer, {
+      ladder: { max_attempts_per_tier: 5, max_free_attempts_total: 10, escalate_after_attempts: 2 },
+      recovery: { hardStallTerminalMs: 50_000 },
+    } as never)
+    const harness = fakeSink()
+    rt.setRecoverySink(harness.sink as never)
+    const t0 = Date.now()
+    rt.retainAssignment(makeAssignment(), "child1")
+    rt.attachChildSession("root", "child1")
+    rt.markRequestStarted("child1")
+    rt.checkAllWatchdogs(t0 + 200_000)
+    // when: reclaimStalled with duration exceeding hardStallTerminalMs
+    rt.reclaimStalled("child1", "openai/free-a", t0 + 200_000)
+    // then: hard breaker tripped, no redispatch, parent failure recorded, terminal
+    expect(harness.relaunches.length).toBe(0)
+    expect(harness.cancelled).toEqual(["child1"])
+    const names = eventNames(events)
+    expect(names).toContain("hard_circuit_breaker_tripped")
+    const breaker = events.find((e) => e.fields.event === "hard_circuit_breaker_tripped")
+    expect(breaker).toBeDefined()
+    expect(String(breaker?.fields.stall_mode)).toBe("PROVIDER_RESPONSE_STALL")
+    expect(Number(breaker?.fields.duration_ms)).toBeGreaterThanOrEqual(50_000)
+    const parentFailures = events.filter(
+      (e) => e.fields.event === "delegation_failure_recorded" && e.sessionID === "root",
+    )
+    expect(parentFailures.length).toBe(1)
+    expect(parentFailures[0].fields.kind).toBe("watchdog_reclaim_exhausted")
+    expect(parentFailures[0].fields.reason).toBe("hard_circuit_breaker")
+    expect(rt.checkWatchdog("child1").health).toBe("TERMINAL")
+    expect(names).not.toContain("worker_retry_started")
+  })
+
+  test("hard circuit breaker does not trip when stall duration is below threshold", () => {
+    // given: breaker at 500s, stall duration 200s is below
+    const { writer, events } = captureAudit()
+    const rt = createDelegationFirstRuntime(writer, {
+      ladder: { max_attempts_per_tier: 1, max_free_attempts_total: 3, escalate_after_attempts: 2 },
+      recovery: { hardStallTerminalMs: 500_000 },
+    } as never)
+    const harness = fakeSink()
+    rt.setRecoverySink(harness.sink as never)
+    const t0 = Date.now()
+    rt.retainAssignment(makeAssignment(), "child1")
+    rt.attachChildSession("root", "child1")
+    // when: reclaimStalled with duration below threshold (200s < 500s) -> normal retry
+    stallAndReclaim(rt, "child1", "openai/free-a", t0)
+    // then: normal path, not breaker
+    expect(harness.relaunches.length).toBe(1)
+    expect(eventNames(events)).not.toContain("hard_circuit_breaker_tripped")
+    expect(eventNames(events)).toContain("worker_retry_started")
+  })
 })
