@@ -60,8 +60,8 @@ function makeRuntime(): {
   root: string
   availabilityDir: string
 } {
-  const root = mkdtempSync(join(tmpdir(), "root-repair-"))
-  const availabilityDir = mkdtempSync(join(tmpdir(), "root-repair-avail-"))
+  const root = mkdtempSync(join(tmpdir(), "root-recovery-"))
+  const availabilityDir = mkdtempSync(join(tmpdir(), "root-recovery-avail-"))
   const audit = createGovernanceAuditWriter({ root })
   const rt = createDelegationFirstRuntime(audit, {
     modelAvailabilityFilePath: join(availabilityDir, "model-availability.json"),
@@ -79,8 +79,8 @@ function countEvent(root: string, name: string): number {
   return readEventNames(root).filter((e) => e === name).length
 }
 
-describe("ROOT_REPAIR_MODE + EXCEPTIONAL_ROOT_TAKEOVER (break-glass)", () => {
-  test("1. NORMAL WORKER-FIRST does NOT enter repair", async () => {
+describe("DELEGATION RECOVERY LIFECYCLE (evidence-gated, watchdog-controlled)", () => {
+  test("1. NORMAL WORKER-FIRST does NOT degrade or enter recovery", async () => {
     const r = makeRuntime()
     try {
       r.rt.beginDelegation("job", "m", "map auth", [freeWorker("free-1")])
@@ -88,234 +88,160 @@ describe("ROOT_REPAIR_MODE + EXCEPTIONAL_ROOT_TAKEOVER (break-glass)", () => {
       r.rt.markRequestStarted("child")
       r.rt.recordWorkerResult("job", adequateResult())
       expect(r.rt.rootPhase("m")).toBe("worker_evidence_available")
-      expect(r.rt.rootPhase("m")).not.toBe("root_repair")
-      expect(r.rt.rootPhase("m")).not.toBe("exceptional_takeover")
+      expect(r.rt.rootPhase("m")).not.toBe("delegation_degraded")
+      expect(r.rt.rootPhase("m")).not.toBe("recovery_mode")
       await r.audit.flush()
-      expect(readEventNames(r.root)).not.toContain("root_repair_mode_entered")
+      expect(readEventNames(r.root)).not.toContain("delegation_failure_recorded")
+      expect(readEventNames(r.root)).not.toContain("recovery_probe_started")
     } finally {
       cleanup(r)
     }
   })
 
-  test("2. CHILD STARTUP FAILURE enters ROOT_REPAIR_MODE; root work allowed; logical task active", async () => {
+  test("2. CHILD STARTUP FAILURE records evidence -> delegation_degraded; unrelated work stays blocked", async () => {
     const r = makeRuntime()
     try {
       r.rt.beginDelegation("job", "m", "map auth", [freeWorker("free-1")])
       r.rt.attachChildSession("m", "child")
       r.rt.markRequestStarted("child")
       r.rt.noteChildStartupFailure("m", "child", "0ms child / EACCES")
-      expect(r.rt.rootPhase("m")).toBe("root_repair")
-      // root repo operations allowed during repair (read/grep/bash/edit)
-      expect(r.rt.preGruntCheck("m", "read", { target: "src/a.ts" }).block).toBe(false)
-      expect(r.rt.preGruntCheck("m", "bash", { command: "grep -R x src/" }).block).toBe(false)
-      expect(r.rt.preGruntCheck("m", "edit", { target: "src/a.ts" }).block).toBe(false)
+      expect(r.rt.rootPhase("m")).toBe("delegation_degraded")
+      // one failure is not enough authority: unrelated product work still blocked
+      expect(r.rt.preGruntCheck("m", "read", { target: "apps/storefront/cart.ts" }).block).toBe(true)
       expect(r.rt.rootRepairReason("m")).toBe("child_startup_failure")
-      // no premature complete/failed/allComplete: task stays logically active
-      expect(r.rt.rootPhase("m")).not.toBe("exceptional_takeover")
       await r.audit.flush()
-      expect(countEvent(r.root, "root_repair_mode_entered")).toBe(1)
+      expect(countEvent(r.root, "delegation_failure_recorded")).toBe(1)
     } finally {
       cleanup(r)
     }
   })
 
-  test("3. CHILD 0MS FAILURE enters ROOT_REPAIR_MODE", async () => {
-    const r = makeRuntime()
-    try {
-      r.rt.beginDelegation("job", "m", "map auth", [freeWorker("free-1")])
-      r.rt.noteChildStartupFailure("m", null, "0ms child before session")
-      expect(r.rt.rootPhase("m")).toBe("root_repair")
-      expect(r.rt.rootRepairReason("m")).toBe("child_startup_failure")
-      expect(r.rt.preGruntCheck("m", "bash", { command: "cat src/const.ts" }).block).toBe(false)
-    } finally {
-      cleanup(r)
-    }
-  })
-
-  test("4. PERMISSION FAILURE (EACCES) enters ROOT_REPAIR_MODE and root may inspect permissions", async () => {
+  test("3. SECOND DISTINCT FAILURE enters recovery_mode; recovery-scope work allowed, unrelated blocked", async () => {
     const r = makeRuntime()
     try {
       r.rt.beginDelegation("job", "m", "map auth", [freeWorker("free-1")])
       r.rt.attachChildSession("m", "child")
       r.rt.markRequestStarted("child")
-      r.rt.noteChildStartupFailure("m", "child", "EACCES: permission denied")
-      expect(r.rt.rootPhase("m")).toBe("root_repair")
-      // root can inspect/fix permission-related code/config directly
-      expect(r.rt.preGruntCheck("m", "read", { target: ".env" }).block).toBe(false)
-      expect(r.rt.preGruntCheck("m", "bash", { command: "ls -la" }).block).toBe(false)
+      r.rt.noteChildStartupFailure("m", "child", "0ms child / EACCES")
+      r.rt.noteEvidencePipelineBroken("m", "child-2", "worker completed but evidence never advanced")
+      expect(r.rt.rootPhase("m")).toBe("recovery_mode")
+      // recovery-scope path inspection is permitted
+      expect(r.rt.preGruntCheck("m", "read", {
+        target: "packages/omo-opencode/src/features/delegation-first/runtime.ts",
+      }).block).toBe(false)
+      // unrelated product work stays blocked even in recovery_mode
+      expect(r.rt.preGruntCheck("m", "edit", { target: "packages/web/src/app/page.tsx" }).block).toBe(true)
+      expect(r.rt.preGruntCheck("m", "bash", { command: "npm install react" }).block).toBe(true)
     } finally {
       cleanup(r)
     }
   })
 
-  test("5. WORKER STALL beyond watchdog enters ROOT_REPAIR_MODE (no hang)", async () => {
-    const r = makeRuntime()
-    try {
-      r.rt.beginDelegation("job", "m", "map auth", [freeWorker("free-1")])
-      r.rt.attachChildSession("m", "child")
-      r.rt.markRequestStarted("child")
-      // simulate stall reclaimed without a retained assignment -> repair becomes available
-      r.rt.unregisterWorker("child")
-      r.rt.enterRootRepair("m", "worker_stall_exhausted")
-      expect(r.rt.rootPhase("m")).toBe("root_repair")
-      expect(r.rt.preGruntCheck("m", "bash", { command: "grep -R stall src/" }).block).toBe(false)
-      await r.audit.flush()
-      expect(readEventNames(r.root)).toContain("root_repair_mode_entered")
-    } finally {
-      cleanup(r)
-    }
-  })
-
-  test("6. EVIDENCE PIPELINE FAILURE allows root to inspect/fix lifecycle code", async () => {
-    const r = makeRuntime()
-    try {
-      r.rt.beginDelegation("job", "m", "map auth", [freeWorker("free-1")])
-      r.rt.attachChildSession("m", "child")
-      r.rt.markRequestStarted("child")
-      r.rt.noteEvidencePipelineBroken("m", "child", "worker completed but evidence never advanced")
-      expect(r.rt.rootPhase("m")).toBe("root_repair")
-      expect(r.rt.rootRepairReason("m")).toBe("evidence_pipeline_broken")
-      expect(r.rt.preGruntCheck("m", "read", { target: "src/features/delegation-first/runtime.ts" }).block).toBe(false)
-    } finally {
-      cleanup(r)
-    }
-  })
-
-  test("7. BROKEN ROUTING (no eligible worker) enters ROOT_REPAIR_MODE", async () => {
-    const r = makeRuntime()
-    try {
-      r.rt.beginDelegation("job", "m", "map auth", [freeWorker("free-1")])
-      r.rt.attachChildSession("m", "child")
-      r.rt.markRequestStarted("child")
-      r.rt.recordModelUnavailable("child", "free-1", "model disabled")
-      expect(r.rt.rootPhase("m")).toBe("root_repair")
-      expect(r.rt.preGruntCheck("m", "bash", { command: "cat src/routing.ts" }).block).toBe(false)
-    } finally {
-      cleanup(r)
-    }
-  })
-
-  test("8. ORDINARY MODEL FAILOVER does NOT enter repair (free-A -> free-B)", async () => {
-    const r = makeRuntime()
-    try {
-      r.rt.beginDelegation("job", "m", "map auth", [freeWorker("free-1"), freeWorker("free-2", "free_alt")])
-      r.rt.attachChildSession("m", "child-1")
-      r.rt.markRequestStarted("child-1")
-      // free-1 unavailable, auto re-dispatch to free-2 via retained assignment + sink
-      const sink = {
-        relaunches: [] as string[],
-        relaunch: () => {
-          r.rt.noteReplacementSession("job", "child-2")
-          return { kind: "launched" as const, taskID: "bg-2", sessionID: "child-2" }
-        },
-        cancel: () => Promise.resolve(),
-      }
-      r.rt.setRecoverySink(sink)
-      r.rt.retainAssignment({
-        assignment_id: "job",
-        root_session_id: "m",
-        parent_session_id: "m",
-        parent_message_id: "msg",
-        prompt: "map auth",
-        description: "map auth",
-        agent: "explore",
-        category: "explore",
-        parent_model: { providerID: "test", modelID: "root" },
-        workers: [freeWorker("free-1"), freeWorker("free-2", "free_alt")],
-      }, "child-1")
-      r.rt.recordModelUnavailable("child-1", "free-1", "model disabled")
-      // failover keeps working; no repair
-      expect(r.rt.rootPhase("m")).not.toBe("root_repair")
-      expect(r.rt.rootPhase("m")).not.toBe("exceptional_takeover")
-    } finally {
-      cleanup(r)
-    }
-  })
-
-  test("9. REPAIR SUCCESS: one worker retry succeeds -> exit repair -> worker-first resumes", async () => {
+  test("4. WATCHDOG-BLOCKED REPAIR is circular-deadlock evidence, not a dead end", async () => {
     const r = makeRuntime()
     try {
       r.rt.beginDelegation("job", "m", "map auth", [freeWorker("free-1")])
       r.rt.attachChildSession("m", "child")
       r.rt.markRequestStarted("child")
       r.rt.noteChildStartupFailure("m", "child", "EACCES")
-      expect(r.rt.rootPhase("m")).toBe("root_repair")
-
-      // root repairs, then ONE delegation retry reaches request-started
-      r.rt.beginDelegation("job2", "m", "map auth (retry)", [freeWorker("free-1")])
-      r.rt.attachChildSession("m", "child-retry")
-      r.rt.markRequestStarted("child-retry")
-      expect(r.rt.rootPhase("m")).toBe("worker_active")
-
-      r.rt.recordWorkerResult("job2", adequateResult())
-      expect(r.rt.rootPhase("m")).toBe("worker_evidence_available")
-      await r.audit.flush()
-      const events = readEventNames(r.root)
-      expect(events).toContain("root_repair_mode_entered")
-      expect(events).toContain("delegation_retry_succeeded")
-      expect(events).toContain("root_repair_mode_exited")
-      expect(events).not.toContain("exceptional_root_takeover")
+      // the watchdog would block a repair edit under normal enforcement; the
+      // recovery scope recognizes this as a circular deadlock and escalates.
+      const decision = r.rt.preGruntCheck("m", "edit", {
+        target: "packages/omo-opencode/src/features/delegation-first/runtime.ts",
+      })
+      expect(decision.block).toBe(false)
+      expect(r.rt.rootPhase("m")).toBe("recovery_mode")
+      const snapshot = r.rt.recoverySnapshot("m")
+      expect(snapshot.evidence.map((item) => item.kind)).toContain("circular_deadlock")
     } finally {
       cleanup(r)
     }
   })
 
-  test("10. REPAIR FAILURE / TAKEOVER: persistent failure -> exceptional root takeover -> root works", async () => {
+  test("5. RECOVERY PROBE lifecycle: verified -> handoff -> halt; terminal phases block everything", async () => {
     const r = makeRuntime()
     try {
       r.rt.beginDelegation("job", "m", "map auth", [freeWorker("free-1")])
       r.rt.attachChildSession("m", "child")
       r.rt.markRequestStarted("child")
       r.rt.noteChildStartupFailure("m", "child", "EACCES")
-      expect(r.rt.rootPhase("m")).toBe("root_repair")
+      r.rt.noteEvidencePipelineBroken("m", "child-2", "evidence never advanced")
+      expect(r.rt.rootPhase("m")).toBe("recovery_mode")
 
-      // root attempts repair, but delegation remains unavailable
-      r.rt.noteDelegationRetryFailed("m", "still broken")
-      expect(r.rt.rootPhase("m")).toBe("root_repair")
+      // only one probe can start
+      expect(r.rt.beginRecoveryProbe("m", "probe-1", "nonce-1")).toBe(true)
+      expect(r.rt.beginRecoveryProbe("m", "probe-2", "nonce-2")).toBe(false)
+      // a task call during an active probe is treated as the recovery probe
+      expect(r.rt.preGruntCheck("m", "task", {}).block).toBe(false)
 
-      // exceptional takeover: root may complete the original task itself
-      r.rt.enterExceptionalTakeover("m", "delegation remains unusable after repair")
-      expect(r.rt.rootPhase("m")).toBe("exceptional_takeover")
-      expect(r.rt.preGruntCheck("m", "bash", { command: "grep -R x src/" }).block).toBe(false)
-      expect(r.rt.preGruntCheck("m", "edit", { target: "src/a.ts" }).block).toBe(false)
+      expect(r.rt.markRecoveryVerified("m", "probe-1")).toBe(true)
+      expect(r.rt.rootPhase("m")).toBe("recovery_verified")
+      expect(r.rt.preGruntCheck("m", "read", {
+        target: "packages/omo-opencode/src/features/delegation-first/runtime.ts",
+      }).block).toBe(true)
 
-      await r.audit.flush()
-      const events = readEventNames(r.root)
-      expect(events).toContain("root_repair_mode_entered")
-      expect(events).toContain("delegation_retry_failed")
-      expect(events).toContain("exceptional_root_takeover")
+      expect(r.rt.markRecoveryHandoff("m", "/project/.omo/handoffs/recovery.md")).toBe(true)
+      expect(r.rt.rootPhase("m")).toBe("handoff")
+      r.rt.markRecoveryHalted("m")
+      expect(r.rt.rootPhase("m")).toBe("halt")
+      expect(r.rt.preGruntCheck("m", "task", { recoveryProbe: true }).block).toBe(true)
+      expect(r.rt.recoverySnapshot("m")).toMatchObject({
+        verified: true,
+        handoffPath: "/project/.omo/handoffs/recovery.md",
+      })
     } finally {
       cleanup(r)
     }
   })
 
-  test("11. TASK STATE: logical task stays active throughout repair (no premature complete/fail)", async () => {
+  test("6. BOUNDED PROBE FAILURE halts without ever marking recovery verified", async () => {
     const r = makeRuntime()
     try {
       r.rt.beginDelegation("job", "m", "map auth", [freeWorker("free-1")])
       r.rt.attachChildSession("m", "child")
       r.rt.markRequestStarted("child")
       r.rt.noteChildStartupFailure("m", "child", "EACCES")
-      // repair mode does NOT set allComplete / failed / completed on the logical task
-      expect(r.rt.rootPhase("m")).toBe("root_repair")
-      r.rt.noteDelegationRetryFailed("m", "still broken")
-      expect(r.rt.rootPhase("m")).toBe("root_repair")
-      r.rt.enterExceptionalTakeover("m", "give up after repair")
-      expect(r.rt.rootPhase("m")).toBe("exceptional_takeover")
+      r.rt.noteEvidencePipelineBroken("m", "child-2", "evidence never advanced")
+      expect(r.rt.rootPhase("m")).toBe("recovery_mode")
+
+      r.rt.beginRecoveryProbe("m", "probe-1", "nonce-1")
+      expect(r.rt.recordRecoveryProbeFailure("m", "probe-1", "wrong result")).toBe("recovery_mode")
+      r.rt.beginRecoveryProbe("m", "probe-2", "nonce-2")
+      expect(r.rt.recordRecoveryProbeFailure("m", "probe-2", "still wrong")).toBe("halt")
+      expect(r.rt.rootPhase("m")).toBe("halt")
+      expect(r.rt.recoverySnapshot("m")).toMatchObject({ verified: false, failureReason: "still wrong" })
     } finally {
       cleanup(r)
     }
   })
 
-  test("12. COST SAFETY: repair/takeover does NOT authorize paid children", async () => {
+  test("7. ROUTING EXHAUSTION / give_up records routing evidence instead of takeover", async () => {
+    const r = makeRuntime()
+    try {
+      r.rt.beginDelegation("job", "m", "map auth", [freeWorker("free-1")])
+      r.rt.attachChildSession("m", "child")
+      r.rt.markRequestStarted("child")
+      expect(r.rt.recordWorkerResult("job", weakResult()).kind).toBe("retry_refined")
+      const giveUp = r.rt.recordWorkerResult("job", weakResult())
+      expect(giveUp.kind).toBe("give_up")
+      // give_up is machine evidence, not an assertion: degraded, never takeover
+      expect(r.rt.rootPhase("m")).toBe("delegation_degraded")
+      expect(r.rt.rootRepairReason("m")).toBe("no_sufficient_worker")
+      expect(r.rt.preGruntCheck("m", "bash", { command: "grep -R x ." }).block).toBe(true)
+    } finally {
+      cleanup(r)
+    }
+  })
+
+  test("8. COST SAFETY: recovery does NOT authorize paid children", async () => {
     const r = makeRuntime()
     try {
       r.rt.beginDelegation("job", "m", "map auth", [freeWorker("free-1")])
       r.rt.attachChildSession("m", "child")
       r.rt.markRequestStarted("child")
       r.rt.noteChildStartupFailure("m", "child", "EACCES")
-      expect(r.rt.rootPhase("m")).toBe("root_repair")
-      // even at cap=1 with repair active, no paid child is auto-authorized by repair
+      r.rt.noteEvidencePipelineBroken("m", "child-2", "evidence never advanced")
+      expect(r.rt.rootPhase("m")).toBe("recovery_mode")
       const gate1 = r.rt.tryAcquirePaidChild()
       expect(gate1).toBe(true)
       const gate2 = r.rt.tryAcquirePaidChild()
@@ -326,40 +252,45 @@ describe("ROOT_REPAIR_MODE + EXCEPTIONAL_ROOT_TAKEOVER (break-glass)", () => {
     }
   })
 
-  test("13. NESTED CHILD cannot grant itself root-repair authority", async () => {
+  test("9. NESTED CHILD cannot begin a recovery probe", async () => {
     const r = makeRuntime()
     try {
-      // register a child session: it is a worker child of the master session
       r.rt.beginDelegation("job", "m", "map auth", [freeWorker("free-1")])
       r.rt.attachChildSession("m", "child-session")
       expect(r.rt.isChildSession("child-session")).toBe(true)
-
-      // a nested child cannot acquire root-repair authority via the runtime
-      r.rt.enterRootRepair("child-session", "fake")
-      expect(r.rt.rootPhase("child-session")).not.toBe("root_repair")
-
-      // the true root/master session controls repair entry
-      r.rt.enterRootRepair("m", "routing_no_eligible_worker")
-      expect(r.rt.rootPhase("m")).toBe("root_repair")
-
+      expect(r.rt.beginRecoveryProbe("child-session", "probe-fake", "nonce")).toBe(false)
+      // the true root/master session controls probe entry
+      r.rt.noteChildStartupFailure("m", "child", "EACCES")
+      r.rt.noteEvidencePipelineBroken("m", "child-2", "evidence never advanced")
+      expect(r.rt.rootPhase("m")).toBe("recovery_mode")
+      expect(r.rt.beginRecoveryProbe("m", "probe-1", "nonce-1")).toBe(true)
       await r.audit.flush()
-      expect(readEventNames(r.root)).toContain("nested_child_repair_rejected")
+      expect(readEventNames(r.root)).toContain("nested_child_probe_rejected")
     } finally {
       cleanup(r)
     }
   })
 
-  test("14. AUDIT EVENTS emitted exactly once", async () => {
+  test("10. AUDIT EVENTS emitted for the recovery lifecycle", async () => {
     const r = makeRuntime()
     try {
       r.rt.beginDelegation("job", "m", "map auth", [freeWorker("free-1")])
       r.rt.attachChildSession("m", "child")
       r.rt.markRequestStarted("child")
       r.rt.noteChildStartupFailure("m", "child", "EACCES")
-      r.rt.enterExceptionalTakeover("m", "give up")
+      r.rt.noteEvidencePipelineBroken("m", "child-2", "evidence never advanced")
+      r.rt.beginRecoveryProbe("m", "probe-1", "nonce-1")
+      r.rt.markRecoveryVerified("m", "probe-1")
+      r.rt.markRecoveryHandoff("m", "/project/.omo/handoffs/recovery.md")
+      r.rt.markRecoveryHalted("m")
       await r.audit.flush()
-      expect(countEvent(r.root, "root_repair_mode_entered")).toBe(1)
-      expect(countEvent(r.root, "exceptional_root_takeover")).toBe(1)
+      const events = readEventNames(r.root)
+      expect(events).toContain("delegation_failure_recorded")
+      expect(events).toContain("recovery_probe_started")
+      expect(events).toContain("recovery_verified")
+      expect(events).toContain("recovery_handoff")
+      expect(events).toContain("recovery_halted")
+      expect(countEvent(r.root, "delegation_failure_recorded")).toBe(2)
     } finally {
       cleanup(r)
     }

@@ -223,14 +223,31 @@ describe("POST-EVIDENCE ROOT VERIFICATION (worker-first lifecycle)", () => {
     }
   })
 
-  test("13. ROOT_REPAIR_MODE regression - repair still grants authority", () => {
+  test("13. RECOVERY MODE regression - recovery-scope work allowed, unrelated work blocked", () => {
     const r = makeRuntime()
     try {
       r.rt.preGruntCheck("root", "bash", { command: "grep -R x ." })
-      r.rt.enterRootRepair("root", "test repair")
-      expect(r.rt.rootPhase("root")).toBe("root_repair")
-      expect(r.rt.preGruntCheck("root", "read", { target: "any.ts" }).block).toBe(false)
-      expect(r.rt.preGruntCheck("root", "bash", { command: "find . -name '*.ts'" }).block).toBe(false)
+      // one failure degrades; a second distinct failure enters recovery_mode
+      r.rt.recordDelegationFailure("root", {
+        id: "bg-1",
+        kind: "child_startup_failure",
+        reason: "child_startup_failure",
+        observedAtMs: 1,
+      })
+      r.rt.recordDelegationFailure("root", {
+        id: "bg-2",
+        kind: "evidence_pipeline_failure",
+        reason: "evidence_pipeline_broken",
+        observedAtMs: 2,
+      })
+      expect(r.rt.rootPhase("root")).toBe("recovery_mode")
+      // recovery-scope path inspection allowed
+      expect(r.rt.preGruntCheck("root", "read", {
+        target: "packages/omo-opencode/src/features/delegation-first/runtime.ts",
+      }).block).toBe(false)
+      // unrelated product work blocked
+      expect(r.rt.preGruntCheck("root", "read", { target: "apps/storefront/cart.ts" }).block).toBe(true)
+      expect(r.rt.preGruntCheck("root", "bash", { command: "find . -name '*.ts'" }).block).toBe(true)
     } finally {
       cleanup(r)
     }
