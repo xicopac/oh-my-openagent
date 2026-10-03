@@ -19,7 +19,16 @@ export const ModelTierSchema = z.enum(MODEL_TIERS)
 export const ModelTierEntryConfigSchema = z.object({
   /** Explicit model-id pin override in "provider/model" form. When set it wins for this tier; when absent the tier resolves dynamically via its economic band. */
   model: z.string().optional(),
-  /** For "master": when false, an explicit `model` pin wins over the parent/main model. Default (omitted/true) is main_equiv -> MAIN's concrete model. */
+  /**
+   * For "master": when false, an explicit `model` pin wins over the parent/main
+   * model. Default (omitted/true) is main_equiv -> MAIN's concrete model.
+   *
+   * The same pin is the AUTHORITATIVE DEFAULT for the root/master session: on
+   * every config load the plugin applies `tiers.master.model` (when
+   * `inherit_parent: false`) to OpenCode's top-level `model`, so the master
+   * default survives restart, new shell, new tmux session, compaction, watchdog
+   * recovery, and regeneration of the OpenCode config file.
+   */
   inherit_parent: z.boolean().optional(),
 })
 

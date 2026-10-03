@@ -7,8 +7,13 @@ import { flattenToFallbackModelStrings, normalizeFallbackModels } from "../../sh
 import { getAgentRoleRequirement } from "../../shared/model-requirements"
 import type { ModelTier } from "@oh-my-opencode/delegate-core"
 import { log } from "../../shared/logger"
-import { getAvailableModelsForDelegateTask, getEnabledModelState } from "./available-models"
-import { PAID_ESCALATION_REQUIRED } from "./paid-consent"
+import {
+  getAvailableModelsForDelegateTask,
+  getEnabledModelState,
+  getModelsWithPricingAndMetadataForDelegateTask,
+} from "./available-models"
+import { classifyPaidStatus, PAID_ESCALATION_REQUIRED } from "./paid-consent"
+import type { PricingCatalog } from "../../hooks/resource-governor/pricing"
 import { filterEnabledModelKeys, isModelEnabled } from "../../shared/model-enable-state"
 import { applyCategoryParams } from "./delegated-model-config"
 import { applyFallbackEntrySettings } from "./fallback-entry-settings"
@@ -59,6 +64,11 @@ export async function resolveSubagentModel(
     : undefined
 
   let dynamicDefaultModel: string | undefined
+  // True when the dynamic free-only resolver found no eligible free candidate.
+  // The static matched-agent model may still be used, but only when it resolves
+  // to a provably free model; otherwise the launch fails explicitly.
+  let dynamicFreePoolExhausted = false
+  let dynamicLivePoolEmpty = false
   // Role-requirement agents are free-first: whenever the user has not pinned an
   // explicit model or fallback list, the dynamic band resolver runs FIRST, even
   // when the agent's static configured model is usable. The static matched-agent
@@ -93,11 +103,21 @@ export async function resolveSubagentModel(
         escalated: dynamic.escalated,
         usedMainModel: dynamic.usedMainModel,
       })
-    } else if (dynamic.kind === "no-eligible-candidate" && !dynamic.livePoolEmpty) {
-      throw new Error(
-        `${PAID_ESCALATION_REQUIRED}: no eligible free model satisfies role requirements for agent "${agentToUse}" (tier "${roleRequirement.defaultTier}"). ` +
-        `Free worker pool exhausted; report free_pool_exhausted to the master. The master may request a paid worker, which requires explicit operator approval.`,
-      )
+    } else if (dynamic.kind === "no-eligible-candidate") {
+      // ORDINARY CHILD POLICY (free-only): the dynamic free pool is exhausted.
+      dynamicFreePoolExhausted = true
+      dynamicLivePoolEmpty = dynamic.livePoolEmpty
+      if (!dynamic.livePoolEmpty) {
+        // A warm catalog with no free candidate is a hard, actionable failure.
+        // Never fall through to the static (typically paid) agent default, and
+        // never let the master take the work over.
+        throw new Error(
+          `${PAID_ESCALATION_REQUIRED}: no eligible free model satisfies role requirements for agent "${agentToUse}" ` +
+          `(tier "${roleRequirement.defaultTier}"). Free worker pool exhausted; report free_pool_exhausted to the master. ` +
+          `The master must retry through valid FREE routes and must not take over the implementation or auto-launch a ` +
+          `paid child.`,
+        )
+      }
     }
   }
 
@@ -165,6 +185,35 @@ export async function resolveSubagentModel(
       log("[delegate-task] Skipping unavailable agent default model", {
         agent: agentToUse,
         model: fullModel,
+      })
+    }
+  }
+
+  // ORDINARY CHILD POLICY (free-only), cold-cache path: the dynamic pool was
+  // empty, so the static matched-agent model is the only fallback. It must not
+  // be a KNOWN-PAID model. An unknown-priced model is allowed through with a
+  // visible log (the provider cache is warmed during startup and the next
+  // attempt resolves through the free-only dynamic pool); a known-paid model is
+  // never allowed.
+  if (dynamicFreePoolExhausted && dynamicLivePoolEmpty && categoryModel) {
+    const resolvedKey = `${categoryModel.providerID}/${categoryModel.modelID}`
+    const live = await getModelsWithPricingAndMetadataForDelegateTask(executorCtx.client)
+    const effectivePricing: PricingCatalog = executorCtx.pricingCatalog
+      ? { ...executorCtx.pricingCatalog, ...live.pricing }
+      : live.pricing
+    const status = classifyPaidStatus(resolvedKey, effectivePricing)
+    if (status === "paid") {
+      throw new Error(
+        `${PAID_ESCALATION_REQUIRED}: the only static fallback "${resolvedKey}" is paid. Free worker pool unavailable; ` +
+        `report free_pool_exhausted to the master. The master must retry through valid FREE routes and must not take over ` +
+        `the implementation or auto-launch a paid child. A paid worker requires a separate explicit MASTER request plus ` +
+        `fresh operator consent.`,
+      )
+    }
+    if (status === "unknown") {
+      log("[delegate-task] free-pool cold cache: using static agent default until the catalog warms", {
+        agent: agentToUse,
+        model: resolvedKey,
       })
     }
   }

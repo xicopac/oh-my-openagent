@@ -10,10 +10,17 @@ import { parseModelString } from "../../shared/model-string-parser"
 import { CATEGORY_MODEL_REQUIREMENTS, getCategoryRoleRequirement } from "../../shared/model-requirements"
 import { normalizeFallbackModels, flattenToFallbackModelStrings } from "../../shared/model-resolver"
 import { buildFallbackChainFromModels, findMostSpecificFallbackEntry } from "../../shared/fallback-chain-from-models"
-import { getAvailableModelsForDelegateTask, getEnabledModelState } from "./available-models"
+import {
+  getAvailableModelsForDelegateTask,
+  getEnabledModelState,
+  getModelsWithPricingAndMetadataForDelegateTask,
+} from "./available-models"
 import { filterEnabledModelKeys, isModelEnabled } from "../../shared/model-enable-state"
 import { resolveModelForDelegateTask } from "./model-selection"
 import { resolveDynamicWorkerModel, buildModelRoutingPins } from "./dynamic-model-resolver"
+import { classifyPaidStatus } from "./paid-consent"
+import type { PricingCatalog } from "../../hooks/resource-governor/pricing"
+import { log } from "../../shared/logger"
 import type { ModelTier } from "@oh-my-opencode/delegate-core"
 import type { DelegatedModelConfig } from "./types"
 import { applyCategoryParams } from "./delegated-model-config"
@@ -137,6 +144,11 @@ Available categories: ${allCategoryNames}`)
   const explicitCategoryModel = hasCanonicalModels
     ? configuredPrimaryModel
     : userCategories?.[args.category!]?.model
+  // True when the dynamic free-only resolver found no eligible free candidate.
+  // In that case the static fallback may still run, but only a provably free
+  // result is allowed; a paid/unknown result becomes an explicit failure.
+  let dynamicFreePoolExhausted = false
+  let dynamicLivePoolEmpty = false
 
   if (!requirement) {
     // Precedence: explicit category model > sisyphus-junior default > category resolved model
@@ -185,11 +197,22 @@ Available categories: ${allCategoryNames}`)
         if (!dynamic.usedMainModel) {
           dynamicCategoryModel = dynamic.model
         }
-      } else if (dynamic.kind === "no-eligible-candidate" && !dynamic.livePoolEmpty) {
-        return categoryResolutionError(
-          `No enabled model satisfies role requirements for category "${args.category!}" (tier "${roleRequirement.defaultTier}"). ` +
-          `Connect an eligible provider or add an explicit model pin, then retry.`,
-        )
+      } else if (dynamic.kind === "no-eligible-candidate") {
+        // ORDINARY CATEGORY CHILD POLICY (free-only): the dynamic free pool is
+        // exhausted.
+        dynamicFreePoolExhausted = true
+        dynamicLivePoolEmpty = dynamic.livePoolEmpty
+        if (!dynamic.livePoolEmpty) {
+          // A warm catalog with no free candidate is a hard, actionable
+          // failure. Never fall through to the static (typically paid) category
+          // default, and never let the master take the work over.
+          return categoryResolutionError(
+            `FREE_WORKER_POOL_EXHAUSTED: no enabled free model satisfies role requirements for category "${args.category!}" ` +
+            `(tier "${roleRequirement.defaultTier}"). Ordinary children are free-only; connect a free provider or add an ` +
+            `explicit free model pin, then retry. The master must not take over the implementation and must not fall back to ` +
+            `a paid child.`,
+          )
+        }
       }
     }
 
@@ -270,6 +293,46 @@ Available categories: ${allCategoryNames}`)
     const parsedModel = parseModelString(actualModel)
     categoryModel = parsedModel ?? undefined
   }
+
+  // ORDINARY CATEGORY CHILD POLICY (free-only): when the dynamic free pool was
+  // exhausted, the static fallback is only acceptable if it resolves to a
+  // provably $0 model. This preserves free static defaults (e.g. a free
+  // category model) while refusing the paid DeepSeek static default that used
+  // to slip through as an automatic paid child.
+  if (dynamicFreePoolExhausted) {
+    const resolvedKey = categoryModel
+      ? `${categoryModel.providerID}/${categoryModel.modelID}`
+      : undefined
+    const live = await getModelsWithPricingAndMetadataForDelegateTask(client)
+    const effectivePricing: PricingCatalog = executorCtx.pricingCatalog
+      ? { ...executorCtx.pricingCatalog, ...live.pricing }
+      : live.pricing
+    const status = resolvedKey ? classifyPaidStatus(resolvedKey, effectivePricing) : "unknown"
+    // Cold-cache grace: when the live catalog is completely empty there is no
+    // pricing evidence at all, so an unknown-priced static default is allowed
+    // (the provider cache is warmed during startup and the next attempt
+    // resolves through the free-only dynamic pool). A known-paid default is
+    // NEVER allowed, and an unknown default is not allowed once the catalog is
+    // warm (fail closed).
+    const coldCacheGrace = dynamicLivePoolEmpty && status === "unknown" && resolvedKey !== undefined
+    if (status !== "free" && !coldCacheGrace) {
+      const reason = resolvedKey
+        ? `the only static fallback "${resolvedKey}" is not provably free (${status})`
+        : "no free candidate could be resolved from the live catalog"
+      return categoryResolutionError(
+        `FREE_WORKER_POOL_EXHAUSTED: ${reason}. ` +
+        `Ordinary children are free-only; connect a free provider or add an explicit free model pin, then retry. ` +
+        `The master must not take over the implementation and must not fall back to a paid child.`,
+      )
+    }
+    if (coldCacheGrace) {
+      log("[delegate-task] free-pool cold cache: using static category default until the catalog warms", {
+        category: args.category,
+        model: resolvedKey,
+      })
+    }
+  }
+
   const categoryPromptAppend = resolveCategoryPromptAppendForModel(
     args.category!,
     actualModel,

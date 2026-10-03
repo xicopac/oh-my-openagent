@@ -1,4 +1,5 @@
 export { createConfigHandler, type ConfigHandlerDeps } from "./config-handler";
+export * from "./master-model-authority";
 export * from "./provider-config-handler";
 export * from "./agent-config-handler";
 export * from "./tool-config-handler";

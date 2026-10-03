@@ -285,14 +285,25 @@ describe("resolveModelBand", () => {
   })
 
   describe("#given an explicit pin override", () => {
-    test("#then the pinned model wins for its tier", () => {
+    test("#then a provably free pinned model wins for its tier", () => {
       const result = resolveModelBand({
         requestedTier: "fast",
         ...base(),
+        candidates: [...pool(), { model: "opencode/pinned-fast", pricing: price(0, 0), tool_call: true }],
         pinned: { fast: "opencode/pinned-fast" },
       })
       expect(result?.model).toBe("opencode/pinned-fast")
       expect(result?.escalated).toBe(false)
+    })
+
+    test("#then a pin that cannot be proven free is ignored for a free-only child", () => {
+      const result = resolveModelBand({
+        requestedTier: "fast",
+        ...base(),
+        pinned: { fast: "opencode/pinned-paid" },
+      })
+      expect(result?.model).not.toBe("opencode/pinned-paid")
+      expect(result?.band).toBe("free")
     })
   })
 })

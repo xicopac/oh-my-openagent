@@ -229,6 +229,25 @@ function pickStrong(strong: PaidEntry[]): ModelBandCandidate | undefined {
 }
 
 /**
+ * A tier pin may only win when it is selectable under the caller's paid policy.
+ * With paid workers forbidden, an explicit pin is honored only when the pinned
+ * candidate is provably $0. A paid pin is NEVER silently promoted into the free
+ * band — this is what previously let a paid `fast`/`balanced`/`strong` pin
+ * bypass the free-only child policy and reach the paid-worker gate.
+ */
+function isPinSelectable(
+  pin: string,
+  candidates: readonly ModelBandCandidate[],
+  allowPaidWorkers: boolean,
+  unavailable: ReadonlySet<string> | undefined,
+): boolean {
+  if (!isAvailable(pin, unavailable)) return false
+  if (allowPaidWorkers) return true
+  const pinCandidate = candidates.find((candidate) => candidate.model === pin)
+  return pinCandidate !== undefined && isFreePricing(pinCandidate.pricing)
+}
+
+/**
  * Resolve a concrete model for a requested capability tier from the full enabled
  * catalog, using dynamic economic/capability bands. Returns undefined when no
  * candidate satisfies the request and MAIN is unavailable, signalling the caller
@@ -255,15 +274,11 @@ export function resolveModelBand(input: ResolveModelBandInput): ResolveModelBand
     usedMainModel,
   })
 
-  // Explicit pin override for the requested tier (honored unless unavailable).
+  // Explicit pin override for the requested tier (honored unless unavailable
+  // or, for free-only children, unless the pin is not provably free).
   const requestedPin = input.pinned?.[input.requestedTier]
-  if (requestedPin && isAvailable(requestedPin, input.unavailable)) {
-    let pinCandidate
-    for (const c of input.candidates) if (c.model === requestedPin) pinCandidate = c
-    const pinIsFree = pinCandidate !== undefined && isFreePricing(pinCandidate.pricing)
-    if (allowPaidWorkers || pinIsFree) {
-      return result(requestedPin, requestedBand, false)
-    }
+  if (requestedPin && isPinSelectable(requestedPin, input.candidates, allowPaidWorkers, input.unavailable)) {
+    return result(requestedPin, requestedBand, false)
   }
 
   // Capability-first filter; also drops unavailable models.
@@ -285,9 +300,10 @@ export function resolveModelBand(input: ResolveModelBandInput): ResolveModelBand
       continue
     }
 
-    // Higher-tier explicit pin during escalation.
+    // Higher-tier explicit pin during escalation. The same paid policy applies
+    // here: a free-only child must never be handed a paid pin under a free band.
     const bandPin = input.pinned?.[BAND_TO_TIER[band]]
-    if (bandPin && isAvailable(bandPin, input.unavailable)) {
+    if (bandPin && isPinSelectable(bandPin, input.candidates, allowPaidWorkers, input.unavailable)) {
       return result(bandPin, band, false)
     }
 

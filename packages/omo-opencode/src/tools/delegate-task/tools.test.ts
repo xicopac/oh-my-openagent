@@ -1263,10 +1263,10 @@ describe("sisyphus-task", () => {
 
       // then - ORDINARY CHILD POLICY (free-only): the mocked pool has no free
       // candidate, so the free-only resolver refuses to auto-escalate to a paid
-      // model and returns PAID_ESCALATION_REQUIRED semantics (no launch input).
+      // model and returns an explicit free-pool failure (no launch input).
       expect(launchInput.model).toBeUndefined()
       expect(result).toBeTypeOf("string")
-      expect(result as string).toMatch(/No enabled model satisfies role requirements/i)
+      expect(result as string).toMatch(/FREE_WORKER_POOL_EXHAUSTED/i)
     }, { timeout: 20000 })
 
      test("DEFAULT_CATEGORIES explicit high model passes to sync prompt request WITHOUT userCategories", async () => {
@@ -1327,10 +1327,10 @@ describe("sisyphus-task", () => {
 
       // then - ORDINARY CHILD POLICY (free-only): the mocked pool has no free
       // candidate, so the free-only resolver refuses to auto-escalate to a paid
-      // model and returns PAID_ESCALATION_REQUIRED semantics (no prompt model).
+      // model and returns an explicit free-pool failure (no prompt model).
       expect(promptBody.model).toBeUndefined()
       expect(result).toBeTypeOf("string")
-      expect(result as string).toMatch(/No enabled model satisfies role requirements/i)
+      expect(result as string).toMatch(/FREE_WORKER_POOL_EXHAUSTED/i)
     }, { timeout: 20000 })
   })
 
@@ -3152,6 +3152,10 @@ describe("sisyphus-task", () => {
         // sisyphusJuniorModel: undefined
         connectedProvidersOverride: null,
         availableModelsOverride: new Set(),
+        // ORDINARY CHILD POLICY (free-only): the static category default is
+        // only usable when it is provably free, so the fixture prices the
+        // catalog default at $0.
+        pricingCatalog: { "kimi-for-coding/kimi-for-coding-highspeed": { input: 0, output: 0, cache_read: 0, cache_write: 0 } },
       })
 
       const toolContext = {

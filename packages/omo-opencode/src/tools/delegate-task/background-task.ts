@@ -237,6 +237,8 @@ export async function executeBackgroundTask(
         unavailable,
         modelInfo,
         mainModel: mainModelID,
+        // ORDINARY CHILD POLICY: background child escalation is FREE-ONLY too.
+        allowPaid: false,
       })
       executorCtx.delegationFirstRuntime.retainAssignment(
         {

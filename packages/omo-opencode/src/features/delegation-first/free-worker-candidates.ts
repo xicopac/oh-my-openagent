@@ -53,6 +53,14 @@ export type BuildWorkerCandidatesInput = {
   modelInfo?: ReadonlyMap<string, ModelCapabilityInfo>
   /** Required modalities/context; candidates lacking a known capability are dropped. */
   required?: WorkerCapabilityRequirement
+  /**
+   * When false, paid and unknown-price candidates are excluded from the
+   * automatic ladder and the MAIN model is never appended as an expert rung.
+   * Ordinary children are free-only and MUST pass false; the default true keeps
+   * the generic utility behavior for callers that explicitly manage paid
+   * escalation.
+   */
+  allowPaid?: boolean
 }
 
 /**
@@ -110,6 +118,7 @@ export function buildDelegationWorkerCandidates(input: BuildWorkerCandidatesInpu
     capabilities,
     modelInfo,
     required,
+    allowPaid = true,
   } = input
 
   const unavailableSet = unavailable ?? new Set<string>()
@@ -126,6 +135,7 @@ export function buildDelegationWorkerCandidates(input: BuildWorkerCandidatesInpu
     const info = modelInfo?.get(id)
     return { id, tier, free, cost_usd_per_1m_input, capability, info }
   }).filter((item) => {
+    if (!allowPaid && !item.free) return false
     if (minCapability !== undefined && item.capability < minCapability) return false
     return meetsRequirement(item.info, required)
   })
@@ -163,7 +173,7 @@ export function buildDelegationWorkerCandidates(input: BuildWorkerCandidatesInpu
     })
   }
 
-  if (mainModel && !unavailableSet.has(mainModel) && !seen.has(mainModel)) {
+  if (allowPaid && mainModel && !unavailableSet.has(mainModel) && !seen.has(mainModel)) {
     const info = modelInfo?.get(mainModel)
     candidates.push({
       model_id: mainModel,

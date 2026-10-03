@@ -18,6 +18,7 @@ import {
 } from "../features/claude-code-session-state";
 import { setDefaultAgentForSort } from "../shared/agent-sort-shim";
 import { getConfiguredDefaultAgent } from "./agent-config-assembly";
+import { applyConfiguredMasterModel } from "./master-model-authority";
 
 export { resolveCategoryConfig } from "./category-config-resolver";
 
@@ -94,6 +95,11 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
 
   return async (config: Record<string, unknown>) => {
     const formatterConfig = config.formatter;
+
+    // AUTHORITATIVE MASTER MODEL: applied before anything reads config.model
+    // (provider config, agent registration, agent-config cache key) so the
+    // root session, the Sisyphus agent, and every derived default agree.
+    applyConfiguredMasterModel(config, pluginConfig);
 
     setAdditionalAllowedMcpEnvVars(pluginConfig.mcp_env_allowlist ?? [])
     applyOpenGatewayProviderConfig(config);

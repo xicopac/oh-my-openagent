@@ -76,4 +76,52 @@ describe("buildDelegationWorkerCandidates", () => {
     })
     expect(candidates.length).toBe(0)
   })
+
+  describe("#given the ordinary-child free-only policy", () => {
+    const pricing = catalog({
+      "provider/free-a": { input: 0, output: 0 },
+      "provider/free-b": { input: 0, output: 0 },
+      "provider/cheap": { input: 0.8, output: 2 },
+    })
+
+    test("#when allowPaid is false #then paid and unknown-price candidates are excluded and MAIN is never appended", () => {
+      const candidates = buildDelegationWorkerCandidates({
+        pricing,
+        available: new Set(["provider/free-a", "provider/free-b", "provider/cheap", "provider/unknown"]),
+        resolvedModelID: "provider/cheap",
+        mainModel: "provider/main-paid",
+        allowPaid: false,
+      })
+
+      expect(candidates.length).toBe(2)
+      expect(candidates.every((candidate) => candidate.free)).toBe(true)
+      expect(candidates.map((candidate) => candidate.model_id)).toEqual(["provider/free-a", "provider/free-b"])
+      expect(candidates.some((candidate) => candidate.model_id === "provider/cheap")).toBe(false)
+      expect(candidates.some((candidate) => candidate.model_id === "provider/unknown")).toBe(false)
+      expect(candidates.some((candidate) => candidate.model_id === "provider/main-paid")).toBe(false)
+    })
+
+    test("#when allowPaid is false and the free pool is empty #then the ladder is empty (explicit failure upstream)", () => {
+      const candidates = buildDelegationWorkerCandidates({
+        pricing,
+        available: new Set(["provider/cheap"]),
+        resolvedModelID: "provider/cheap",
+        mainModel: "provider/main-paid",
+        allowPaid: false,
+      })
+      expect(candidates.length).toBe(0)
+    })
+
+    test("#when allowPaid is true #then the existing paid escalation behavior is preserved", () => {
+      const candidates = buildDelegationWorkerCandidates({
+        pricing,
+        available: new Set(["provider/free-a", "provider/cheap"]),
+        resolvedModelID: "provider/cheap",
+        mainModel: "provider/main-paid",
+        allowPaid: true,
+      })
+      expect(candidates.some((candidate) => candidate.model_id === "provider/cheap")).toBe(true)
+      expect(candidates.some((candidate) => candidate.model_id === "provider/main-paid")).toBe(true)
+    })
+  })
 })

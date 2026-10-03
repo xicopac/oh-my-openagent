@@ -49,8 +49,8 @@ describe("resolveCategoryExecution", () => {
 		isRootSession: true,
 	})
 
-	test("returns unpinned resolution when category cache is not ready on first run", async () => {
-		//#given
+	test("fails explicitly with FREE_WORKER_POOL_EXHAUSTED when the category cache is not ready on first run", async () => {
+		//#given - no model catalog is readable yet, so no candidate can be proven free
 		const args = {
 			category: "deep",
 			prompt: PROMPT_INPUT_SENTINEL,
@@ -70,11 +70,9 @@ describe("resolveCategoryExecution", () => {
 		//#when
 		const result = await resolveCategoryExecution(args, executorCtx, inheritedModel, systemDefaultModel)
 
-		//#then
-		expect(result.error).toBeUndefined()
-		expect(result.actualModel).toBeUndefined()
+		//#then - ordinary children never fall back to an unpinned (master/system) model
 		expect(result.categoryModel).toBeUndefined()
-		expect(result.agentToUse).toBeDefined()
+		expect(result.error).toContain("FREE_WORKER_POOL_EXHAUSTED")
 	})
 
 	test("returns 'unknown category' error for truly unknown categories", async () => {
@@ -727,5 +725,88 @@ describe("resolveCategoryExecution", () => {
 		//#then tools from the category config should appear in the result
 		// THIS TEST MUST FAIL (RED) - proves bug #5182 that applyCategoryParams drops config.tools
 		expect((result as unknown as { tools?: Record<string, boolean> }).tools).toEqual({ grep: false, read: true })
+	})
+
+	test("no free worker: a paid-only pool fails with FREE_WORKER_POOL_EXHAUSTED instead of the paid static default", async () => {
+		//#given a paid-only live pool and the production paid tier pins
+		const args = {
+			category: "quick",
+			prompt: PROMPT_INPUT_SENTINEL,
+			description: DESCRIPTION_INPUT_SENTINEL,
+			run_in_background: false,
+			load_skills: [],
+			blockedBy: undefined,
+			enableSkillTools: false,
+		}
+		const executorCtx = createMockExecutorContext()
+		executorCtx.availableModelsOverride = new Set(["opencode/deepseek-v4-flash"])
+		executorCtx.pricingCatalog = {
+			"opencode/deepseek-v4-flash": { input: 0.14, output: 0.28, cache_read: 0.028, cache_write: 0 },
+		}
+		executorCtx.modelRouting = {
+			enabled: true,
+			tiers: {
+				fast: { model: "opencode/deepseek-v4-flash" },
+				balanced: { model: "opencode/deepseek-v4-flash" },
+				strong: { model: "opencode/deepseek-v4-flash" },
+				master: { model: "opencode/deepseek-v4-flash", inherit_parent: false },
+			},
+		}
+
+		//#when
+		const result = await resolveCategoryExecution(args, executorCtx, undefined, "opencode/deepseek-v4-flash")
+
+		//#then the child launch fails explicitly; the paid pins are never used
+		expect(result.categoryModel).toBeUndefined()
+		expect(result.error).toContain("FREE_WORKER_POOL_EXHAUSTED")
+	})
+
+	test("paid tier pins never make multiple ordinary categories resolve paid when a free model exists", async () => {
+		//#given free and paid candidates plus the production paid tier pins
+		const executorCtx = createMockExecutorContext()
+		executorCtx.availableModelsOverride = new Set(["opencode/space-bunny-free", "opencode/deepseek-v4-flash"])
+		executorCtx.pricingCatalog = {
+			"opencode/space-bunny-free": { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+			"opencode/deepseek-v4-flash": { input: 0.14, output: 0.28, cache_read: 0.028, cache_write: 0 },
+		}
+		executorCtx.modelRouting = {
+			enabled: true,
+			tiers: {
+				fast: { model: "opencode/deepseek-v4-flash" },
+				balanced: { model: "opencode/deepseek-v4-flash" },
+				strong: { model: "opencode/deepseek-v4-flash" },
+				master: { model: "opencode/deepseek-v4-flash", inherit_parent: false },
+			},
+		}
+		const categories = [
+			"visual-engineering",
+			"ultrabrain",
+			"artistry",
+			"quick",
+			"unspecified-low",
+			"unspecified-high",
+			"writing",
+		]
+
+		//#when / #then every category lands on the free model, never the paid pins
+		for (const category of categories) {
+			const result = await resolveCategoryExecution(
+				{
+					category,
+					prompt: PROMPT_INPUT_SENTINEL,
+					description: DESCRIPTION_INPUT_SENTINEL,
+					run_in_background: false,
+					load_skills: [],
+					blockedBy: undefined,
+					enableSkillTools: false,
+				},
+				executorCtx,
+				undefined,
+				"opencode/deepseek-v4-flash",
+			)
+			expect(result.error).toBeUndefined()
+			expect(result.categoryModel?.providerID).toBe("opencode")
+			expect(result.categoryModel?.modelID).toBe("space-bunny-free")
+		}
 	})
 })

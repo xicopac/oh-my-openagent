@@ -201,4 +201,55 @@ describe("resolveSubagentExecution - disabled-provider baked model", () => {
       expect.anything(),
     )
   })
+
+  test("no free worker: a paid-only pool fails explicitly instead of using the static paid default", async () => {
+    //#given the live pool holds only the paid DeepSeek V4 Flash and no free model
+    const args = createBaseArgs()
+    const executorCtx = createExecutorContext(
+      async () => [{ name: "explore", mode: "subagent", model: "opencode/deepseek-v4-flash" }],
+      {
+        availableModelsOverride: new Set(["opencode/deepseek-v4-flash"]),
+        pricingCatalog: { "opencode/deepseek-v4-flash": CHEAP },
+      },
+    )
+
+    //#when
+    const result = await resolveSubagentExecution(args, executorCtx, "sisyphus", "deep")
+
+    //#then the launch fails actionably; the paid static default is never used
+    expect(result.categoryModel).toBeUndefined()
+    expect(result.error).toContain("PAID_ESCALATION_REQUIRED")
+    expect(result.error).toContain("free_pool_exhausted")
+  })
+
+  test("ordinary children stay FREE even when paid tier pins are configured", async () => {
+    //#given free and paid candidates plus the production paid pin shape
+    const args = createBaseArgs()
+    const executorCtx = createExecutorContext(
+      async () => [{ name: "explore", mode: "subagent", model: "opencode/deepseek-v4-flash" }],
+      {
+        availableModelsOverride: new Set(["opencode/gpt-5.6-luna", "opencode/deepseek-v4-flash"]),
+        pricingCatalog: {
+          "opencode/gpt-5.6-luna": FREE,
+          "opencode/deepseek-v4-flash": CHEAP,
+        },
+        modelRouting: {
+          enabled: true,
+          tiers: {
+            fast: { model: "opencode/deepseek-v4-flash" },
+            balanced: { model: "opencode/deepseek-v4-flash" },
+            strong: { model: "opencode/deepseek-v4-flash" },
+            master: { model: "opencode/deepseek-v4-flash", inherit_parent: false },
+          },
+        },
+      },
+    )
+
+    //#when
+    const result = await resolveSubagentExecution(args, executorCtx, "sisyphus", "deep")
+
+    //#then the paid pins are ignored and the free model wins
+    expect(result.error).toBeUndefined()
+    expect(result.categoryModel).toEqual({ providerID: "opencode", modelID: "gpt-5.6-luna" })
+  })
 })

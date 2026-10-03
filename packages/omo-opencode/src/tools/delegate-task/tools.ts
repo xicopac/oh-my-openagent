@@ -709,6 +709,10 @@ async function runDelegationFirstSync(params: DelegationFirstSyncParams): Promis
         mainModel: parentContext.model?.modelID
           ? resolvedModelKey(parentContext.model.providerID, parentContext.model.modelID)
           : undefined,
+        // ORDINARY CHILD POLICY: automatic ladder escalation is FREE-ONLY. A
+        // paid child is never launched automatically; paid requires an explicit
+        // MASTER request plus operator consent before this point.
+        allowPaid: false,
       })
     : []
 
