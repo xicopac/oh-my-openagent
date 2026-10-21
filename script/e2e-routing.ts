@@ -26,9 +26,10 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 
 import {
@@ -135,6 +136,14 @@ async function runWorkerFirstProcess(evidenceRoot: string): Promise<{ checks: Ch
   const configOpenCode = join(config, "opencode")
   const omoDir = join(workspace, ".omo")
   for (const d of [home, data, configOpenCode, cache, state, gov, workspace, omoDir]) mkdirSync(d, { recursive: true })
+  // Preserve the HOME-based opencode shim so the guard wrapper (~/.local/bin/opencode)
+  // can resolve the real binary via $HOME/.opencode/bin/opencode inside the sandboxed HOME.
+  const realHome = process.env.HOME || homedir()
+  const realOpencodeBin = join(realHome, ".opencode", "bin")
+  if (existsSync(realOpencodeBin)) {
+    mkdirSync(join(home, ".opencode"), { recursive: true })
+    try { symlinkSync(realOpencodeBin, join(home, ".opencode", "bin")) } catch { /* already exists */ }
+  }
   detail.envRoot = envRoot
 
   // 3. write isolated configs
