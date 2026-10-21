@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process"
 import { readFile } from "../fs/resilient"
-import { readDarwinProcessStartSeconds } from "./process-start-time"
+import { readDarwinProcessStartSeconds, readWin32ProcessCreationFiletime } from "./process-start-time"
 
 function errorCode(error: unknown): string | undefined {
   if (!(error instanceof Error) || !("code" in error)) return undefined
@@ -9,7 +9,10 @@ function errorCode(error: unknown): string | undefined {
 
 async function execFileText(command: string, args: string[]): Promise<string | null> {
   return await new Promise((resolve) => {
-    execFile(command, args, { encoding: "utf8", timeout: 2_000 }, (error, stdout) => {
+    // powershell.exe is a console-subsystem binary, and under a Node runtime (no bun:ffi, so the
+    // kernel32 fast path below can never answer) this fallback runs on EVERY pid probe. Without
+    // windowsHide each probe flashes a console Windows foregrounds, stealing focus (#8501).
+    execFile(command, args, { encoding: "utf8", timeout: 2_000, windowsHide: true }, (error, stdout) => {
       if (error !== null) {
         resolve(null)
         return
@@ -34,7 +37,11 @@ async function readLinuxStartIdentity(pid: number): Promise<string | null> {
 }
 
 async function readWin32StartIdentity(pid: number): Promise<string | null> {
-  // PowerShell can resolve CreationDate for any visible process.
+  if (getPidLiveness(pid) === "dead") return null
+  const creationFiletime = await readWin32ProcessCreationFiletime(pid)
+  if (creationFiletime !== null) return `win32-creation-filetime:${creationFiletime}`
+  // Only when kernel32 is unreachable through bun:ffi: PowerShell can resolve CreationDate for any
+  // visible process, at the cost of one process spawn under a 2 s budget per probe.
   const value = await execFileText("powershell.exe", [
     "-NoProfile",
     "-Command",
@@ -93,6 +100,15 @@ export function startIdentitiesConflict(recorded: string, actual: string): boole
   const recordedScheme = identityScheme(recorded)
   if (recordedScheme === null || recordedScheme !== identityScheme(actual)) return false
   return recorded !== actual
+}
+
+/**
+ * Two start identities can be compared byte-for-byte only when the same reader produced them.
+ * Scheme-less legacy values compare as raw strings so records written before schemes existed
+ * keep their original meaning.
+ */
+export function startIdentitiesComparable(recorded: string, actual: string): boolean {
+  return identityScheme(recorded) === identityScheme(actual)
 }
 
 export type ProcessLiveness = "alive" | "dead" | "unknown"

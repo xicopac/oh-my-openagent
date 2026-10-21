@@ -36,13 +36,25 @@
       "subcopy": "Turn your tokens into results that matter.\nResearch across ten thousand sources. A deck people actually get.\nCompany work, experiments, backends, frontends, code.\nWhatever you need done.",
       "getStarted": "Get started",
       "readManifesto": "Read the manifesto",
-      "installLabel": "One command, one tool",
-      "installCommand": "bun install -g omo-ai@beta"
+      "downloadDesktop": "Download the desktop app",
+      "installLabel": "One command, one tool"
     },
     "command": {
       "copy": "Copy",
       "copied": "Copied",
-      "copyAria": "Copy install command"
+      "copyAria": "Copy install command",
+      "copiedStatus": "Install command copied"
+    },
+    "install": {
+      "tabsLabel": "Install command for your system",
+      "windows": "Windows",
+      "tabs": {
+        "unix": "macOS, Linux, WSL",
+        "powershell": "PowerShell",
+        "cmd": "CMD"
+      },
+      "next": "Then open a new terminal and run omo.",
+      "onComputer": "Run this on your Mac, Linux or Windows computer."
     },
     "proof": {
       "label": "Live numbers",
@@ -118,7 +130,25 @@
       "item6Name": "Goals that survive",
       "item6Desc": "Long work is checkpointed with evidence, so a session restart resumes where it stopped.",
       "item7Name": "Hot-reloading everything",
-      "item7Desc": "Config, skills and prompts reload live. No restarts to try a change."
+      "item7Desc": "Config, skills and prompts reload live. No restarts to try a change.",
+      "item8Name": "Computer use",
+      "item8Desc": "The agent reads the screen and accessibility tree of native apps on macOS, Linux and Windows, then clicks and types in the background, so your focus and cursor stay put. A stop chord suspends it; only you resume.",
+      "stage": {
+        "roundTrip": "one round trip",
+        "oneStep": "1 step",
+        "repaired": "repaired before it ran",
+        "splits": "splits the job",
+        "parallel": "working in parallel",
+        "waiting": "waiting · 0 polls",
+        "woke": "woke up",
+        "goalProgress": "goal · 3 of 4 checked",
+        "resumes": "restart → resumes at step 4",
+        "saved": "saved",
+        "reloaded": "reloaded · no restart",
+        "background": "in the background",
+        "focusKept": "clicked · your focus never moved",
+        "stageLabel": "A single cell acting out the selected detail"
+      }
     },
     "platforms": {
       "titlePrefix": "And from your",
@@ -147,8 +177,14 @@
       "title": "One command. Then get back to work.",
       "subtitle": "Install OmO, open your project, describe the job. That's the whole setup.",
       "installNow": "Install now",
-      "readTheDocs": "Read the docs",
-      "installCommand": "bun install -g omo-ai@beta"
+      "readTheDocs": "Read the docs"
+    },
+    "dori": {
+      "eyebrow": "Spoiler",
+      "title": "Someone's been working while you sleep.",
+      "body": "Not OmO. A new hire from the same people. He doesn't clock out, and you pay him in tokens.",
+      "cta": "Meet Dori",
+      "alt": "Dori, a white cartoon dog holding a rock, peeking up from the bottom of the page"
     },
     "dag": {
       "region": "OmO desktop with the workflow graph open",
@@ -175,7 +211,11 @@
   },
   "docs": {
     "mobileHeader": "OmO Docs",
-    "searchPlaceholder": "Search docs..."
+    "searchPlaceholder": "Search docs...",
+    "install": {
+      "title": "Install OmO",
+      "description": "Install OmO with one command on macOS, Linux, WSL and Windows."
+    }
   },
   "manifesto": {
     "badge": "Manifesto",
@@ -186,48 +226,48 @@
     },
     "hero": {
       "title": "Ultrawork Manifesto",
-      "subtitle": "Tools for today and tomorrow,\nbuilt so you can stay on your work."
+      "subtitle": "We build today's tools, and tomorrow's,\nso you can keep your head in your work."
     },
     "chapters": {
       "yourWork": {
         "title": "Your work",
-        "p1": "You turn on the computer. You open the company chat.\nEvery day we sit at a keyboard and a mouse and do the same work everyone else does,\nand it isn't the same.\nEvery day we bring our own wisdom and experience to it.",
-        "p2": "That difference is what makes each person's work worth something.",
-        "p3": "Your work matters.\nNot because you gathered piles of material, set up an environment for an experiment, or wrote the code.\nYour hard-won wisdom and experience went into it. The rest was just your hands moving a little."
+        "p1": "You boot up your laptop. You open Slack.\nEvery day we sit at a keyboard and a mouse and do the same work as everyone else.\nExcept it isn't the same.\nEvery day, we mix in a little of our own wisdom and experience.",
+        "p2": "Nobody else has your wisdom and experience.\nThat's what makes your work worth something.",
+        "p3": "Your work matters.\nNot because you dug up piles of material, set up an experiment, and wrote the code.\nBecause your wisdom and experience went into it.\nThe rest was just your hands moving."
       },
       "ourTool": {
         "title": "The tool we build",
-        "p1": "Today's agents can act on your behalf.",
-        "p2": "They gather many times more material than you could,\ndraw on the whole of human knowledge to think an implementation through,\nand work around the clock.",
-        "p3": "So when you put in quality tokens and compute,\ngreat work should come out.",
-        "p4": "That's what today's tool has to do.",
+        "p1": "Agents today can act on your behalf.",
+        "p2": "They read dozens of times more than you ever could,\nthrow all of human knowledge at the question of how to build it,\nand they work 24 hours a day.",
+        "p3": "So it ought to be simple.\nYou put in quality tokens and compute,\nand great work comes out.",
+        "p4": "That's what today's tool has to be.",
         "p5": "Which harness, which model's quirks, which skills...\nnone of that should be your problem.",
-        "p6": "When your wisdom meets quality tokens, it should compile into good work.",
-        "p7": "That's the tool we build.\nIt turns your quality tokens into great work."
+        "p6": "When your wisdom meets quality tokens, it should compile straight into good work.",
+        "p7": "That's the tool we're building.\nIt takes your quality tokens and turns them into great work."
       },
       "ourThinking": {
-        "title": "What we believe",
-        "p1": "Today's agents can act on your behalf,\nbut they don't have your wisdom or your experience.",
-        "p2": "Give them the same information you have, or far more,\nand what you learned by living as a human\nstill can't come through the few characters an agent uses to understand the world.",
-        "p3Link": "We now live in a world where AI solves a Millennium Problem,",
-        "p3Rest": "\nand even there, the idea behind the proof grew from one line of human insight.",
-        "p4": "We value your wisdom and experience,\nand everyone else's.",
-        "p5": "Our tool carries someone's wisdom and experience, and the road they took to it,\nto you in a living form.",
+        "title": "What we think",
+        "p1": "Agents today can act on your behalf,\nbut they don't have your wisdom or your experience.",
+        "p2": "Give them everything you know, and then some.\nWhat you picked up by living as a human\nstill won't come out of the few characters an agent uses to make sense of the world.",
+        "p3Link": "We already live in a world where AI cracks a Millennium Prize problem,",
+        "p3Rest": "\nand even that proof grew from one seed, a single line of human wisdom.",
+        "p4": "We value your wisdom and experience.\nAnd everyone else's, just as much.",
+        "p5": "Our tool takes someone's wisdom and experience, and how they got there,\nand hands it to you, still alive.",
         "p6": "Our own thinking reaches you as living wisdom.\nUnder the name of an agent. Under the name of a tool.",
-        "p7": "Your thinking can reach someone else the same way,\nuntil everyone gets to think about only the problems that truly matter to them,\nand solve them.\nWe believe that world can be built."
+        "p7": "Your thinking can reach someone else the same way.\nThen everyone gets to spend their time on the problems that actually matter to them,\nand solve those.\nWe think we can build that world."
       },
       "tomorrow": {
         "title": "Tomorrow's tool",
-        "p1": "When everyone shares what they know,\nthinks about the many problems that matter to them, throws them out,\nand computers simply bring back the answers,",
-        "p2": "we'll show up again with tomorrow's tool,\nso you can focus once more."
+        "p1": "When everyone shares what they know,\nwhen people think up the countless problems that matter to them and toss them out,\nand computers just come back with the answers,",
+        "p2": "we'll show up again, with tomorrow's tool,\nso you can focus one more time."
       }
     },
     "closing": {
-      "lead": "So don't overthink it.",
+      "lead": "So don't overthink it,",
       "title": "just ulw ulw",
       "button": "Get OmO"
     },
-    "legacyNote": "Note: on <date>January 19, 2026</date> we defined an agent that makes you read its code as a badly built tool. <link>Read the old version</link>"
+    "legacyNote": "Back on <date>January 19, 2026</date> we said an agent that makes you read its code is a badly built tool. <link>Read the old version</link>"
   },
   "manifestoLegacy": {
     "badge": "Manifesto",
@@ -371,5 +411,110 @@
       "note": "Written when not reading the code was still called crazy, and everyone sat in front of the agent.",
       "back": "Read the current version"
     }
+  },
+  "download": {
+    "metadata": {
+      "title": "Download OmO for desktop",
+      "description": "Download the OmO desktop app for macOS, Windows or Linux. Every installer is listed with its size and SHA-256 checksum."
+    },
+    "eyebrow": "Desktop app",
+    "title": "Download OmO",
+    "lead": "The OmO desktop app for your Mac, Windows PC or Linux machine. We pick the installer that fits your computer and list every installer below, each with its checksum.",
+    "channel": {
+      "label": "Release channel",
+      "stable": "Stable",
+      "beta": "Beta",
+      "betaNote": "Beta builds arrive before stable ones and are rougher."
+    },
+    "detecting": "Finding the right installer for your computer…",
+    "arch": {
+      "mac-arm64": "Apple silicon",
+      "mac-x64": "Intel",
+      "win-x64": "64-bit",
+      "linux-x64": "64-bit",
+      "linux-arm64": "ARM64"
+    },
+    "kinds": {
+      "dmg": "Disk image (.dmg)",
+      "exe": "Installer (.exe)",
+      "deb": "Debian package (.deb)",
+      "appimage": "AppImage"
+    },
+    "primary": {
+      "button": "Download for {os}",
+      "meta": "OmO {version} · {arch} · {size}",
+      "metaNoSize": "OmO {version} · {arch}",
+      "intelPrompt": "Not an Apple silicon Mac?",
+      "intelLink": "Download for Intel Mac",
+      "released": "Released {date}",
+      "notes": "Release notes"
+    },
+    "noInstaller": {
+      "title": "No installer for your system yet",
+      "body": "This release has no installer for your computer. Everything it does include is listed below."
+    },
+    "phone": {
+      "title": "OmO for desktop needs a computer",
+      "body": "Open this page on your Mac, Windows or Linux computer to download it. The installers are listed below."
+    },
+    "coming": {
+      "title": "Coming {date}",
+      "body": "The desktop app is not public yet. Until then, you can install OmO from the command line.",
+      "cli": "Install from the command line"
+    },
+    "unavailable": {
+      "title": "Downloads are unavailable right now",
+      "body": "We couldn't load the download list. Try again in a few minutes, or install OmO from the command line.",
+      "cli": "Install from the command line"
+    },
+    "all": {
+      "title": "All downloads",
+      "sha": "SHA-256",
+      "missing": "Not in this release yet",
+      "linuxPick": "On Linux, pick the .deb for Ubuntu and Debian: it installs with your package manager, and the app tells you when a new version is out. Pick the AppImage for other distributions: it runs without installing (it needs FUSE) and updates itself."
+    },
+    "verify": {
+      "title": "Verify your download",
+      "body": "Every installer has a SHA-256 checksum. After downloading, compute the checksum of the file and compare it with the one listed above. The same checksums are in the SHA256SUMS file for this release.",
+      "checksums": "SHA256SUMS for this release",
+      "macos": "macOS",
+      "windows": "Windows (PowerShell)",
+      "linux": "Linux",
+      "mismatch": "If the two values differ, delete the file and download it again. Don't open it."
+    },
+    "supported": {
+      "title": "Supported systems",
+      "macos": "macOS 14 or later, Apple silicon and Intel",
+      "windows": "Windows 11, 64-bit",
+      "linux": "Ubuntu 24.04, 64-bit (.deb or AppImage)"
+    },
+    "os": {
+      "macos": "macOS",
+      "windows": "Windows",
+      "linux": "Linux"
+    }
+  },
+  "support": {
+    "metadata": {
+      "title": "Get help with OmO",
+      "description": "Report a problem with OmO or ask the community for help."
+    },
+    "eyebrow": "Support",
+    "title": "Get help with OmO",
+    "lead": "Found a problem or have a question? Open an issue on GitHub, or ask in the community Discord.",
+    "leadWithReport": "Your report from the OmO app is below. Send it as a GitHub issue, or bring it to the community Discord.",
+    "report": {
+      "heading": "Your report",
+      "titleLabel": "Title",
+      "bodyLabel": "Details",
+      "copy": "Copy report",
+      "copied": "Copied"
+    },
+    "actions": {
+      "openIssue": "Open a GitHub issue",
+      "openIssueNote": "The issue opens on GitHub with your report filled in. Check it before you submit: GitHub issues are public. If your report has a diagnostics zip, attach it there.",
+      "discord": "Ask on Discord"
+    },
+    "privacy": "This page doesn't save your report, but it was sent to omo.dev in the link the app opened. It reaches GitHub only when you submit the issue yourself."
   }
 }

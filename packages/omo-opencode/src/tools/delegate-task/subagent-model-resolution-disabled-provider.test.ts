@@ -1,35 +1,15 @@
 /// <reference types="bun-types" />
 
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import type { DelegateTaskArgs } from "./types"
 import type { ExecutorContext } from "./executor-types"
-
-type SubagentResolverModule = typeof import("./subagent-resolver")
-
-const logMock = mock((..._args: unknown[]) => {})
-
-const readConnectedProvidersCacheMock = mock((): string[] | null => ["opencode"])
-const readProviderModelsCacheMock = mock(
-  (): {
-    models: Record<string, string[]>
-    connected: string[]
-    updatedAt: string
-  } | null => ({
-    models: { opencode: ["gpt-5.6-luna", "deepseek-v4-flash"] },
-    connected: ["opencode"],
-    updatedAt: "2026-01-01T00:00:00.000Z",
-  }),
-)
-
-const loadUserAgentsMock = mock((): Record<string, unknown> => ({}))
-const loadProjectAgentsMock = mock((): Record<string, unknown> => ({}))
+import { resolveSubagentExecution } from "./subagent-resolver"
+import * as connectedProvidersCache from "../../shared/connected-providers-cache"
+import * as loggerModule from "../../shared/logger"
+import * as claudeAgentLoader from "../../features/claude-code-agent-loader"
 
 const FREE = { input: 0, output: 0, cache_read: 0, cache_write: 0 }
 const CHEAP = { input: 0.1, output: 0.2, cache_read: 0, cache_write: 0 }
-
-async function importFreshSubagentResolverModule(): Promise<SubagentResolverModule> {
-  return await import(`./subagent-resolver?test=${Date.now()}-${Math.random()}`)
-}
 
 function createBaseArgs(): DelegateTaskArgs {
   return {
@@ -59,44 +39,30 @@ function createExecutorContext(
 }
 
 describe("resolveSubagentExecution - disabled-provider baked model", () => {
-  let resolveSubagentExecution: SubagentResolverModule["resolveSubagentExecution"]
+  let logSpy: ReturnType<typeof spyOn>
+  let readConnectedProvidersCacheSpy: ReturnType<typeof spyOn>
+  let readProviderModelsCacheSpy: ReturnType<typeof spyOn>
+  let loadUserAgentsSpy: ReturnType<typeof spyOn>
+  let loadProjectAgentsSpy: ReturnType<typeof spyOn>
 
-  beforeEach(async () => {
-    mock.restore()
-    logMock.mockClear()
-    readConnectedProvidersCacheMock.mockReset()
-    readProviderModelsCacheMock.mockReset()
-    loadUserAgentsMock.mockReset()
-    loadProjectAgentsMock.mockReset()
-    loadUserAgentsMock.mockImplementation(() => ({}))
-    loadProjectAgentsMock.mockImplementation(() => ({}))
-    readConnectedProvidersCacheMock.mockReturnValue(["opencode"])
-    readProviderModelsCacheMock.mockReturnValue({
+  beforeEach(() => {
+    logSpy = spyOn(loggerModule, "log").mockImplementation(() => {})
+    readConnectedProvidersCacheSpy = spyOn(connectedProvidersCache, "readConnectedProvidersCache").mockReturnValue(["opencode"])
+    readProviderModelsCacheSpy = spyOn(connectedProvidersCache, "readProviderModelsCache").mockReturnValue({
       models: { opencode: ["gpt-5.6-luna", "deepseek-v4-flash"] },
       connected: ["opencode"],
       updatedAt: "2026-01-01T00:00:00.000Z",
     })
-    mock.module("../../shared/logger", () => ({ log: logMock }))
-    mock.module("../../shared/connected-providers-cache", () => ({
-      readConnectedProvidersCache: readConnectedProvidersCacheMock,
-      readProviderModelsCache: readProviderModelsCacheMock,
-      hasConnectedProvidersCache: () => readConnectedProvidersCacheMock() !== null,
-      hasProviderModelsCache: () => readProviderModelsCacheMock() !== null,
-      _resetMemCacheForTesting: () => {},
-    }))
-    mock.module("../../features/claude-code-agent-loader/loader", () => ({
-      loadUserAgents: loadUserAgentsMock,
-      loadProjectAgents: loadProjectAgentsMock,
-    }))
-    mock.module("../../features/claude-code-agent-loader", () => ({
-      loadUserAgents: loadUserAgentsMock,
-      loadProjectAgents: loadProjectAgentsMock,
-    }))
-    ;({ resolveSubagentExecution } = await importFreshSubagentResolverModule())
+    loadUserAgentsSpy = spyOn(claudeAgentLoader, "loadUserAgents").mockReturnValue({})
+    loadProjectAgentsSpy = spyOn(claudeAgentLoader, "loadProjectAgents").mockReturnValue({})
   })
 
   afterEach(() => {
-    mock.restore()
+    logSpy.mockRestore()
+    readConnectedProvidersCacheSpy.mockRestore()
+    readProviderModelsCacheSpy.mockRestore()
+    loadUserAgentsSpy.mockRestore()
+    loadProjectAgentsSpy.mockRestore()
   })
 
   test("resolves a disabled-provider baked model through the dynamic resolver", async () => {
@@ -168,7 +134,7 @@ describe("resolveSubagentExecution - disabled-provider baked model", () => {
     expect(result.error).toBeUndefined()
     expect(result.agentToUse).toBe("explore")
     expect(result.categoryModel).toEqual({ providerID: "opencode", modelID: "gpt-5.6-luna" })
-    expect(logMock).toHaveBeenCalledWith(
+    expect(logSpy).toHaveBeenCalledWith(
       "[delegate-task] resolved subagent model dynamically",
       expect.objectContaining({ agent: "explore", band: "free", model: "opencode/gpt-5.6-luna" }),
     )
@@ -196,7 +162,7 @@ describe("resolveSubagentExecution - disabled-provider baked model", () => {
     expect(result.error).toBeUndefined()
     expect(result.agentToUse).toBe("explore")
     expect(result.categoryModel).toEqual({ providerID: "opencode", modelID: "deepseek-v4-flash" })
-    expect(logMock).not.toHaveBeenCalledWith(
+    expect(logSpy).not.toHaveBeenCalledWith(
       "[delegate-task] resolved subagent model dynamically",
       expect.anything(),
     )

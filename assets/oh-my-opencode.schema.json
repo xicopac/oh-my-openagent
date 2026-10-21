@@ -130,10 +130,6 @@
               "maximum": 9007199254740991
             }
           },
-          "required": [
-            "policy",
-            "max_concurrent"
-          ],
           "additionalProperties": false
         },
         "tiers": {
@@ -191,10 +187,6 @@
           "additionalProperties": false
         }
       },
-      "required": [
-        "allow_paid_workers",
-        "max_concurrent_paid_workers"
-      ],
       "additionalProperties": false
     },
     "agents": {
@@ -8999,10 +8991,6 @@
                   "maximum": 10
                 }
               },
-              "required": [
-                "enabled",
-                "turns"
-              ],
               "additionalProperties": false
             },
             "protected_tools": {
@@ -9031,9 +9019,6 @@
                       "type": "boolean"
                     }
                   },
-                  "required": [
-                    "enabled"
-                  ],
                   "additionalProperties": false
                 },
                 "supersede_writes": {
@@ -9048,10 +9033,6 @@
                       "type": "boolean"
                     }
                   },
-                  "required": [
-                    "enabled",
-                    "aggressive"
-                  ],
                   "additionalProperties": false
                 },
                 "purge_errors": {
@@ -9068,21 +9049,12 @@
                       "maximum": 20
                     }
                   },
-                  "required": [
-                    "enabled",
-                    "turns"
-                  ],
                   "additionalProperties": false
                 }
               },
               "additionalProperties": false
             }
           },
-          "required": [
-            "enabled",
-            "notification",
-            "protected_tools"
-          ],
           "additionalProperties": false
         },
         "task_system": {
@@ -9243,17 +9215,6 @@
               "maximum": 9007199254740991
             }
           },
-          "required": [
-            "enabled",
-            "maintenance_tier",
-            "validation_tier",
-            "allow_premium_validation",
-            "max_concurrent_wakes",
-            "tool_budget",
-            "sidecar_max_tokens",
-            "reseed_fraction",
-            "audit_call_timeout_ms"
-          ],
           "additionalProperties": false
         },
         "lease": {
@@ -9318,29 +9279,9 @@
               }
             }
           },
-          "required": [
-            "enabled",
-            "extra_tokens",
-            "max_turns",
-            "max_renewals",
-            "valid_reasons"
-          ],
           "additionalProperties": false
         }
       },
-      "required": [
-        "enabled",
-        "prepare_at_tokens",
-        "audit_at_tokens",
-        "normal_limit_tokens",
-        "target_after_compaction_tokens",
-        "max_compaction_passes",
-        "provider_relative_ratio",
-        "capsule_head_max_chars",
-        "capsule_full_max_bytes",
-        "twin",
-        "lease"
-      ],
       "additionalProperties": false
     },
     "resource_governor": {
@@ -9377,10 +9318,6 @@
               "minimum": 0
             }
           },
-          "required": [
-            "soft_usd",
-            "hard_usd"
-          ],
           "additionalProperties": false
         },
         "tokens": {
@@ -9403,10 +9340,6 @@
               "maximum": 9007199254740991
             }
           },
-          "required": [
-            "soft_total",
-            "hard_total"
-          ],
           "additionalProperties": false
         },
         "delegation": {
@@ -9439,12 +9372,6 @@
               "type": "boolean"
             }
           },
-          "required": [
-            "max_concurrent_children",
-            "default_child_tokens",
-            "duplicate_detection",
-            "free_first"
-          ],
           "additionalProperties": false
         },
         "context": {
@@ -9479,12 +9406,6 @@
               "maximum": 8
             }
           },
-          "required": [
-            "preferred_tokens",
-            "preferred_post_compaction_tokens",
-            "expansion_enabled",
-            "max_compaction_passes"
-          ],
           "additionalProperties": false
         },
         "forecasting": {
@@ -9503,10 +9424,6 @@
               "type": "boolean"
             }
           },
-          "required": [
-            "enabled",
-            "persist_history"
-          ],
           "additionalProperties": false
         },
         "consent": {
@@ -9525,10 +9442,6 @@
               "type": "boolean"
             }
           },
-          "required": [
-            "require_paid_escalation",
-            "require_hard_budget_increase"
-          ],
           "additionalProperties": false
         },
         "delegation_ladder": {
@@ -9558,11 +9471,6 @@
               "maximum": 8
             }
           },
-          "required": [
-            "max_attempts_per_tier",
-            "max_free_attempts_total",
-            "escalate_after_attempts"
-          ],
           "additionalProperties": false
         },
         "watchdog": {
@@ -9625,31 +9533,9 @@
               "maximum": 9007199254740991
             }
           },
-          "required": [
-            "enabled",
-            "startup_grace_ms",
-            "quiet_stall_threshold_ms",
-            "wedged_threshold_ms",
-            "dispatch_timeout_ms",
-            "request_start_timeout_ms",
-            "provider_response_timeout_ms",
-            "heartbeat_coalesce_ms"
-          ],
           "additionalProperties": false
         }
       },
-      "required": [
-        "enabled",
-        "budget_mode",
-        "paid",
-        "tokens",
-        "delegation",
-        "context",
-        "forecasting",
-        "consent",
-        "delegation_ladder",
-        "watchdog"
-      ],
       "additionalProperties": false
     },
     "auto_update": {
@@ -9784,11 +9670,6 @@
           "maximum": 1000
         }
       },
-      "required": [
-        "enabled",
-        "auto_start",
-        "default_max_iterations"
-      ],
       "additionalProperties": false
     },
     "ralph_loop": {
@@ -10004,10 +9885,6 @@
                 "type": "number"
               }
             },
-            "required": [
-              "type",
-              "method"
-            ],
             "additionalProperties": false
           }
         },
@@ -10032,7 +9909,6 @@
               }
             },
             "required": [
-              "enabled",
               "gateway",
               "instruction"
             ],
@@ -10081,21 +9957,9 @@
               "type": "boolean"
             }
           },
-          "required": [
-            "authorizedDiscordUserIds",
-            "pollIntervalMs",
-            "rateLimitPerMinute",
-            "maxMessageLength",
-            "includePrefix"
-          ],
           "additionalProperties": false
         }
       },
-      "required": [
-        "enabled",
-        "gateways",
-        "hooks"
-      ],
       "additionalProperties": false
     },
     "i18n": {
@@ -10173,18 +10037,6 @@
           "maximum": 9007199254740991
         }
       },
-      "required": [
-        "enabled",
-        "live_mode_enabled",
-        "max_monitors_per_session",
-        "max_runtime_ms",
-        "batch_max_lines",
-        "batch_max_bytes",
-        "flush_interval_ms",
-        "ring_max_lines",
-        "line_max_bytes",
-        "pattern_max_length"
-      ],
       "additionalProperties": false
     },
     "team_mode": {
@@ -10250,18 +10102,6 @@
           "maximum": 9007199254740991
         }
       },
-      "required": [
-        "enabled",
-        "tmux_visualization",
-        "max_parallel_members",
-        "max_members",
-        "max_messages_per_run",
-        "max_wall_clock_minutes",
-        "max_member_turns",
-        "message_payload_max_bytes",
-        "recipient_unread_max_bytes",
-        "mailbox_poll_interval_ms"
-      ],
       "additionalProperties": false
     },
     "keyword_detector": {
@@ -10302,32 +10142,25 @@
           "type": "number"
         }
       },
-      "required": [
-        "timeout_ms"
-      ],
       "additionalProperties": false
     },
     "git_master": {
       "default": {
-        "commit_footer": true,
-        "include_co_authored_by": true,
+        "commit_footer": false,
+        "include_co_authored_by": false,
         "git_env_prefix": "GIT_MASTER=1"
       },
       "type": "object",
       "properties": {
         "commit_footer": {
-          "default": true,
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "string"
-            }
+          "default": false,
+          "type": [
+            "boolean",
+            "string"
           ]
         },
         "include_co_authored_by": {
-          "default": true,
+          "default": false,
           "type": "boolean"
         },
         "git_env_prefix": {
@@ -10335,11 +10168,6 @@
           "type": "string"
         }
       },
-      "required": [
-        "commit_footer",
-        "include_co_authored_by",
-        "git_env_prefix"
-      ],
       "additionalProperties": false
     },
     "browser_automation_engine": {
@@ -10350,7 +10178,6 @@
           "type": "string",
           "enum": [
             "playwright",
-            "agent-browser",
             "dev-browser",
             "playwright-cli"
           ]
@@ -10362,9 +10189,6 @@
           }
         }
       },
-      "required": [
-        "provider"
-      ],
       "additionalProperties": false
     },
     "websearch": {
@@ -10424,14 +10248,6 @@
           ]
         }
       },
-      "required": [
-        "enabled",
-        "layout",
-        "main_pane_size",
-        "main_pane_min_width",
-        "agent_pane_min_width",
-        "isolation"
-      ],
       "additionalProperties": false
     },
     "tui": {
@@ -10453,15 +10269,9 @@
               "type": "boolean"
             }
           },
-          "required": [
-            "enabled"
-          ],
           "additionalProperties": false
         }
       },
-      "required": [
-        "sidebar"
-      ],
       "additionalProperties": false
     },
     "sisyphus": {
@@ -10481,9 +10291,6 @@
               "type": "boolean"
             }
           },
-          "required": [
-            "claude_code_compat"
-          ],
           "additionalProperties": false
         }
       },
@@ -10497,9 +10304,6 @@
           "type": "boolean"
         }
       },
-      "required": [
-        "auto_commit"
-      ],
       "additionalProperties": false
     },
     "start_work": {
@@ -10510,9 +10314,6 @@
           "type": "boolean"
         }
       },
-      "required": [
-        "auto_commit"
-      ],
       "additionalProperties": false
     },
     "default_mode": {
@@ -10527,10 +10328,6 @@
           "type": "boolean"
         }
       },
-      "required": [
-        "ultrawork",
-        "goal"
-      ],
       "additionalProperties": false
     },
     "_migrations": {
@@ -10540,8 +10337,5 @@
       }
     }
   },
-  "required": [
-    "git_master"
-  ],
   "additionalProperties": false
 }

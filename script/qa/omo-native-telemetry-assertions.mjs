@@ -1,6 +1,7 @@
 import {
   KNOWN_MODELS,
   KNOWN_PROVIDERS,
+  OMO_NATIVE_COMMON_PROPERTY_SCHEMAS,
   OMO_NATIVE_PROPERTY_ALLOWLISTS,
 } from "../../packages/omo-senpi/src/components/telemetry/product-identity.ts"
 
@@ -16,7 +17,31 @@ const expectedNativeEvents = new Set([
   "delegation_completed",
   "category_config",
   "feature_used",
+  "computer_use_activation",
+  "computer_use_permission_denied",
+  "computer_use_engine_error",
+  "kibitzer_summary",
   "parallelism_summary",
+  "process_crashed",
+  "session_summary",
+])
+
+// Session-conditional events the scripted scenario cannot produce: `kibitzer_summary` is emitted only
+// when the memory sidecar actually woke, which needs recall enabled and a committed memory corpus, and
+// `process_crashed` only when an earlier process left a crash record on disk. `session_summary` is held
+// here only until a live capture proves it: by the code it is flushed at the drive's clean shutdown (after
+// the third settled turn the drive ends stdin, and session_shutdown flushes the open window, registered
+// ahead of the session client the same way `parallelism_summary` is), so it should become required once a
+// real capture shows it. They
+// stay in the coverage check above (a dropped or misspelled event still fails) but are not required to
+// appear in a capture, because demanding one here would only be satisfiable by faking the emission.
+const conditionalNativeEvents = new Set([
+  "computer_use_activation",
+  "computer_use_permission_denied",
+  "computer_use_engine_error",
+  "kibitzer_summary",
+  "process_crashed",
+  "session_summary",
 ])
 
 export function assertAllowlistCoverage(allowlists) {
@@ -30,7 +55,7 @@ export function assertAllowlistCoverage(allowlists) {
 
 assertAllowlistCoverage(OMO_NATIVE_PROPERTY_ALLOWLISTS)
 const nativeEvents = new Set(Object.keys(OMO_NATIVE_PROPERTY_ALLOWLISTS))
-const sharedKeys = new Set(["$process_person_profile", "package_version", "platform", "product_name", "schema_version", "surface", "install_id"])
+const sharedKeys = new Set(Object.keys(OMO_NATIVE_COMMON_PROPERTY_SCHEMAS))
 const sdkAddedKeys = new Set(["$lib", "$lib_version", "$geoip_disable", "$is_server"])
 const sdkWireKeys = new Set(["distinct_id", "uuid"])
 const knownModels = new Set(Object.values(KNOWN_MODELS).flat())
@@ -70,7 +95,10 @@ export function assertEnabled(events) {
   check("first-prompt-ulw-classification", first !== undefined && first.properties.is_effective_ultrawork_invocation === true && first.properties.keyword_variant === "ulw" && first.properties.keyword_occurrence_bucket === "1" && first.properties.invocation_stage === "first_arm", JSON.stringify(first?.properties ?? null))
   const controls = realPrompts.filter((event) => event !== first)
   check("two-keyword-negative-controls", controls.length === 2 && controls.every((event) => event.properties.keyword_any === false), controls.map((event) => JSON.stringify(event.properties)).join(" | "))
-  for (const name of nativeEvents) check(`event-present-${name}`, native.some((event) => event.event === name), `captured ${name}`)
+  for (const name of nativeEvents) {
+    if (conditionalNativeEvents.has(name)) continue
+    check(`event-present-${name}`, native.some((event) => event.event === name), `captured ${name}`)
+  }
   check("turn-completed-positive-tokens", native.some((event) => event.event === "turn_completed" && Number(event.properties.total_tokens) > 0), "at least one turn_completed has total_tokens > 0")
   check("feature-goal-tool", native.some((event) => event.event === "feature_used" && event.properties.feature === "goal_tool"), "captured feature_used goal_tool")
   check("legacy-dual-emit-presence-only", events.some((event) => event.event === "omo_senpi_daily_active"), "legacy event present and excluded from all scans")
@@ -84,7 +112,9 @@ export function privacyScan(events, checks) {
     const allowed = new Set([...OMO_NATIVE_PROPERTY_ALLOWLISTS[event.event], ...sharedKeys, ...sdkAddedKeys, ...sdkWireKeys])
     if ("$is_server" in event.properties && event.properties.$is_server !== true) throw new Error("invalid SDK server attribution")
     if (event.properties.surface !== "cli" && event.properties.surface !== "desktop") throw new Error("invalid attribution surface")
-    if (typeof event.properties.install_id !== "string" || !/^[a-f0-9]{64}$/.test(event.properties.install_id)) throw new Error("invalid attribution install_id")
+    if (typeof event.properties.install_hash !== "string" || !/^[a-f0-9]{64}$/.test(event.properties.install_hash)) throw new Error("invalid attribution install_hash")
+    if ("install_id" in event.properties) throw new Error("raw install_id must never ship")
+    if (event.distinct_id !== undefined && event.distinct_id !== event.properties.install_hash) throw new Error("distinct_id must equal install_hash")
     for (const key of Object.keys(event.properties)) {
       if (!allowed.has(key)) throw new Error(`property-allowlist: ${event.event}.${key} is not documented or SDK-added`)
       if (key.startsWith("$") && !OMO_NATIVE_PROPERTY_ALLOWLISTS[event.event].includes(key) && !sharedKeys.has(key) && !sdkAddedKeys.has(key)) {

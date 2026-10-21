@@ -6,6 +6,8 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
+import { withTelemetryOptOut } from "./telemetry-opt-out-env.mjs"
+
 
 const scriptPath = fileURLToPath(import.meta.url)
 const repoRoot = join(dirname(scriptPath), "../../../..")
@@ -153,9 +155,7 @@ async function runExtensionChild(sessionId) {
     ),
   ])
   const pi = new FakeExtensionAPI()
-  await createUlwLoopComponent({
-    resolveOmoBin: () => toolkitBin,
-  }).register(pi, {
+  await createUlwLoopComponent().register(pi, {
     logger: {
       info() {},
       warn() {},
@@ -214,7 +214,7 @@ function sessionEnv(sessionId) {
   delete env.CODEX_THREAD_ID
   delete env.PI_SESSION_ID
   if (sessionId !== null) env.PI_SESSION_ID = sessionId
-  return env
+  return withTelemetryOptOut(env)
 }
 
 function assert(condition, message) {

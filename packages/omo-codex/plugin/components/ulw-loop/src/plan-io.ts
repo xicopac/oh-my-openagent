@@ -12,7 +12,7 @@ import {
 } from "./paths.js";
 import { commit, materialize, materializeSync } from "./plan-commit.js";
 import { readOptional, reconcilePlan } from "./plan-log.js";
-import { planMissingRecovery } from "./plan-missing-recovery.js";
+import { planMissingError } from "./plan-missing-recovery.js";
 import { type StateLockOptions, withStateLock } from "./state-lock.js";
 import {
 	iso,
@@ -129,14 +129,7 @@ export async function withUlwLoopMutationLock<T>(
 export function readUlwLoopPlanSync(repoRoot: string, scope?: UlwLoopScope): UlwLoopPlan {
 	const path = ulwLoopGoalsPath(repoRoot, scope);
 	const parsed = reconcilePlan(ulwLoopDir(repoRoot, scope));
-	if (parsed === undefined) {
-		const recovery = planMissingRecovery(listUlwLoopSessionIds(repoRoot));
-		throw new UlwLoopError(
-			`No ulw-loop plan found at ${repoRelative(path, repoRoot)}.\n${recovery.message}`,
-			"ULW_LOOP_PLAN_MISSING",
-			{ ...(recovery.details === undefined ? {} : { details: recovery.details }) },
-		);
-	}
+	if (parsed === undefined) throw planMissingError(repoRelative(path, repoRoot), listUlwLoopSessionIds(repoRoot));
 	if (parsed.version !== 1 || !Array.isArray(parsed.goals))
 		throw new UlwLoopError(`Invalid ulw-loop plan at ${repoRelative(path, repoRoot)}.`, "ULW_LOOP_PLAN_INVALID");
 	const previousObjective = parsed.codexObjective;

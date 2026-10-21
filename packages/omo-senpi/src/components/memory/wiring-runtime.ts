@@ -2,6 +2,7 @@ import { join } from "node:path"
 
 import { TranscriptJournal, sanitizeToSlug, type ReservedRun } from "@oh-my-opencode/memory-core"
 
+import { resolveAgentHome } from "../agent-home/resolve-agent-home"
 import type { MemoryIdentityContext } from "./context"
 import type { DreamTriggerSession } from "./dream-trigger"
 import { FactsExtractorRunner } from "./facts-runner"
@@ -19,6 +20,7 @@ import {
   resolveParentCacheReusable as resolveParentCacheReusableFromCtx,
   resolveParentContextTokens as resolveParentContextTokensFromCtx,
   resolveParentSessionFile as resolveParentSessionFileFromCtx,
+  resolveSessionAgentDir,
 } from "./session-context-resolver"
 import { resolveReflectionTriggerConfig, type ReflectionTriggerSession } from "./trigger-wiring"
 import { isRecord, sessionIdFrom } from "./wiring-context"
@@ -31,6 +33,8 @@ export interface MemoryRuntimeWiring {
   journalWiringFor(identity: MemoryIdentityContext): MemoryJournalWiring
   factsWiringFor(identity: MemoryIdentityContext): MemoryFactsWiring
   runtimeFor(identity: MemoryIdentityContext): MemoryIdentityRuntime
+  /** Resolves once every reflection launch started by this wiring's runtimes has returned. */
+  settled(): Promise<void>
   triggerSessionFor(eventCtx: unknown): ReflectionTriggerSession | undefined
   dreamSessionById(sessionId: string): DreamTriggerSession | undefined
   dreamSessionFor(eventCtx: unknown): DreamTriggerSession | undefined
@@ -76,6 +80,11 @@ export function createMemoryRuntimeWiring(
     return resolveParentCacheReusableFromCtx(lastEventCtx.current)
   }
 
+  /** The engine's own answer for this session; detection is the fallback for hosts without it. */
+  function resolveAgentDir(): string {
+    return resolveSessionAgentDir(lastEventCtx.current) ?? resolveAgentHome({ env: process.env })
+  }
+
   function journalWiringFor(identity: MemoryIdentityContext): MemoryJournalWiring {
     const cached = journals.get(identity.identity)
     if (cached !== undefined) return cached
@@ -102,6 +111,7 @@ export function createMemoryRuntimeWiring(
       cwd: options.cwd(),
       loadConfig: () => options.loadConfig({ cwd: options.cwd() }),
       resolveModelRegistry,
+      resolveSessionModel,
       env: options.env,
       ...(options.logger === undefined ? {} : { logger: options.logger }),
     })
@@ -137,6 +147,7 @@ export function createMemoryRuntimeWiring(
       resolveParentContextTokens,
       resolveParentSessionFile,
       resolveParentCacheReusable,
+      resolveAgentDir,
       ...(options.logger === undefined ? {} : { logger: options.logger }),
       ...(liveSession === undefined
         ? {}
@@ -172,7 +183,7 @@ export function createMemoryRuntimeWiring(
           lastEventCtx.current = eventCtx
           const result = await runtime.store.evaluate(conversationId, event)
           if (result?.status === "active") {
-            runtime.launch(result.run)
+            void runtime.launch(result.run)
             await hooks.onLaunch?.(identity.identity, result.run)
           }
           return result
@@ -207,6 +218,9 @@ export function createMemoryRuntimeWiring(
     journalWiringFor,
     factsWiringFor,
     runtimeFor,
+    async settled(): Promise<void> {
+      await Promise.all([...runtimes.values()].map((runtime) => runtime.settled()))
+    },
     triggerSessionFor,
     dreamSessionById,
     dreamSessionFor,

@@ -14,13 +14,13 @@ export interface ReadingParagraphProps {
 }
 
 /**
- * One manifesto paragraph: its own `LitProgress` block, so the words light up as this
- * paragraph crosses the reading zone (top at 80vh → bottom at 50vh), independently of
- * the paragraphs around it. Authored line breaks survive through `white-space: pre-line`.
+ * One manifesto paragraph: a `LitProgress` reading block in reveal mode. A scroll-driven window
+ * reveal keeps everything above the bright edge fully lit, so a whole screenful is readable and
+ * the reveal never gates reading on scroll; words near the edge carry the emphasis.
  */
 export function ReadingParagraph({ text, parts, className }: ReadingParagraphProps): JSX.Element {
   return (
-    <LitProgress className="lit-read">
+    <LitProgress className="lit-read" reveal>
       {parts ? (
         <LitWords parts={parts} className={cn(READING_CLASS, className)} />
       ) : (
