@@ -323,7 +323,7 @@ describe("worker lifecycle (successful dispatch requirement)", () => {
       // child fails/deleted before its provider request ever started
       r.rt.detachChildSession("child")
 
-      expect(r.rt.rootPhase("m")).toBe("worker_required")
+      expect(r.rt.rootPhase("m")).toBe("delegation_degraded")
       expect(r.rt.preGruntCheck("m", "bash", { command: "find . -name '*.ts'" }).block).toBe(true)
     } finally {
       cleanup(r)
@@ -338,7 +338,7 @@ describe("worker lifecycle (successful dispatch requirement)", () => {
       r.rt.attachChildSession("m", "child-1")
       r.rt.detachChildSession("child-1")
 
-      expect(r.rt.rootPhase("m")).toBe("worker_required")
+      expect(r.rt.rootPhase("m")).toBe("delegation_degraded")
 
       r.rt.attachChildSession("m", "child-2")
       r.rt.markRequestStarted("child-2")
@@ -386,7 +386,7 @@ describe("worker lifecycle (successful dispatch requirement)", () => {
     }
   })
 
-  test("16. exhausted / no-eligible worker enters ROOT_REPAIR_MODE (routing failure)", async () => {
+  test("16. exhausted / no-eligible worker records routing failure (no silent fallback)", async () => {
     const r = makeRuntime()
     try {
       r.rt.preGruntCheck("m", "bash", { command: "grep -R TODO ." })
@@ -395,22 +395,21 @@ describe("worker lifecycle (successful dispatch requirement)", () => {
       // No recovery sink is configured, so a disabled-model failure hard-fails the child.
       r.rt.recordModelUnavailable("child", "free-1", "model disabled")
 
-      // Routing failure: the root enters ROOT_REPAIR_MODE (NOT exceptional takeover)
-      expect(r.rt.rootPhase("m")).toBe("root_repair")
-      // During repair the root may investigate and fix the routing machinery directly.
-      expect(r.rt.preGruntCheck("m", "bash", { command: "find . -name *.ts" }).block).toBe(false)
-      // The logical task stays active: repair does not complete/fail the task.
+      // Routing failure: machine-observable evidence, still worker-first (no takeover).
+      expect(r.rt.rootPhase("m")).toBe("delegation_degraded")
+      // The logical task stays active: the failure reason is observable for repair.
       expect(r.rt.rootRepairReason("m")).toBe("routing_no_relaunch_sink")
+      // Broad root work stays blocked until delegation is healthy again.
+      expect(r.rt.preGruntCheck("m", "bash", { command: "find . -name *.ts" }).block).toBe(true)
 
       await r.audit.flush()
       expect(readEventNames(r.root)).toContain("retry_chain_exhausted")
-      expect(readEventNames(r.root)).toContain("root_repair_mode_entered")
     } finally {
       cleanup(r)
     }
   })
 
-  test("17. give_up enters ROOT_REPAIR_MODE; exceptional takeover is explicit and audited", async () => {
+  test("17. give_up records routing evidence; root work stays blocked (no takeover)", async () => {
     const r = makeRuntime()
     try {
       r.rt.beginDelegation("job", "m", "trace auth", [freeWorker("free-1")])
@@ -422,20 +421,13 @@ describe("worker lifecycle (successful dispatch requirement)", () => {
       const giveUp = r.rt.recordWorkerResult("job", weakResult())
       expect(giveUp.kind).toBe("give_up")
 
-      // Repeated worker failure enters ROOT_REPAIR_MODE first.
-      expect(r.rt.rootPhase("m")).toBe("root_repair")
-      expect(r.rt.rootRepairReason("m")).toBe("retry_chain_exhausted")
-      // During repair the root may perform repository work directly.
-      expect(r.rt.preGruntCheck("m", "bash", { command: "grep -R x ." }).block).toBe(false)
-
-      // Exceptional takeover is the explicit final state after repair cannot restore delegation.
-      r.rt.enterExceptionalTakeover("m", "repair could not restore delegation")
-      expect(r.rt.rootPhase("m")).toBe("exceptional_takeover")
-      expect(r.rt.preGruntCheck("m", "bash", { command: "grep -R x ." }).block).toBe(false)
+      // Repeated worker failure records routing evidence; root work stays blocked.
+      expect(r.rt.rootPhase("m")).toBe("delegation_degraded")
+      expect(r.rt.rootRepairReason("m")).toBe("no_sufficient_worker")
+      expect(r.rt.preGruntCheck("m", "bash", { command: "grep -R x ." }).block).toBe(true)
 
       await r.audit.flush()
-      expect(readEventNames(r.root)).toContain("root_repair_mode_entered")
-      expect(readEventNames(r.root)).toContain("exceptional_root_takeover")
+      expect(readEventNames(r.root)).toContain("delegation_failure_recorded")
     } finally {
       cleanup(r)
     }
@@ -489,8 +481,13 @@ describe("root-worker-state (pure state machine)", () => {
     state.noteWorkerRunning(s)
     expect(state.phase(s)).toBe("worker_active")
     expect(state.decide(s, "background_output", {}).block).toBe(false)
-    state.noteEscalationExhausted(s)
-    expect(state.phase(s)).toBe("exceptional_takeover")
+    state.recordDelegationFailure(s, { id: "e1", kind: "routing_exhausted", reason: "r1", observedAtMs: 1 })
+    expect(state.phase(s)).toBe("delegation_degraded")
+    for (const tool of ["task", "call_omo_agent", "background_output", "session_read", "skill"]) {
+      expect(state.decide(s, tool, {}).block).toBe(false)
+    }
+    state.recordDelegationFailure(s, { id: "e2", kind: "watchdog_reclaim_exhausted", reason: "r2", observedAtMs: 2 })
+    expect(state.phase(s)).toBe("recovery_mode")
   })
 
   test("selectNextEligibleWorker reports no eligible worker rather than falling back to root", () => {

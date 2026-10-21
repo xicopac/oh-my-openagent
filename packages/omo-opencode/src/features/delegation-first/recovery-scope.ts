@@ -24,6 +24,7 @@ const CONTROL_TOOLS = new Map<string, RecoveryScopeCategory>([
   ["session_read", "inspection"],
   ["session_search", "inspection"],
   ["session_info", "inspection"],
+  ["todowrite", "inspection"],
   ["monitor_start", "inspection"],
   ["monitor_stop", "cleanup"],
   ["monitor_list", "inspection"],
@@ -46,7 +47,9 @@ const RECOVERY_PATH_MARKERS = [
   "packages/omo-opencode/src/tools/delegate-task",
   "packages/omo-opencode/src/tools/background-task",
   "packages/omo-opencode/src/shared/governance-audit",
-  "packages/omo-opencode/src/plugin/",
+  "packages/omo-opencode/src/plugin",
+  "packages/omo-opencode/src/hooks",
+  "packages/omo-opencode/src/tools",
   "packages/omo-opencode/src/create-managers.ts",
   "packages/omo-opencode/src/create-tools.ts",
   "packages/delegate-core/",
@@ -103,7 +106,26 @@ function isRecoveryPath(value: string | undefined): boolean {
   const normalized = normalizePath(value)
   if (EXACT_RECOVERY_PATHS.has(normalized)) return true
   const padded = normalized.startsWith("/") ? normalized : `/${normalized}`
-  return RECOVERY_PATH_MARKERS.some((marker) => normalized.includes(marker) || padded.includes(marker))
+  return RECOVERY_PATH_MARKERS.some((raw) => {
+    const marker = raw.replace(/\/+$/, "")
+    if (!marker) return false
+    const withSlash = `${marker}/`
+    // Relative forms: bare hint equals its marker, or extends under it.
+    if (normalized === marker) return true
+    if (normalized.startsWith(withSlash)) return true
+    if (normalized.includes(withSlash)) return true
+    // Absolute forms: same checks against the leading-slash-padded target,
+    // plus a bare directory at the end of an absolute path.
+    if (padded === marker) return true
+    if (padded.startsWith(withSlash)) return true
+    if (padded.includes(withSlash)) return true
+    const markerSlashed = marker.startsWith("/") ? marker : `/${marker}`
+    if (padded === markerSlashed) return true
+    if (padded.startsWith(`${markerSlashed}/`)) return true
+    if (padded.includes(`${markerSlashed}/`)) return true
+    if (padded.endsWith(markerSlashed)) return true
+    return false
+  })
 }
 
 function allow(category: RecoveryScopeCategory, reason: string): RecoveryScopeDecision {

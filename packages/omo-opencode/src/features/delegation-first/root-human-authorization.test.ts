@@ -179,21 +179,31 @@ describe("human explicit authorization", () => {
     expect(toolBlocked.humanAuthorized).not.toBe(true)
   })
 
-  test("4. terminal phase (halt/handoff/recovery_verified) still blocks even with valid claim", () => {
-    // given session in terminal phase
+  test("4. halt terminal phase still blocks even with valid claim; verified recovery resumes", () => {
     const r = makeRuntime()
     try {
       const sid = "ses-terminal"
-      r.rt.beginRecoveryProbe(sid, "p1", "n1")
-      // Need to enter recovery_mode first
       r.rt.recordDelegationFailure(sid, { id: "e1", kind: "routing_exhausted", reason: "x", observedAtMs: Date.now() })
       r.rt.recordDelegationFailure(sid, { id: "e2", kind: "routing_exhausted", reason: "x", observedAtMs: Date.now() })
       expect(r.rt.rootPhase(sid)).toBe("recovery_mode")
       r.rt.beginRecoveryProbe(sid, "probe-1", "abc123abc123abc123abc123abc123ab")
       r.rt.markRecoveryVerified(sid, "probe-1")
       expect(r.rt.rootPhase(sid)).toBe("recovery_verified")
-      grantPathAuth(r.rt, sid, "/tmp/project/.omo/handoffs")
-      const decision = r.rt.preGruntCheck(sid, "read", {
+      // verified recovery is a success state: normal execution resumes
+      expect(r.rt.preGruntCheck(sid, "task", {}).block).toBe(false)
+      expect(r.rt.recoverySnapshot(sid).phase).toBe("normal")
+
+      // handoff/halt remain authoritative even over a valid human claim
+      const halted = "ses-terminal-halt"
+      r.rt.recordDelegationFailure(halted, { id: "e1", kind: "routing_exhausted", reason: "x", observedAtMs: Date.now() })
+      r.rt.recordDelegationFailure(halted, { id: "e2", kind: "routing_exhausted", reason: "x", observedAtMs: Date.now() })
+      r.rt.beginRecoveryProbe(halted, "probe-1", "abc123abc123abc123abc123abc123ab")
+      r.rt.markRecoveryVerified(halted, "probe-1")
+      r.rt.markRecoveryHandoff(halted, "/tmp/project/.omo/handoffs/recovery.md")
+      r.rt.markRecoveryHalted(halted)
+      expect(r.rt.rootPhase(halted)).toBe("halt")
+      grantPathAuth(r.rt, halted, "/tmp/project/.omo/handoffs")
+      const decision = r.rt.preGruntCheck(halted, "read", {
         target: "/tmp/project/.omo/handoffs/file.md",
         humanAuthorization: { scope: "/tmp/project/.omo/handoffs/file.md", reason: "human" },
       } as unknown as Record<string, unknown> as never)

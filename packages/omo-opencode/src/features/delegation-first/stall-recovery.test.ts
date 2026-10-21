@@ -119,4 +119,22 @@ describe("delegation-first child stall lifecycle and recovery", () => {
     expect(serialized).toContain("session_id")
     expect(serialized).not.toContain("SECRET PROMPT")
   })
+
+  test("a reclaimed stall quarantines the provider model and audits worker_model_unavailable", () => {
+    // given
+    const { writer, events } = captureAudit()
+    const rt = createDelegationFirstRuntime(writer, {
+      modelAvailabilityFilePath: `/tmp/omo-stall-quarantine-${process.pid}.json`,
+    })
+    rt.setRecoverySink({ cancel: async () => {} })
+    const t0 = Date.now()
+    rt.attachChildSession("parent", "child1")
+    rt.markRequestStarted("child1")
+    // when: the provider never responds and the sweep reclaims the child
+    rt.checkAllWatchdogs(t0 + 200_000)
+    rt.reclaimStalled("child1", "opengateway/explore", t0 + 200_000)
+    // then: the stalled model is quarantined so later dispatches skip it
+    expect(rt.unavailableModels()).toContain("opengateway/explore")
+    expect(eventNames(events, "child1")).toContain("worker_model_unavailable")
+  })
 })

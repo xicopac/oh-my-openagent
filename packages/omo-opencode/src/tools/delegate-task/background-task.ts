@@ -113,6 +113,7 @@ export async function executeBackgroundTask(
   systemContent: string | undefined,
   fallbackChain?: FallbackEntry[],
   paidSlotAcquired = false,
+  recoveryProbe = false,
 ): Promise<string> {
   const { manager } = executorCtx
 
@@ -139,6 +140,7 @@ export async function executeBackgroundTask(
       userPermission: categoryModel?.tools
         ? migrateToolsToPermission(categoryModel.tools)
         : undefined,
+      ...(recoveryProbe ? { recoveryProbe: true } : {}),
     })
 
     // OpenCode TUI's `Task` tool UI calculates toolcalls by looking up

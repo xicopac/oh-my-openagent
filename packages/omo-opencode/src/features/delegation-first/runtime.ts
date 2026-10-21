@@ -37,6 +37,7 @@ import {
 import {
   createRootWorkerState,
   REASON_ADDITIONAL,
+  REASON_BROAD,
   REASON_WAIT,
   REASON_RECOVERY_SCOPE,
   REASON_RECOVERY_TERMINAL,
@@ -111,6 +112,11 @@ export type RecoverySink = {
   ) => Promise<RelaunchOutcome> | RelaunchOutcome
 }
 
+export type ChildLivenessProbe = (parentSessionID: string) => {
+  liveChildren: number
+  activeBackgroundTasks: number
+}
+
 export type DelegationFirstRuntime = {
   beginDelegation(jobID: string, parentSessionID: string, prompt: string, workers: WorkerCandidate[]): void
   /** Retain a bounded replayable assignment so a stalled child can be re-dispatched. */
@@ -121,7 +127,7 @@ export type DelegationFirstRuntime = {
   /** Link a replacement child session to its assignment (fires when the session resolves). */
   noteReplacementSession(assignmentID: string, sessionID: string): void
   attachChildSession(parentSessionID: string, childSessionID: string): void
-  detachChildSession(childSessionID: string): void
+  detachChildSession(childSessionID: string, terminalStage?: ChildStage): void
   recordWorkerResult(jobID: string, result: AttemptResult): NextAction
   findings(jobID: string): Finding[]
   /** Record that the provider request for `sessionID` was dispatched. */
@@ -173,6 +179,10 @@ export type DelegationFirstRuntime = {
   evidenceAnchors(sessionID: string): string[]
   /** Record a machine-observed delegation failure (deduplicated by evidence id). */
   recordDelegationFailure(sessionID: string, evidence: DelegationFailureEvidence): DelegationFailureTransition
+  /** Clear negative availability for a model that proved healthy again. */
+  noteModelHealthy(modelKey: string): void
+  /** Inject an optional child-liveness probe (vanished-child WAIT guard). */
+  setLivenessProbe(probe: ChildLivenessProbe | undefined): void
   /** A retry/replacement child reaching request-started proves delegation healthy again. */
   noteDelegationHealthy(sessionID: string): void
   /** Begin the single end-to-end recovery probe (real child through production delegation). */
@@ -185,6 +195,8 @@ export type DelegationFirstRuntime = {
   markRecoveryHandoff(sessionID: string, path: string): boolean
   /** Halt the session after handoff. */
   markRecoveryHalted(sessionID: string): void
+  /** Reconcile a stale verified recovery back to normal execution (idempotent). */
+  reconcileStaleRecovery(sessionID: string): boolean
   /** Snapshot of the recovery state machine for observability/handoff. */
   recoverySnapshot(sessionID: string): DelegationRecoverySnapshot
   /** Signal a child failed to launch (startup/0ms/EACCES) - records delegation-failure evidence. */
@@ -195,6 +207,8 @@ export type DelegationFirstRuntime = {
   rootRepairReason(sessionID: string): string | null
   /** True when `sessionID` is a registered worker child (nested child detection). */
   isChildSession(sessionID: string): boolean
+  /** Number of currently registered child sessions owned by `parentSessionID`. */
+  liveChildCount(parentSessionID: string): number
   /** Register an explicit human authorization for a root session (trusted channel only). */
   grantHumanAuthorization(sessionID: string, auth: HumanExplicitAuthorization): void
   /** Human authorizations registered for a session (observability + tests). */
@@ -256,13 +270,24 @@ export function createDelegationFirstRuntime(
     persistentFilePath: availabilityFilePath,
   })
   let sink: RecoverySink | undefined
+  let livenessProbe: ChildLivenessProbe | undefined
   const paidGate = createPaidWorkerGate(cfg.maxConcurrentPaidWorkers ?? 1)
   const paidSessions = new Set<string>()
+  const modelRecoveredSessions = new Set<string>()
 
   const gruntOptions: GruntGuardOptions = { ...DEFAULT_GRUNT_GUARD_OPTIONS, ...cfg.grunt }
 
   const freeWorkerHint = cfg.pricing ? discoverFreeModels(cfg.pricing)[0] ?? null : null
   const rootState: RootWorkerState = createRootWorkerState()
+
+  function markModelRecovered(modelKey: string): void {
+    availability.clear(modelKey)
+    audit?.write("delegation", {
+      subsystem: "delegation",
+      event: "worker_model_recovered",
+      model: modelKey,
+    })
+  }
 
   function satisfyWorkerRequirement(sessionID: string): void {
     const before = rootState.phase(sessionID)
@@ -488,7 +513,69 @@ export function createDelegationFirstRuntime(
         satisfyWorkerRequirement(parentSessionID)
       }
     },
-    detachChildSession(childSessionID) {
+    detachChildSession(childSessionID, terminalStage) {
+      if (terminalStage !== undefined) watchdog.onTerminal(childSessionID, terminalStage)
+      const snapshotBeforeDetach = watchdog.snapshot(childSessionID)
+      const parentBeforeDetach = sessionJob.get(childSessionID)
+      const assignmentBeforeDetachID = sessionToAssignment.get(childSessionID)
+      const assignmentBeforeDetach = assignmentBeforeDetachID
+        ? assignmentsById.get(assignmentBeforeDetachID)
+        : undefined
+      if (snapshotBeforeDetach) {
+        const nonTerminalStages: ReadonlySet<string> = new Set([
+          "dispatch_authorized",
+          "session_created",
+          "request_started",
+          "first_response",
+        ])
+        const stillRunningStatuses: ReadonlySet<string> = new Set([
+          "starting",
+          "running",
+          "pending",
+          "blocked",
+          "idle",
+        ])
+        if (
+          nonTerminalStages.has(snapshotBeforeDetach.stage) &&
+          stillRunningStatuses.has(snapshotBeforeDetach.status)
+        ) {
+          audit?.write(childSessionID, {
+            subsystem: "watchdog",
+            event: "child_exited_unexpectedly",
+            session_id: childSessionID,
+            assignment_id: assignmentBeforeDetachID ?? null,
+            stage: snapshotBeforeDetach.stage,
+            status: snapshotBeforeDetach.status,
+            parent_session_id: parentBeforeDetach ?? assignmentBeforeDetach?.parent_session_id ?? null,
+          })
+          const parentID = parentBeforeDetach ?? assignmentBeforeDetach?.parent_session_id
+          if (parentID) {
+            rootState.recordDelegationFailure(parentID, {
+              id: `child-exited-unexpectedly:${childSessionID}`,
+              kind: "child_lost",
+              reason: "child_session_deleted_while_running",
+              observedAtMs: Date.now(),
+              taskID: childSessionID,
+            })
+          }
+          if (assignmentBeforeDetach && assignmentBeforeDetachID && sink?.relaunch) {
+            const episodeKey = assignmentBeforeDetachID
+            const lineage = lineageByAssignment.get(episodeKey) ?? initialLineage(assignmentBeforeDetach)
+            const providerModel = lineage.current_worker
+            const decision = recovery.evaluate(episodeKey, providerModel, "EXECUTION_STALL", true)
+            if (decision.kind === "reclaim" && decision.retry) {
+              recovery.recordReclaim(episodeKey, providerModel)
+              tryRedispatch(
+                childSessionID,
+                assignmentBeforeDetach,
+                "EXECUTION_STALL",
+                decision.correlated,
+                snapshotBeforeDetach.stage,
+              )
+            }
+          }
+        }
+      }
       if (paidSessions.has(childSessionID)) {
         paidSessions.delete(childSessionID)
         paidGate.release()
@@ -515,6 +602,7 @@ export function createDelegationFirstRuntime(
       sessionJob.delete(childSessionID)
       sessionToAssignment.delete(childSessionID)
       pendingRequestStarted.delete(childSessionID)
+      modelRecoveredSessions.delete(childSessionID)
     },
     recordWorkerResult(jobID, result) {
       const action = ladder.record(jobID, result)
@@ -686,6 +774,12 @@ export function createDelegationFirstRuntime(
     unavailableModels() {
       return availability.unavailableKeys()
     },
+    noteModelHealthy(modelKey) {
+      markModelRecovered(modelKey)
+    },
+    setLivenessProbe(probe) {
+      livenessProbe = probe
+    },
     getAvailabilityFilePath() {
       return availabilityFilePath
     },
@@ -743,6 +837,21 @@ export function createDelegationFirstRuntime(
       if (decision.kind !== "reclaim") return
 
       recovery.recordReclaim(episodeKey, providerModel, nowMs)
+      // A mid-stream stall is a provider/model health signal: feed it into the
+      // negative-availability store so later dispatches and failovers skip this
+      // model until the quarantine TTL expires instead of re-stalling on it.
+      if (
+        providerModel &&
+        (result.stallMode === "EXECUTION_STALL" || result.stallMode === "PROVIDER_RESPONSE_STALL")
+      ) {
+        availability.markUnavailable(providerModel, `execution stall (${result.stallMode})`)
+        audit?.write(sessionID, {
+          subsystem: "delegation",
+          event: "worker_model_unavailable",
+          model: providerModel,
+          reason: `stall:${result.stallMode}`,
+        })
+      }
       watchdog.markStalled(sessionID)
       audit?.write(sessionID, {
         subsystem: "watchdog",
@@ -834,6 +943,14 @@ export function createDelegationFirstRuntime(
     },
     watchdogActivity(sessionID) {
       watchdog.onActivity(sessionID)
+      if (!modelRecoveredSessions.has(sessionID)) {
+        const assignmentID = sessionToAssignment.get(sessionID)
+        const worker = assignmentID ? lineageByAssignment.get(assignmentID)?.current_worker : undefined
+        if (worker) {
+          modelRecoveredSessions.add(sessionID)
+          markModelRecovered(worker)
+        }
+      }
     },
     watchdogProcessStart(sessionID) {
       watchdog.onProcessStart(sessionID)
@@ -859,6 +976,7 @@ export function createDelegationFirstRuntime(
       sessionToAssignment.delete(sessionID)
       replacementSessions.delete(sessionID)
       pendingRequestStarted.delete(sessionID)
+      modelRecoveredSessions.delete(sessionID)
     },
     onToolActivity(sessionID, tool, nowMs) {
       const event: ToolActivityEvent = { tool, atMs: nowMs ?? Date.now() }
@@ -978,6 +1096,34 @@ export function createDelegationFirstRuntime(
       }
 
       if (decision.block) {
+        if (decision.reason === REASON_WAIT && livenessProbe) {
+          const liveness = livenessProbe(sessionID)
+          if (liveness.liveChildren === 0 && liveness.activeBackgroundTasks === 0) {
+            audit?.write(sessionID, {
+              subsystem: "delegation",
+              event: "root_waiting_on_vanished_child",
+              session_id: sessionID,
+              reason: "waiting_on_vanished_child",
+              scope: decision.scope,
+            })
+            rootState.recordDelegationFailure(sessionID, {
+              id: `root-waiting-on-vanished-child:${sessionID}`,
+              kind: "child_lost",
+              reason: "waiting_on_vanished_child",
+              observedAtMs: Date.now(),
+              taskID: sessionID,
+            })
+            return {
+              block: true,
+              reason: REASON_BROAD,
+              steering: buildWorkerFirstSteering(REASON_BROAD, decision.scope),
+              freeWorkerHint,
+              signal: decision.signal,
+              delegated: false,
+              selectiveVerification: false,
+            }
+          }
+        }
         const newlyRequired =
           decision.phase === "worker_required" && beforePhase !== "worker_required"
         audit?.write(sessionID, {
@@ -1096,6 +1242,14 @@ export function createDelegationFirstRuntime(
     isChildSession(sessionID) {
       return sessionJob.has(sessionID)
     },
+    liveChildCount(parentSessionID) {
+      const registered = new Set(watchdog.sessions())
+      let count = 0
+      for (const [childSessionID, parentID] of sessionJob) {
+        if (parentID === parentSessionID && registered.has(childSessionID)) count += 1
+      }
+      return count
+    },
     rootPhase(sessionID) {
       return rootState.phase(sessionID)
     },
@@ -1199,6 +1353,17 @@ export function createDelegationFirstRuntime(
         session_id: sessionID,
       })
     },
+    reconcileStaleRecovery(sessionID) {
+      const reconciled = rootState.reconcileStaleRecovery(sessionID)
+      if (reconciled) {
+        audit?.write(sessionID, {
+          subsystem: "delegation",
+          event: "recovery_reconciled",
+          session_id: sessionID,
+        })
+      }
+      return reconciled
+    },
     recoverySnapshot(sessionID) {
       return rootState.recoverySnapshot(sessionID)
     },
@@ -1250,6 +1415,7 @@ export function createDelegationFirstRuntime(
       gruntWindows.clear()
       pendingRequestStarted.clear()
       bootstrapAudited.clear()
+      modelRecoveredSessions.clear()
     },
   }
 }
@@ -1266,8 +1432,8 @@ function buildWorkerFirstSteering(reason: string | null, scope: string | null): 
   if (reason === REASON_RECOVERY_TERMINAL) {
     return [
       "DELEGATION_RECOVERY_HALTED",
-      "delegation recovery has reached a terminal phase (verified/handoff/halt); no further work is permitted in this session.",
-      "Capture proof, write the handoff file, and halt. Do not resume the original task.",
+      "delegation recovery has halted in an unsafe terminal phase (handoff/halt); no further work is permitted in this session.",
+      "Verified recovery reconciles back to normal execution automatically; an unsafe halt requires operator reconciliation.",
     ].join(" ")
   }
   if (reason === REASON_ADDITIONAL) {

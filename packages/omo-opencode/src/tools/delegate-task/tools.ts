@@ -37,6 +37,9 @@ import { buildDelegationWorkerCandidates, type ModelCapabilityInfo } from "../..
 import { refineAssignment } from "../../features/delegation-ladder"
 import { judgeSyncAdequacy } from "./sync-adequacy"
 import type { PricingCatalog } from "../../hooks/resource-governor/pricing"
+import { appendRecoveryProbeDirective, maybeVerifyRecoveryProbe } from "./recovery-probe"
+
+export { appendRecoveryProbeDirective, maybeVerifyRecoveryProbe }
 
 /**
  * Effective pricing used for paid/unknown classification of a resolved child.
@@ -435,6 +438,14 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         paidSlotAcquired = true
       }
 
+      // RECOVERY PROBE DRIVER: while the root is in recovery_mode with an active
+      // probe, the dispatched child carries the probe nonce directive and is
+      // marked as a recovery probe so the launch is authorized end to end.
+      const activeProbe = options.delegationFirstRuntime?.recoverySnapshot(ctx.sessionID).activeProbe ?? null
+      const dispatchArgs = activeProbe
+        ? { ...delegateTaskArgs, prompt: appendRecoveryProbeDirective(delegateTaskArgs.prompt, activeProbe.nonce) }
+        : delegateTaskArgs
+
       if (runInBackground) {
         if (!consumePaidLaunchApproval(options, ctx, agentToUse, categoryModel, taskID, paidApprovalNonce)) {
           if (paidSlotAcquired) {
@@ -444,15 +455,15 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
           notifyChildLaunchBlocked(options, ctx, "paid_consent_consumed")
           return "PAID_WORKER_CONSENT_CONSUMED: single-use paid approval did not match the launch identity."
         }
-        return executeBackgroundTask(delegateTaskArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, fallbackChain, paidSlotAcquired)
+        return executeBackgroundTask(dispatchArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, fallbackChain, paidSlotAcquired, activeProbe !== null)
       }
 
       if (options.delegationFirstRuntime) {
         try {
-          return await runDelegationFirstSync({
+          const result = await runDelegationFirstSync({
             options,
             ctx,
-            args: delegateTaskArgs,
+            args: dispatchArgs,
             parentContext,
             agentToUse,
             categoryModel,
@@ -462,6 +473,10 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
             isRootSession,
             taskID,
           })
+          if (activeProbe) {
+            maybeVerifyRecoveryProbe(options.delegationFirstRuntime, ctx.sessionID, result)
+          }
+          return result
         } finally {
           if (paidSlotAcquired) options.delegationFirstRuntime.releasePaidChild()
         }

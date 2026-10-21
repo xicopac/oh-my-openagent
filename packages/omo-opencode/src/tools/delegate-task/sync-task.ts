@@ -31,6 +31,7 @@ export async function executeSyncTask(
   const toastManager = getTaskToastManager()
   let taskId: string | undefined
   let syncSessionID: string | undefined
+  let spawnRootSessionID: string | undefined
   let spawnReservation:
     | Awaited<ReturnType<ExecutorContext["manager"]["reserveSubagentSpawn"]>>
     | undefined
@@ -47,6 +48,7 @@ export async function executeSyncTask(
     }
     const spawn = await reserveSyncSubagentSpawn(executorCtx, parentContext)
     spawnReservation = spawn.reservation
+    spawnRootSessionID = spawn.spawnContext.rootSessionID
     const { spawnContext } = spawn
 
     const createSessionResult = await deps.createSyncSession(client, {
@@ -63,7 +65,7 @@ export async function executeSyncTask(
     }
 
     const sessionID = createSessionResult.sessionID
-    spawnReservation?.commit()
+    spawnReservation?.commit(sessionID)
     syncSessionID = sessionID
 
     const registerSyncSession = async (newSessionID: string): Promise<void> => {
@@ -183,6 +185,9 @@ export async function executeSyncTask(
         })
       }
       scheduleSyncSessionDeletion(client, syncSessionID)
+    }
+    if (syncSessionID && spawnReservation && typeof manager?.releaseSubagentSpawn === "function") {
+      manager.releaseSubagentSpawn(syncSessionID, spawnRootSessionID)
     }
     if (concurrencyAcquired && typeof manager?.releaseSyncSubagentConcurrency === "function") {
       manager.releaseSyncSubagentConcurrency(concurrencyModel)

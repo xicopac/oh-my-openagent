@@ -111,6 +111,7 @@ export function createChatMessageHandler(args: {
     }
 
     if (delegationFirstRuntime) {
+      delegationFirstRuntime.reconcileStaleRecovery(input.sessionID)
       const promptText = extractPromptText(output.parts)
       if (promptText.trim().length > 0) {
         handleUserMessageHumanAuthorization(delegationFirstRuntime, input.sessionID, {

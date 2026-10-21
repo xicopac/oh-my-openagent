@@ -39,6 +39,7 @@ export type RootWorkerPhase = NormalRootWorkerPhase | Exclude<DelegationRecovery
 
 export type DelegationFailureKind =
   | "child_startup_failure"
+  | "child_lost"
   | "watchdog_reclaim_exhausted"
   | "routing_exhausted"
   | "evidence_pipeline_failure"
@@ -68,6 +69,7 @@ export type DelegationRecoverySnapshot = {
   verified: boolean
   handoffPath: string | null
   failureReason: string | null
+  updatedAtMs: number
 }
 
 export type DelegationFailureTransition = {
@@ -121,6 +123,7 @@ type SessionRecord = {
   verified: boolean
   handoffPath: string | null
   failureReason: string | null
+  recoveryUpdatedAtMs: number
 }
 
 export type RootWorkerState = {
@@ -134,6 +137,7 @@ export type RootWorkerState = {
   recordRecoveryProbeFailure(sessionID: string, probeID: string, reason: string): RootWorkerPhase
   markRecoveryHandoff(sessionID: string, path: string): boolean
   markRecoveryHalted(sessionID: string): void
+  reconcileStaleRecovery(sessionID: string): boolean
   recoverySnapshot(sessionID: string): DelegationRecoverySnapshot
   phase(sessionID: string): RootWorkerPhase
   repairReason(sessionID: string): string | null
@@ -190,6 +194,7 @@ export function createRootWorkerState(
         verified: false,
         handoffPath: null,
         failureReason: null,
+        recoveryUpdatedAtMs: 0,
       }
       records.set(sessionID, rec)
     }
@@ -257,6 +262,16 @@ export function createRootWorkerState(
     if (root) rec.modules.add(root)
   }
 
+  // Verified recovery is a success state: reconcile it to normal execution.
+  function healVerifiedRecovery(rec: SessionRecord): void {
+    rec.recoveryPhase = "normal"
+    rec.recoveryEvidence.clear()
+    rec.activeProbe = null
+    rec.failureReason = null
+    rec.workPhase = "worker_evidence_available"
+    rec.recoveryUpdatedAtMs = Date.now()
+  }
+
   function recordFailure(
     rec: SessionRecord,
     evidence: DelegationFailureEvidence,
@@ -265,6 +280,7 @@ export function createRootWorkerState(
     if (!id || rec.recoveryEvidence.has(id) || rec.recoveryPhase === "halt") return false
     rec.recoveryEvidence.set(id, { ...evidence, id })
     rec.failureReason = evidence.reason
+    rec.recoveryUpdatedAtMs = Date.now()
     rec.workPhase = "worker_required"
     if (rec.recoveryPhase === "normal") rec.recoveryPhase = "delegation_degraded"
     if (rec.recoveryEvidence.size >= cfg.recoveryEvidenceThreshold) {
@@ -367,8 +383,14 @@ export function createRootWorkerState(
         return block(rec, REASON_HARD_SAFETY, opClass, hint?.target ?? hint?.command ?? null)
       }
 
-      // 2. Terminal/HALT restrictions — authoritative even over human claim
-      if (rec.recoveryPhase === "recovery_verified" || rec.recoveryPhase === "handoff" || rec.recoveryPhase === "halt") {
+      // 2. Terminal restrictions — authoritative even over human claim. Only
+      //    genuine unsafe end-states block; `recovery_verified` is a success
+      //    state and reconciles back to normal execution automatically,
+      //    including on restored/compacted sessions that still carry it.
+      if (rec.recoveryPhase === "recovery_verified") {
+        healVerifiedRecovery(rec)
+      }
+      if (rec.recoveryPhase === "handoff" || rec.recoveryPhase === "halt") {
         return block(rec, REASON_RECOVERY_TERMINAL, opClass, hint?.target ?? hint?.command ?? null)
       }
 
@@ -455,11 +477,17 @@ export function createRootWorkerState(
 
     noteDelegationHealthy(sessionID) {
       const rec = recordFor(sessionID)
-      if (rec.recoveryPhase !== "delegation_degraded") return
+      if (rec.recoveryPhase === "recovery_verified") {
+        healVerifiedRecovery(rec)
+        return
+      }
+      if (rec.recoveryPhase !== "delegation_degraded" && rec.recoveryPhase !== "recovery_mode") return
       rec.recoveryPhase = "normal"
       rec.recoveryEvidence.clear()
+      rec.activeProbe = null
       rec.failureReason = null
       rec.workPhase = "worker_active"
+      rec.recoveryUpdatedAtMs = Date.now()
     },
 
     recordDelegationFailure(sessionID, evidence) {
@@ -483,10 +511,12 @@ export function createRootWorkerState(
 
     markRecoveryVerified(sessionID, probeID) {
       const rec = recordFor(sessionID)
+      if (rec.recoveryPhase === "recovery_verified" && rec.verified) return true
       if (rec.recoveryPhase !== "recovery_mode" || rec.activeProbe?.probeID !== probeID) return false
       rec.verified = true
       rec.failureReason = null
       rec.recoveryPhase = "recovery_verified"
+      rec.recoveryUpdatedAtMs = Date.now()
       return true
     },
 
@@ -496,6 +526,7 @@ export function createRootWorkerState(
       rec.verificationAttempts += 1
       rec.failureReason = reason
       rec.activeProbe = null
+      rec.recoveryUpdatedAtMs = Date.now()
       if (rec.verificationAttempts >= cfg.maxRecoveryVerificationAttempts) {
         rec.recoveryPhase = "halt"
       }
@@ -514,7 +545,15 @@ export function createRootWorkerState(
       const rec = recordFor(sessionID)
       if (rec.recoveryPhase === "handoff" || rec.recoveryPhase === "halt") {
         rec.recoveryPhase = "halt"
+        rec.recoveryUpdatedAtMs = Date.now()
       }
+    },
+
+    reconcileStaleRecovery(sessionID) {
+      const rec = recordFor(sessionID)
+      if (rec.recoveryPhase !== "recovery_verified") return false
+      healVerifiedRecovery(rec)
+      return true
     },
 
     recoverySnapshot(sessionID) {
@@ -527,6 +566,7 @@ export function createRootWorkerState(
         verified: rec.verified,
         handoffPath: rec.handoffPath,
         failureReason: rec.failureReason,
+        updatedAtMs: rec.recoveryUpdatedAtMs,
       }
     },
 

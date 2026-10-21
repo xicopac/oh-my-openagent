@@ -34,8 +34,14 @@ type ExecuteSyncDeps = {
 }
 
 type SpawnReservation = {
-  commit: () => number
+  commit: (childSessionID?: string) => number
   rollback: () => void
+  release?: (sessionID?: string) => void
+  spawnContext?: {
+    rootSessionID: string
+    parentDepth: number
+    childDepth: number
+  }
 }
 
 const defaultDeps: ExecuteSyncDeps = {
@@ -101,7 +107,7 @@ export async function executeSync(
     handedBackSyncSessions.delete(sessionID)
 
     if (session.isNew) {
-      spawnReservation?.commit()
+      spawnReservation?.commit(sessionID)
     }
 
     if (fallbackChain && fallbackChain.length > 0) {
@@ -198,6 +204,9 @@ export async function executeSync(
     }
 
     if (sessionID && createdSessionForExecution) {
+      if (typeof spawnReservation?.release === "function") {
+        spawnReservation.release(sessionID)
+      }
       subagentSessions.delete(sessionID)
       syncSubagentSessions.delete(sessionID)
       deleteSessionTools(sessionID)

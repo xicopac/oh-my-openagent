@@ -199,11 +199,15 @@ describe("root materialization lane", () => {
       r.rt.beginRecoveryProbe("m", "probe-1", "nonce-1")
       r.rt.markRecoveryVerified("m", "probe-1")
       expect(r.rt.rootPhase("m")).toBe("recovery_verified")
+      r.rt.markRecoveryHandoff("m", "/tmp/project/.omo/handoffs/recovery.md")
+      r.rt.markRecoveryHalted("m")
+      expect(r.rt.rootPhase("m")).toBe("halt")
       const decision = r.rt.preGruntCheck("m", "write", {
         target: ".omo/handoffs/test.md",
         materialization: true,
       })
       expect(decision.block).toBe(true)
+      expect(decision.reason).toBe("delegation_recovery_halted")
     } finally {
       cleanup(r)
     }

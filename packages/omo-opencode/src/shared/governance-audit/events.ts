@@ -91,6 +91,7 @@ export const WORKER_FIRST_AUDIT_EVENTS = [
   "recovery_probe_failed",
   "recovery_handoff",
   "recovery_halted",
+  "recovery_reconciled",
   "root_recovery_action",
   "root_materialization_action",
   "root_human_authorized_action",

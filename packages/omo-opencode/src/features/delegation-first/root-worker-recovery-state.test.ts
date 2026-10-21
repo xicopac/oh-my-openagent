@@ -80,26 +80,82 @@ describe("watchdog-controlled delegation recovery state", () => {
     expect(state.decide("root", "task", { recoveryProbe: false }).block).toBe(true)
   })
 
-  test("verified recovery requires handoff before halt and blocks normal continuation at every terminal phase", () => {
+  test("verified recovery reconciles to healthy execution instead of trapping the session", () => {
     const state = createRootWorkerState({ recoveryEvidenceThreshold: 1 })
     state.recordDelegationFailure("root", failure("bg-1"))
     state.beginRecoveryProbe("root", "probe-1", "nonce-1")
 
     expect(state.markRecoveryVerified("root", "probe-1")).toBe(true)
     expect(state.phase("root")).toBe("recovery_verified")
-    expect(state.decide("root", "read", { target: "packages/omo-opencode/src/features/delegation-first/runtime.ts" }).block).toBe(true)
+
+    // normal work resumes on the next decision: delegation/control tools execute
+    expect(state.decide("root", "task", {}).block).toBe(false)
+    expect(state.decide("root", "todowrite", {}).block).toBe(false)
+    // an anchor produced by the verified worker is readable directly
+    state.noteWorkerEvidence("root", ["src/auth/refresh.ts:24:rotateToken"])
+    expect(state.decide("root", "read", { target: "src/auth/refresh.ts:24:rotateToken" }).block).toBe(false)
+    expect(state.phase("root")).toBe("worker_evidence_available")
+    expect(state.recoverySnapshot("root")).toMatchObject({ phase: "normal", evidence: [] })
+
+    expect(state.phase("fresh-root")).toBe("bootstrap")
+    expect(state.recoverySnapshot("fresh-root").evidence).toEqual([])
+  })
+
+  test("a restored/compacted session still carrying recovery_verified reconciles", () => {
+    const state = createRootWorkerState({ recoveryEvidenceThreshold: 1 })
+    state.recordDelegationFailure("root", failure("bg-1"))
+    state.beginRecoveryProbe("root", "probe-1", "nonce-1")
+    expect(state.markRecoveryVerified("root", "probe-1")).toBe(true)
+
+    // restore/compaction reconciliation path, idempotent
+    expect(state.reconcileStaleRecovery("root")).toBe(true)
+    expect(state.recoverySnapshot("root").phase).toBe("normal")
+    expect(state.reconcileStaleRecovery("root")).toBe(false)
+    expect(state.decide("root", "task", {}).block).toBe(false)
+    expect(state.recoverySnapshot("root").phase).toBe("normal")
+  })
+
+  test("repeated verification stays idempotent", () => {
+    const state = createRootWorkerState({ recoveryEvidenceThreshold: 1 })
+    state.recordDelegationFailure("root", failure("bg-1"))
+    state.beginRecoveryProbe("root", "probe-1", "nonce-1")
+
+    expect(state.markRecoveryVerified("root", "probe-1")).toBe(true)
+    expect(state.markRecoveryVerified("root", "probe-1")).toBe(true)
+    expect(state.phase("root")).toBe("recovery_verified")
+    expect(state.recoverySnapshot("root")).toMatchObject({ verified: true, phase: "recovery_verified" })
+  })
+
+  test("handoff and halt remain genuine terminal blocks", () => {
+    const state = createRootWorkerState({ recoveryEvidenceThreshold: 1 })
+    state.recordDelegationFailure("root", failure("bg-1"))
+    state.beginRecoveryProbe("root", "probe-1", "nonce-1")
+    expect(state.markRecoveryVerified("root", "probe-1")).toBe(true)
 
     expect(state.markRecoveryHandoff("root", "/project/.omo/handoffs/recovery.md")).toBe(true)
     expect(state.phase("root")).toBe("handoff")
-    state.markRecoveryHalted("root")
-    expect(state.phase("root")).toBe("halt")
     expect(state.decide("root", "task", { recoveryProbe: true })).toMatchObject({
       block: true,
       reason: "delegation_recovery_halted",
     })
 
-    expect(state.phase("fresh-root")).toBe("bootstrap")
-    expect(state.recoverySnapshot("fresh-root").evidence).toEqual([])
+    state.markRecoveryHalted("root")
+    expect(state.phase("root")).toBe("halt")
+    expect(state.decide("root", "read", { target: "src/app.ts" })).toMatchObject({
+      block: true,
+      reason: "delegation_recovery_halted",
+    })
+  })
+
+  test("delegation-healthy reconciliation exits recovery_mode", () => {
+    const state = createRootWorkerState()
+    state.recordDelegationFailure("root", failure("bg-1"))
+    state.recordDelegationFailure("root", failure("bg-2", "routing_exhausted"))
+    expect(state.phase("root")).toBe("recovery_mode")
+
+    state.noteDelegationHealthy("root")
+    expect(state.recoverySnapshot("root").phase).toBe("normal")
+    expect(state.recoverySnapshot("root").evidence).toEqual([])
   })
 
   test("bounded verification failure halts without ever marking recovery verified", () => {

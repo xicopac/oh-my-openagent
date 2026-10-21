@@ -13,6 +13,7 @@ import { formatTaskStatus } from "./task-status-format"
 
 import { getAgentDisplayName } from "../../shared/agent-display-names"
 import { recordBackgroundOutputConsumption } from "../../shared/background-output-consumption"
+import { maybeVerifyRecoveryProbe } from "../delegate-task/recovery-probe"
 
 const SISYPHUS_JUNIOR_AGENT = getAgentDisplayName("sisyphus-junior")
 const MISSING_BACKGROUND_TASK_RETRY_DELAY_MS = 100
@@ -198,6 +199,9 @@ export function createBackgroundOutput(
           // Register worker evidence so the root may perform anchored
           // post-evidence verification reads for this completed child.
           delegationFirstRuntime?.noteChildEvidence(resolvedTask.parentSessionId, resultText)
+          if (delegationFirstRuntime) {
+            maybeVerifyRecoveryProbe(delegationFirstRuntime, resolvedTask.parentSessionId, resultText)
+          }
           return resultText
         }
 

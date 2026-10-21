@@ -158,7 +158,7 @@ describe("DELEGATION RECOVERY LIFECYCLE (evidence-gated, watchdog-controlled)", 
     }
   })
 
-  test("5. RECOVERY PROBE lifecycle: verified -> handoff -> halt; terminal phases block everything", async () => {
+  test("5. RECOVERY PROBE lifecycle: verified reconciles to healthy; handoff/halt stay terminal", async () => {
     const r = makeRuntime()
     try {
       r.rt.beginDelegation("job", "m", "map auth", [freeWorker("free-1")])
@@ -176,19 +176,30 @@ describe("DELEGATION RECOVERY LIFECYCLE (evidence-gated, watchdog-controlled)", 
 
       expect(r.rt.markRecoveryVerified("m", "probe-1")).toBe(true)
       expect(r.rt.rootPhase("m")).toBe("recovery_verified")
-      expect(r.rt.preGruntCheck("m", "read", {
-        target: "packages/omo-opencode/src/features/delegation-first/runtime.ts",
-      }).block).toBe(true)
+      // verified is a success state: normal execution resumes on the next decision
+      expect(r.rt.preGruntCheck("m", "task", {}).block).toBe(false)
+      expect(r.rt.recoverySnapshot("m").phase).toBe("normal")
+      expect(r.rt.rootPhase("m")).toBe("worker_evidence_available")
 
-      expect(r.rt.markRecoveryHandoff("m", "/project/.omo/handoffs/recovery.md")).toBe(true)
-      expect(r.rt.rootPhase("m")).toBe("handoff")
-      r.rt.markRecoveryHalted("m")
-      expect(r.rt.rootPhase("m")).toBe("halt")
-      expect(r.rt.preGruntCheck("m", "task", { recoveryProbe: true }).block).toBe(true)
-      expect(r.rt.recoverySnapshot("m")).toMatchObject({
-        verified: true,
-        handoffPath: "/project/.omo/handoffs/recovery.md",
-      })
+      // handoff/halt remain genuine terminal blocks
+      const h = makeRuntime()
+      try {
+        h.rt.noteChildStartupFailure("m", "child", "EACCES")
+        h.rt.noteEvidencePipelineBroken("m", "child-2", "evidence never advanced")
+        h.rt.beginRecoveryProbe("m", "probe-1", "nonce-1")
+        expect(h.rt.markRecoveryVerified("m", "probe-1")).toBe(true)
+        expect(h.rt.markRecoveryHandoff("m", "/project/.omo/handoffs/recovery.md")).toBe(true)
+        expect(h.rt.rootPhase("m")).toBe("handoff")
+        h.rt.markRecoveryHalted("m")
+        expect(h.rt.rootPhase("m")).toBe("halt")
+        expect(h.rt.preGruntCheck("m", "task", { recoveryProbe: true }).block).toBe(true)
+        expect(h.rt.recoverySnapshot("m")).toMatchObject({
+          verified: true,
+          handoffPath: "/project/.omo/handoffs/recovery.md",
+        })
+      } finally {
+        cleanup(h)
+      }
     } finally {
       cleanup(r)
     }
@@ -291,6 +302,48 @@ describe("DELEGATION RECOVERY LIFECYCLE (evidence-gated, watchdog-controlled)", 
       expect(events).toContain("recovery_handoff")
       expect(events).toContain("recovery_halted")
       expect(countEvent(r.root, "delegation_failure_recorded")).toBe(2)
+    } finally {
+      cleanup(r)
+    }
+  })
+
+  test("11. SESSION CONTINUES AFTER SUCCESSFUL RECOVERY (trigger -> verify -> work -> restore -> work)", async () => {
+    const r = makeRuntime()
+    try {
+      // 1. trigger recovery
+      r.rt.noteChildStartupFailure("m", "child", "EACCES")
+      r.rt.noteEvidencePipelineBroken("m", "child-2", "evidence never advanced")
+      expect(r.rt.rootPhase("m")).toBe("recovery_mode")
+
+      // 2. verify recovery successfully
+      r.rt.beginRecoveryProbe("m", "probe-1", "nonce-1")
+      expect(r.rt.markRecoveryVerified("m", "probe-1")).toBe(true)
+      expect(r.rt.rootPhase("m")).toBe("recovery_verified")
+
+      // 3+4. normal work and tool execution resume
+      expect(r.rt.preGruntCheck("m", "task", {}).block).toBe(false)
+      expect(r.rt.preGruntCheck("m", "todowrite", {}).block).toBe(false)
+      expect(r.rt.recoverySnapshot("m").phase).toBe("normal")
+
+      // 5. a session restored/compacted while still carrying recovery_verified reconciles
+      r.rt.noteChildStartupFailure("m", "child-3", "EACCES")
+      r.rt.noteEvidencePipelineBroken("m", "child-4", "evidence never advanced")
+      expect(r.rt.rootPhase("m")).toBe("recovery_mode")
+      r.rt.beginRecoveryProbe("m", "probe-2", "nonce-2")
+      expect(r.rt.markRecoveryVerified("m", "probe-2")).toBe(true)
+      expect(r.rt.rootPhase("m")).toBe("recovery_verified")
+      expect(r.rt.reconcileStaleRecovery("m")).toBe(true)
+      expect(r.rt.recoverySnapshot("m").phase).toBe("normal")
+      expect(r.rt.reconcileStaleRecovery("m")).toBe(false)
+
+      // 6. tools still work and the state stays HEALTHY
+      expect(r.rt.preGruntCheck("m", "task", {}).block).toBe(false)
+      expect(r.rt.recoverySnapshot("m").phase).toBe("normal")
+      expect(r.rt.recoverySnapshot("m")).toMatchObject({ phase: "normal", evidence: [] })
+      await r.audit.flush()
+      expect(readEventNames(r.root)).toContain("recovery_verified")
+      expect(readEventNames(r.root)).toContain("recovery_reconciled")
+      expect(readEventNames(r.root)).not.toContain("recovery_halted")
     } finally {
       cleanup(r)
     }

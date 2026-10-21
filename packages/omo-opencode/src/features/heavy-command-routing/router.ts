@@ -26,6 +26,8 @@ export interface RoutingDeps {
   readonly inControlSlice?: boolean
   readonly bashToolTimeoutMs?: number
   readonly aiJobBin?: string
+  readonly recoveryAuthorized?: boolean
+  readonly humanAuthorized?: boolean
 }
 
 const RESOURCE_CLASS_TO_JOB_TYPE: Record<ResourceClass, JobType | "n/a"> = {
@@ -78,6 +80,12 @@ export function buildAiJobCommand(
 }
 
 export function decideHeavyCommandRouting(command: string, deps?: RoutingDeps): RoutingDecision {
+  if (deps?.recoveryAuthorized === true) {
+    return { action: "direct", reason: "recovery-authorized" }
+  }
+  if (deps?.humanAuthorized === true) {
+    return { action: "direct", reason: "human-authorized" }
+  }
   if (deps?.inControlSlice !== true) {
     return { action: "direct", reason: "not-in-control-slice" }
   }

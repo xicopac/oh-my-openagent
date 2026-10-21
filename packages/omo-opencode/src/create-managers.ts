@@ -2,7 +2,7 @@ import type { OhMyOpenCodeConfig } from "./config"
 import type { ModelCacheState } from "./plugin-state"
 import type { PluginContext, TmuxConfig } from "./plugin/types"
 
-import type { SubagentSessionCreatedEvent } from "./features/background-agent"
+import type { SubagentSessionCreatedEvent, SubagentSessionDeletedEvent } from "./features/background-agent"
 import { BackgroundManager } from "./features/background-agent"
 import type { MonitorManager } from "./features/monitor"
 import { createMonitorManager } from "./features/monitor"
@@ -188,14 +188,23 @@ export function createManagers(args: {
     const sweepIntervalMs = Math.max(watchdogCfg?.quiet_stall_threshold_ms ?? 180_000, 5_000) / 6
     const timer = setInterval(() => {
       try {
-        const results = delegationFirstRuntime.checkAllWatchdogs()
-        for (const { sessionID, result } of results) {
-          if (!result.timedOut || !result.stallMode || result.stallMode === "QUIET_BUT_ACTIVE") continue
-          const task = backgroundManager?.findBySession(sessionID)
-          const providerModel = task?.model
-            ? `${task.model.providerID}/${task.model.modelID}`
-            : null
-          delegationFirstRuntime.reclaimStalled(sessionID, providerModel)
+        for (const { sessionID, result } of delegationFirstRuntime.checkAllWatchdogs()) {
+          try {
+            if (!result.timedOut || !result.stallMode || result.stallMode === "QUIET_BUT_ACTIVE") continue
+            const task = backgroundManager?.findBySession(sessionID)
+            const providerModel = task?.model
+              ? `${task.model.providerID}/${task.model.modelID}`
+              : null
+            delegationFirstRuntime.reclaimStalled(sessionID, providerModel)
+          } catch (error) {
+            log("[create-managers] watchdog sweep session error:", { sessionID, error })
+            governanceAudit?.write(sessionID, {
+              subsystem: "watchdog",
+              event: "watchdog_sweep_error",
+              session_id: sessionID,
+              error: String(error),
+            })
+          }
         }
       } catch (error) {
         log("[create-managers] watchdog sweep error:", { error })
@@ -289,13 +298,13 @@ export function createManagers(args: {
 
         log("[create-managers] onSubagentSessionCreated callback completed")
     },
-    onSubagentSessionDeleted: async (event: { sessionID: string }) => {
+    onSubagentSessionDeleted: async (event: SubagentSessionDeletedEvent) => {
       log("[create-managers] onSubagentSessionDeleted callback received", {
         sessionID: event.sessionID,
+        terminalStage: event.terminalStage,
       })
 
-      delegationFirstRuntime?.watchdogTerminal(event.sessionID)
-      delegationFirstRuntime?.detachChildSession(event.sessionID)
+      delegationFirstRuntime?.detachChildSession(event.sessionID, event.terminalStage)
 
       await tmuxSessionManager.onSessionDeleted(event).catch((error) => {
         log("[create-managers] onSubagentSessionDeleted callback error:", {
@@ -333,6 +342,15 @@ export function createManagers(args: {
       : undefined,
     launchGuard: resourceGovernorRuntime?.launchGuard,
   })
+
+  // Liveness probe: lets the delegation runtime distinguish "root is waiting on
+  // a child that still exists" from "the child is gone", so a vanished child is
+  // detected without waiting for the 180s stall threshold.
+  delegationFirstRuntime?.setLivenessProbe((parentSessionID) => ({
+    liveChildren: delegationFirstRuntime?.liveChildCount(parentSessionID) ?? 0,
+    activeBackgroundTasks: (backgroundManager?.getTasksByParentSession(parentSessionID) ?? [])
+      .filter((task) => task.status === "running" || task.status === "pending").length,
+  }))
 
   delegationFirstRuntime?.setRecoverySink({
     cancel: async (sessionID, reason) => {
