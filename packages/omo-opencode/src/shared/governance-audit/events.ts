@@ -108,3 +108,18 @@ export const GOVERNANCE_DELEGATION_WATCHDOG_EVENTS = [
   ...WATCHDOG_AUDIT_EVENTS,
   ...WORKER_FIRST_AUDIT_EVENTS,
 ] as const
+
+/**
+ * Paid-model dispatch gate decisions. Exactly one of these events is recorded
+ * for every paid/unknown master-model decision: an approval-backed allow, a
+ * denial that fell back to a provably-free model, or a denial that could not
+ * fall back and therefore failed closed. Metadata only (model ids, approval
+ * attribution, reason); never prompts or secrets.
+ */
+export const PAID_MODEL_GATE_AUDIT_EVENTS = [
+  "paid_model_approved_use",
+  "paid_model_denied_fallback",
+  "paid_model_denied_error",
+] as const
+
+export type PaidModelGateAuditEvent = (typeof PAID_MODEL_GATE_AUDIT_EVENTS)[number]

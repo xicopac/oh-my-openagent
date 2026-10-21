@@ -21,9 +21,11 @@ export {
   STALL_RECOVERY_AUDIT_EVENTS,
   WATCHDOG_AUDIT_EVENTS,
   WORKER_FIRST_AUDIT_EVENTS,
+  PAID_MODEL_GATE_AUDIT_EVENTS,
   type ChildLifecycleAuditEvent,
   type DelegationAuditEvent,
   type StallRecoveryAuditEvent,
   type WatchdogAuditEvent,
   type WorkerFirstAuditEvent,
+  type PaidModelGateAuditEvent,
 } from "./events"
