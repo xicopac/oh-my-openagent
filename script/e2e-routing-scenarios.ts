@@ -248,7 +248,9 @@ export async function runRuntimeScenarios(): Promise<{ checks: CheckResult[]; tr
     run.rt.noteReplacementSession("job", "child-2")
     run.rt.attachChildSession("root", "child-2")
     run.rt.markRequestStarted("child-2")
-    run.rt.detachChildSession("child-2")
+    // Healthy completion: terminal BEFORE detach (a running detach would
+    // model an unexpected exit and trigger a bounded redispatch instead).
+    run.rt.detachChildSession("child-2", "completed")
 
     events = await snapshot(run)
     allChecks.push(
@@ -299,12 +301,16 @@ export async function runRuntimeScenarios(): Promise<{ checks: CheckResult[]; tr
     run.rt.noteReplacementSession("job", "child-3")
     run.rt.attachChildSession("root", "child-3")
     run.rt.markRequestStarted("child-3")
-    run.rt.detachChildSession("child-3")
+    // Healthy completion: mark the replacement terminal BEFORE detach, so the
+    // detach is a clean completion rather than an unexpected exit (which
+    // would trigger a bounded unexpected-exit redispatch instead).
+    run.rt.detachChildSession("child-3", "completed")
     events = await snapshot(run)
     allChecks.push(
       countNamed(events, "replacement_child_completed") === 1
+        && countNamed(events, "child_exited_unexpectedly") === 0
         ? ok("Completion exactly once (3-candidate)")
-        : fail("Completion exactly once (3-candidate)", [`replacement_child_completed=${countNamed(events, "replacement_child_completed")}`]),
+        : fail("Completion exactly once (3-candidate)", [`replacement_child_completed=${countNamed(events, "replacement_child_completed")} child_exited_unexpectedly=${countNamed(events, "child_exited_unexpectedly")}`]),
     )
     allChecks.push(
       run.rt.lineage("job")?.attempt_number === 3
@@ -923,13 +929,17 @@ export async function runFreeBeforePaidEscalationScenario(): Promise<{ checks: C
     ctx.rt.attachChildSession("root", "child")
     ctx.rt.markRequestStarted("child")
     ctx.rt.noteChildStartupFailure("root", "child", "0ms child / EACCES")
-    const repairOk = ctx.rt.rootPhase("root") === "root_repair" && ctx.rt.preGruntCheck("root", "read", { target: "src/a.ts" }).block === false
+    // Evidence-based degradation (no repair phase, no takeover): the root
+    // stays degraded, root work stays blocked, and the paid cap still holds.
+    const degradedOk = ctx.rt.rootPhase("root") === "delegation_degraded"
+      && ctx.rt.rootRepairReason("root") === "child_startup_failure"
+      && ctx.rt.preGruntCheck("root", "read", { target: "src/a.ts" }).block === true
     const paidStillCapped = ctx.rt.tryAcquirePaidChild() === true && ctx.rt.tryAcquirePaidChild() === false
     ctx.rt.releasePaidChild()
     allChecks.push(
-      repairOk && paidStillCapped
-        ? ok("ROOT_REPAIR_MODE unaffected")
-        : fail("ROOT_REPAIR_MODE unaffected", [`phase=${ctx.rt.rootPhase("root")}`]),
+      degradedOk && paidStillCapped
+        ? ok("Degraded mode keeps root blocked and paid capped")
+        : fail("Degraded mode keeps root blocked and paid capped", [`phase=${ctx.rt.rootPhase("root")}`]),
     )
   } finally {
     ctx.dispose()

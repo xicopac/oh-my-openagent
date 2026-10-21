@@ -46,6 +46,7 @@ import {
   runPostEvidenceVerificationScenario,
   runFreeWorkerConcurrencyScenario,
 } from "./e2e-routing-post-evidence-scenarios"
+import { runWatchdogLivenessScenarios } from "./e2e-routing-watchdog-scenarios"
 
 const REPO_ROOT = join(import.meta.dir, "..")
 const MOCK_PATH = join(import.meta.dir, "e2e-routing", "mock-provider.mjs")
@@ -356,6 +357,13 @@ async function main(): Promise<void> {
   const freeConcurrency = await runFreeWorkerConcurrencyScenario()
   checks.push(...freeConcurrency.checks)
   tempDirs.push(...freeConcurrency.traceDirs)
+
+  // Tier B9: WATCHDOG LIVENESS (dead/stalled-child reclaim with bounded
+  // recovery + child model-failure failover with no-eligible-worker
+  // exhaustion, plus the dispatched/reclaimed/replaced summary)
+  const watchdogLiveness = await runWatchdogLivenessScenarios()
+  checks.push(...watchdogLiveness.checks)
+  tempDirs.push(...watchdogLiveness.traceDirs)
 
   // Tier A: process-level worker-first gate
   let procEnvRoot: string | undefined

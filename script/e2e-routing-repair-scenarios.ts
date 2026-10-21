@@ -1,8 +1,14 @@
 /**
- * Deterministic E2E scenarios for ROOT_REPAIR_MODE + EXCEPTIONAL_ROOT_TAKEOVER
- * (the break-glass path). These drive the REAL DelegationFirstRuntime with a
- * scripted worker ladder and assert on the same structured governance audit
- * events a live OpenCode process would write.
+ * Deterministic E2E scenarios for evidence-based routing degradation (the
+ * `delegation_degraded` path). These drive the REAL DelegationFirstRuntime
+ * with a scripted worker ladder and assert on the same structured governance
+ * audit events a live OpenCode process would write.
+ *
+ * Current semantics (no root takeover): after a routing failure the phase is
+ * `delegation_degraded` (or `recovery_mode` past the evidence threshold),
+ * `rootRepairReason` reports the routing reason, broad root work stays
+ * blocked, and `delegation_failure_recorded` is audited. Recovery returns via
+ * a fresh delegation reaching request-started (`delegation_healthy`).
  *
  * No external model, no network, no paid call. Candidate order and failure
  * behavior are fully scripted.
@@ -17,7 +23,7 @@ import {
   type DelegationFirstRuntime,
   type ReplayableAssignment,
 } from "../packages/omo-opencode/src/features/delegation-first"
-import type { WorkerCandidate } from "../packages/omo-opencode/src/features/delegation-ladder"
+import type { AttemptResult, WorkerCandidate } from "../packages/omo-opencode/src/features/delegation-ladder"
 import { createPaidWorkerGate } from "../packages/omo-opencode/src/tools/delegate-task/paid-worker-gate"
 
 export type CheckResult = { name: string; passed: boolean; failures: string[] }
@@ -153,27 +159,37 @@ export async function runRepairScenarios(): Promise<{ checks: CheckResult[]; tra
     traceDirs.push(run.ctx.auditRoot)
   }
 
-  // 2. STARTUP FAILURE enters repair + root work allowed + logical task active
+  // 2. STARTUP FAILURE degrades with routing evidence (no silent drop, no takeover)
   {
+    let phase = ""
+    let reason: string | null = null
     const run = await runScenario(async (ctx) => {
       const { rt } = ctx
       rt.beginDelegation("job", "root", "map auth", [freeWorker("free-a")])
       rt.attachChildSession("root", "child")
       rt.markRequestStarted("child")
       rt.noteChildStartupFailure("root", "child", "EACCES")
+      phase = rt.rootPhase("root")
+      reason = rt.rootRepairReason("root")
     })
-    const ok = run.names.includes("root_repair_mode_entered")
-      && run.names.includes("child_startup_failure".length > 0 ? "root_repair_mode_entered" : "x")
+    const kinds = run.events
+      .filter((e) => e.event === "delegation_failure_recorded")
+      .map((e) => String(e.kind ?? ""))
+    const ok = phase === "delegation_degraded"
+      && reason === "child_startup_failure"
+      && kinds.includes("child_startup_failure")
+      && !run.names.includes("exceptional_root_takeover")
     checks.push(
       ok
-        ? { name: "Startup failure enters repair", passed: true, failures: [] }
-        : { name: "Startup failure enters repair", passed: false, failures: [`events=${run.names.join(",")}`] },
+        ? { name: "Startup failure degrades with routing evidence", passed: true, failures: [] }
+        : { name: "Startup failure degrades with routing evidence", passed: false, failures: [`phase=${phase} reason=${reason} kinds=${kinds.join(",")} events=${run.names.join(",")}`] },
     )
     traceDirs.push(run.ctx.auditRoot)
   }
 
-  // 3. ROOT WORK ALLOWED DURING REPAIR (the break-glass)
+  // 3. ROOT BROAD WORK STAYS BLOCKED after a routing failure (no break-glass)
   {
+    let blockedAll = false
     const run = await runScenario(async (ctx) => {
       const { rt } = ctx
       rt.beginDelegation("job", "root", "map auth", [freeWorker("free-a")])
@@ -183,20 +199,20 @@ export async function runRepairScenarios(): Promise<{ checks: CheckResult[]; tra
       const read = rt.preGruntCheck("root", "read", { target: "src/a.ts" })
       const bash = rt.preGruntCheck("root", "bash", { command: "grep -R x src/" })
       const edit = rt.preGruntCheck("root", "edit", { target: "src/a.ts" })
-      if (read.block || bash.block || edit.block) {
-        throw new Error("root repo work blocked during repair")
-      }
+      blockedAll = read.block && bash.block && edit.block
     })
-    const ok = run.names.includes("root_repair_action")
+    const ok = blockedAll
+      && run.names.includes("delegation_failure_recorded")
+      && !run.names.includes("exceptional_root_takeover")
     checks.push(
       ok
-        ? { name: "Root work allowed during repair", passed: true, failures: [] }
-        : { name: "Root work allowed during repair", passed: false, failures: [`events=${run.names.join(",")}`] },
+        ? { name: "Root broad work stays blocked after routing failure", passed: true, failures: [] }
+        : { name: "Root broad work stays blocked after routing failure", passed: false, failures: [`blockedAll=${blockedAll} events=${run.names.join(",")}`] },
     )
     traceDirs.push(run.ctx.auditRoot)
   }
 
-  // 4. LOGICAL TASK REMAINS ACTIVE during repair (no premature complete/fail)
+  // 4. LOGICAL TASK REMAINS ACTIVE after a routing failure (evidence recorded, no terminal)
   {
     const run = await runScenario(async (ctx) => {
       const { rt } = ctx
@@ -205,7 +221,8 @@ export async function runRepairScenarios(): Promise<{ checks: CheckResult[]; tra
       rt.markRequestStarted("child")
       rt.noteChildStartupFailure("root", "child", "EACCES")
     })
-    const noTerminal = !run.names.includes("retry_chain_exhausted")
+    const noTerminal = run.names.includes("delegation_failure_recorded")
+      && !run.names.includes("retry_chain_exhausted")
       && !run.names.includes("exceptional_root_takeover")
     checks.push(
       noTerminal
@@ -215,15 +232,16 @@ export async function runRepairScenarios(): Promise<{ checks: CheckResult[]; tra
     traceDirs.push(run.ctx.auditRoot)
   }
 
-  // 5. SUCCESSFUL REPAIR returns to worker-first (repair -> retry -> evidence)
+  // 5. RECOVERY returns to worker-first (degraded -> fresh delegation -> healthy -> evidence)
   {
+    let finalPhase = ""
     const run = await runScenario(async (ctx) => {
       const { rt } = ctx
       rt.beginDelegation("job", "root", "map auth", [freeWorker("free-a")])
       rt.attachChildSession("root", "child")
       rt.markRequestStarted("child")
       rt.noteChildStartupFailure("root", "child", "EACCES")
-      // root fixes, then ONE retry delegation reaches request-started
+      // a fresh delegation reaching request-started proves the path works again
       rt.beginDelegation("job2", "root", "map auth (retry)", [freeWorker("free-a")])
       rt.attachChildSession("root", "child2")
       rt.markRequestStarted("child2")
@@ -235,46 +253,66 @@ export async function runRepairScenarios(): Promise<{ checks: CheckResult[]; tra
         confidence: 0.9,
         unresolved: [],
       })
+      finalPhase = rt.rootPhase("root")
     })
-    const ok = run.names.includes("root_repair_mode_entered")
-      && run.names.includes("delegation_retry_succeeded")
-      && run.names.includes("root_repair_mode_exited")
+    const ok = run.names.includes("delegation_failure_recorded")
+      && run.names.includes("delegation_healthy")
       && run.names.includes("worker_evidence_available")
+      && finalPhase === "worker_evidence_available"
       && !run.names.includes("exceptional_root_takeover")
     checks.push(
       ok
-        ? { name: "Successful repair returns to worker-first", passed: true, failures: [] }
-        : { name: "Successful repair returns to worker-first", passed: false, failures: [`events=${run.names.join(",")}`] },
+        ? { name: "Recovery returns to worker-first", passed: true, failures: [] }
+        : { name: "Recovery returns to worker-first", passed: false, failures: [`phase=${finalPhase} events=${run.names.join(",")}`] },
     )
     traceDirs.push(run.ctx.auditRoot)
   }
 
-  // 6. FAILED REPAIR permits root takeover (repair -> retry failed -> exceptional takeover)
+  // 6. REPEATED ROUTING FAILURES accumulate evidence; root work stays blocked (no takeover)
   {
+    let firstKind = ""
+    let secondKind = ""
+    let phase = ""
+    let reason: string | null = null
+    let blocked = false
     const run = await runScenario(async (ctx) => {
       const { rt } = ctx
-      rt.beginDelegation("job", "root", "map auth", [freeWorker("free-a")])
+      rt.beginDelegation("job", "root", "trace auth", [freeWorker("free-a")])
       rt.attachChildSession("root", "child")
       rt.markRequestStarted("child")
-      rt.noteChildStartupFailure("root", "child", "EACCES")
-      rt.noteDelegationRetryFailed("root", "still broken")
-      rt.enterExceptionalTakeover("root", "delegation remains unusable after repair")
-      const blocked = rt.preGruntCheck("root", "bash", { command: "grep -R x src/" }).block
-      if (blocked) throw new Error("root blocked after takeover")
+      // A single free worker with no stronger rung: bounded retries then give up.
+      const weak: AttemptResult = {
+        adequate: false,
+        objective: "trace auth middleware",
+        status: "partial",
+        findings: [],
+        confidence: 0.3,
+        unresolved: ["where is the token refresh path?"],
+      }
+      firstKind = rt.recordWorkerResult("job", weak).kind
+      secondKind = rt.recordWorkerResult("job", weak).kind
+      phase = rt.rootPhase("root")
+      reason = rt.rootRepairReason("root")
+      blocked = rt.preGruntCheck("root", "bash", { command: "grep -R x ." }).block
     })
-    const ok = run.names.includes("root_repair_mode_entered")
-      && run.names.includes("delegation_retry_failed")
-      && run.names.includes("exceptional_root_takeover")
+    const ok = firstKind === "retry_refined"
+      && secondKind === "give_up"
+      && phase === "delegation_degraded"
+      && reason === "no_sufficient_worker"
+      && blocked
+      && run.names.includes("delegation_failure_recorded")
+      && !run.names.includes("exceptional_root_takeover")
     checks.push(
       ok
-        ? { name: "Failed repair permits root takeover", passed: true, failures: [] }
-        : { name: "Failed repair permits root takeover", passed: false, failures: [`events=${run.names.join(",")}`] },
+        ? { name: "Repeated routing failures keep root blocked", passed: true, failures: [] }
+        : { name: "Repeated routing failures keep root blocked", passed: false, failures: [`first=${firstKind} second=${secondKind} phase=${phase} reason=${reason} blocked=${blocked} events=${run.names.join(",")}`] },
     )
     traceDirs.push(run.ctx.auditRoot)
   }
 
-  // 7. MODEL FAILOVER does not over-trigger repair (free-A disabled -> free-B works)
+  // 7. MODEL FAILOVER does not degrade the root (free-A disabled -> free-B works)
   {
+    let phase = ""
     const run = await runScenario(async (ctx) => {
       const { rt } = ctx
       const sink = {
@@ -289,41 +327,51 @@ export async function runRepairScenarios(): Promise<{ checks: CheckResult[]; tra
       rt.attachChildSession("root", "child-a")
       rt.markRequestStarted("child-a")
       rt.recordModelUnavailable("child-a", "free-a", "model disabled")
-      // failover path: no repair, still normal worker-first
+      // failover path: no degradation, still normal worker-first
       rt.attachChildSession("root", "child-b")
       rt.markRequestStarted("child-b")
+      phase = rt.rootPhase("root")
     })
-    const ok = !run.names.includes("root_repair_mode_entered")
+    const ok = !run.names.includes("delegation_failure_recorded")
       && run.names.includes("worker_requirement_satisfied")
+      && phase === "worker_active"
     checks.push(
       ok
-        ? { name: "Model failover doesn't over-trigger repair", passed: true, failures: [] }
-        : { name: "Model failover doesn't over-trigger repair", passed: false, failures: [`events=${run.names.join(",")}`] },
+        ? { name: "Model failover doesn't degrade the root", passed: true, failures: [] }
+        : { name: "Model failover doesn't degrade the root", passed: false, failures: [`phase=${phase} events=${run.names.join(",")}`] },
     )
     traceDirs.push(run.ctx.auditRoot)
   }
 
-  // 8. PAID-CHILD BOUNDARY remains intact during repair/takeover (cap 1 holds)
+  // 8. PAID-CHILD BOUNDARY remains intact while degraded (cap 1 holds)
+  // (two accumulated routing failures cross the evidence threshold, so the
+  // phase is deterministically recovery_mode; the paid cap holds in both)
   {
+    let phase = ""
+    let capsHold = false
     const run = await runScenario(async (ctx) => {
       const { rt } = ctx
       rt.beginDelegation("job", "root", "map auth", [freeWorker("free-a")])
       rt.attachChildSession("root", "child")
       rt.markRequestStarted("child")
       rt.noteChildStartupFailure("root", "child", "EACCES")
-      // repair mode does NOT lift the paid concurrency cap
+      // degradation does NOT lift the paid concurrency cap
       const a = rt.tryAcquirePaidChild()
       const b = rt.tryAcquirePaidChild()
-      if (!a || b) throw new Error("paid cap broken during repair")
       rt.releasePaidChild()
-      rt.enterExceptionalTakeover("root", "takeover")
+      // a further routing failure (no relaunch sink) keeps the cap intact
+      rt.recordModelUnavailable("child", "free-a", "model disabled")
       const c = rt.tryAcquirePaidChild()
       const d = rt.tryAcquirePaidChild()
-      if (!c || d) throw new Error("paid cap broken during takeover")
       rt.releasePaidChild()
+      capsHold = a && !b && c && !d
+      phase = rt.rootPhase("root")
     })
+    const ok = capsHold && phase === "recovery_mode"
     checks.push(
-      { name: "Paid-child boundary remains intact", passed: true, failures: [] },
+      ok
+        ? { name: "Paid-child boundary remains intact", passed: true, failures: [] }
+        : { name: "Paid-child boundary remains intact", passed: false, failures: [`capsHold=${capsHold} phase=${phase}`] },
     )
     traceDirs.push(run.ctx.auditRoot)
   }
@@ -336,14 +384,17 @@ export async function runRepairScenarios(): Promise<{ checks: CheckResult[]; tra
       rt.attachChildSession("root", "child")
       rt.markRequestStarted("child")
       rt.noteChildStartupFailure("root", "child", "EACCES")
-      rt.enterExceptionalTakeover("root", "takeover")
     })
-    const once = countNamed(run.events, "root_repair_mode_entered") === 1
-      && countNamed(run.events, "exceptional_root_takeover") === 1
+    const startupFailures = run.events.filter(
+      (e) => e.event === "delegation_failure_recorded" && String(e.kind ?? "") === "child_startup_failure",
+    )
+    const once = countNamed(run.events, "delegation_failure_recorded") === 1
+      && startupFailures.length === 1
+      && !run.names.includes("exceptional_root_takeover")
     checks.push(
       once
         ? { name: "Audit events emitted exactly once", passed: true, failures: [] }
-        : { name: "Audit events emitted exactly once", passed: false, failures: [`counts entered=${countNamed(run.events, "root_repair_mode_entered")} takeover=${countNamed(run.events, "exceptional_root_takeover")}`] },
+        : { name: "Audit events emitted exactly once", passed: false, failures: [`counts recorded=${countNamed(run.events, "delegation_failure_recorded")} events=${run.names.join(",")}`] },
     )
     traceDirs.push(run.ctx.auditRoot)
   }
