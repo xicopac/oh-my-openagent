@@ -135,4 +135,49 @@ describe("classifyStallMode", () => {
     expect(r.mode).toBe("QUIET_BUT_ACTIVE")
     expect(r.timedOut).toBe(false)
   })
+
+  test("never classifies a completed session as stalled", () => {
+    // given: a child that produced progress and then completed hours ago
+    const m = meta("completed", {
+      status: "completed",
+      progressCounter: 5,
+      lastActivityAtMs: 0,
+      nowMs: 10_000_000,
+    })
+    // when
+    const r = classifyStallMode(m, DEFAULT_STALL_TIMEOUTS)
+    // then
+    expect(r.mode).toBe("QUIET_BUT_ACTIVE")
+    expect(r.timedOut).toBe(false)
+  })
+
+  test("never classifies a cancelled session as stalled", () => {
+    // given: a cancelled child with a stale non-terminal stage timestamp
+    const m = meta("first_response", {
+      status: "cancelled",
+      progressCounter: 5,
+      lastActivityAtMs: 0,
+      nowMs: 10_000_000,
+    })
+    // when
+    const r = classifyStallMode(m, DEFAULT_STALL_TIMEOUTS)
+    // then
+    expect(r.mode).toBe("QUIET_BUT_ACTIVE")
+    expect(r.timedOut).toBe(false)
+  })
+
+  test("never classifies an errored session as stalled", () => {
+    // given: a child that failed after producing progress
+    const m = meta("failed", {
+      status: "error",
+      progressCounter: 5,
+      lastActivityAtMs: 0,
+      nowMs: 10_000_000,
+    })
+    // when
+    const r = classifyStallMode(m, DEFAULT_STALL_TIMEOUTS)
+    // then
+    expect(r.mode).toBe("QUIET_BUT_ACTIVE")
+    expect(r.timedOut).toBe(false)
+  })
 })

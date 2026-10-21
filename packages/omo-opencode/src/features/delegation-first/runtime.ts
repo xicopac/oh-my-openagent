@@ -316,6 +316,19 @@ export function createDelegationFirstRuntime(
     return sessionToAssignment.get(sessionID)
   }
 
+  function releaseChildSessionState(sessionID: string): void {
+    if (paidSessions.has(sessionID)) {
+      paidSessions.delete(sessionID)
+      paidGate.release()
+    }
+    replacementSessions.delete(sessionID)
+    watchdog.unregister(sessionID)
+    sessionJob.delete(sessionID)
+    sessionToAssignment.delete(sessionID)
+    pendingRequestStarted.delete(sessionID)
+    modelRecoveredSessions.delete(sessionID)
+  }
+
   function applyRelaunchOutcome(
     oldSessionID: string,
     assignmentID: string,
@@ -829,7 +842,9 @@ export function createDelegationFirstRuntime(
             duration_ms: durationMs,
           })
         }
+        recovery.reset(episodeKey)
         watchdog.onTerminal(sessionID, "cancelled")
+        releaseChildSessionState(sessionID)
         void sink?.cancel(sessionID, `hard circuit breaker tripped after ${durationMs}ms in ${result.stallMode}`)
         return
       }

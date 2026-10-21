@@ -137,4 +137,58 @@ describe("delegation-first child stall lifecycle and recovery", () => {
     expect(rt.unavailableModels()).toContain("opengateway/explore")
     expect(eventNames(events, "child1")).toContain("worker_model_unavailable")
   })
+
+  test("a completed child is never reclaimed as a stall", () => {
+    // given: a child that delivered progress and then completed, later swept
+    const { writer, events } = captureAudit()
+    const rt = createDelegationFirstRuntime(writer, {})
+    const cancelled: string[] = []
+    rt.setRecoverySink({ cancel: async (sessionID) => void cancelled.push(sessionID) })
+    const t0 = Date.now()
+    rt.attachChildSession("parent", "child1")
+    rt.markRequestStarted("child1")
+    rt.watchdogActivity("child1")
+    rt.watchdogTerminal("child1")
+
+    // when: a sweep runs hours after completion
+    const child = rt.checkAllWatchdogs(t0 + 10_000_000).find((r) => r.sessionID === "child1")
+    rt.reclaimStalled("child1", "opengateway/explore", t0 + 10_000_000)
+
+    // then: the terminal child is not timed out, not cancelled, not reclaimed
+    expect(child?.result.timedOut).toBe(false)
+    expect(child?.result.stallMode).toBe("QUIET_BUT_ACTIVE")
+    expect(cancelled).toEqual([])
+    expect(eventNames(events, "child1")).not.toContain("watchdog_reclaimed")
+  })
+
+  test("the hard circuit breaker unregisters the child and stops re-tripping", () => {
+    // given: a child stuck past the hard-stall terminal deadline
+    const { writer, events } = captureAudit()
+    const rt = createDelegationFirstRuntime(writer, {
+      recovery: { hardStallTerminalMs: 900_000 },
+    })
+    const cancelled: string[] = []
+    rt.setRecoverySink({
+      cancel: async (sessionID, reason) => void cancelled.push(`${sessionID}:${reason}`),
+    })
+    const t0 = Date.now()
+    rt.attachChildSession("parent", "child1")
+    rt.markRequestStarted("child1")
+
+    // when: the sweep trips the hard breaker
+    rt.checkAllWatchdogs(t0 + 1_000_000)
+    rt.reclaimStalled("child1", "opengateway/explore", t0 + 1_000_000)
+
+    // then: it is terminal, cancelled, and removed from the supervisor registry
+    expect(cancelled).toHaveLength(1)
+    expect(cancelled[0]).toContain("hard circuit breaker tripped")
+    expect(rt.sessions()).not.toContain("child1")
+    expect(eventNames(events, "child1")).toContain("hard_circuit_breaker_tripped")
+
+    // then: later sweeps cannot re-trip the same breaker every interval
+    expect(rt.checkAllWatchdogs(t0 + 2_000_000)).toEqual([])
+    expect(
+      events.filter((e) => e.fields.event === "hard_circuit_breaker_tripped"),
+    ).toHaveLength(1)
+  })
 })

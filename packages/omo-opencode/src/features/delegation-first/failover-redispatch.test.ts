@@ -435,7 +435,8 @@ describe("automatic child failover (reclaim -> governed re-dispatch)", () => {
     expect(parentFailures.length).toBe(1)
     expect(parentFailures[0].fields.kind).toBe("watchdog_reclaim_exhausted")
     expect(parentFailures[0].fields.reason).toBe("hard_circuit_breaker")
-    expect(rt.checkWatchdog("child1").health).toBe("TERMINAL")
+    expect(names).toContain("child_cancelled")
+    expect(rt.sessions()).not.toContain("child1")
     expect(names).not.toContain("worker_retry_started")
   })
 

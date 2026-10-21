@@ -1,3 +1,4 @@
+import { isTerminalStage } from "./lifecycle"
 import type { WatchdogMetadata } from "./level1"
 import type { StallMode } from "./types"
 import type { StallTimeoutPolicy } from "./timeouts"
@@ -16,6 +17,15 @@ export type StallClassification = {
  */
 export function classifyStallMode(meta: WatchdogMetadata, timeouts: StallTimeoutPolicy): StallClassification {
   const { stage, nowMs } = meta
+
+  if (
+    isTerminalStage(stage) ||
+    meta.status === "completed" ||
+    meta.status === "error" ||
+    meta.status === "cancelled"
+  ) {
+    return { mode: "QUIET_BUT_ACTIVE", reason: "terminal state", timedOut: false }
+  }
 
   if (meta.hasActiveLongProcess && meta.longProcessElapsedMs >= timeouts.toolStallWedgedMs) {
     return { mode: "TOOL_STALL", reason: "tool/process wedged past threshold", timedOut: true }
