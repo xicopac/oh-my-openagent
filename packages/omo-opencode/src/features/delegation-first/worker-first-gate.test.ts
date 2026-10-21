@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { afterAll, describe, test, expect } from "bun:test"
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -10,6 +10,14 @@ import { buildDelegationWorkerCandidates } from "./free-worker-candidates"
 import { selectNextEligibleWorker } from "./availability-failover"
 import { classifyOperation, classifyShellCommand } from "../grunt-guard"
 import type { AttemptResult, WorkerCandidate } from "../delegation-ladder"
+
+afterAll(() => {
+  for (const entry of readdirSync(tmpdir())) {
+    if (entry.startsWith("worker-first-") || entry.startsWith("worker-lifecycle-")) {
+      rmSync(join(tmpdir(), entry), { recursive: true, force: true })
+    }
+  }
+})
 
 type GovernanceAuditWriter = ReturnType<typeof createGovernanceAuditWriter>
 

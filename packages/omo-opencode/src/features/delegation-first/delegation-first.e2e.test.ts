@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { afterAll, describe, test, expect } from "bun:test"
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -6,6 +6,12 @@ import { join } from "node:path"
 import { createGovernanceAuditWriter } from "../../shared/governance-audit"
 import { createDelegationFirstRuntime, type DelegationFirstRuntime } from "./runtime"
 import type { AttemptResult, WorkerCandidate } from "../delegation-ladder"
+
+afterAll(() => {
+  for (const entry of readdirSync(tmpdir())) {
+    if (entry.startsWith("delegation-first-e2e-")) rmSync(join(tmpdir(), entry), { recursive: true, force: true })
+  }
+})
 
 function freeWorker(id: string, tier: WorkerCandidate["tier"] = "free"): WorkerCandidate {
   return { model_id: id, tier, capability: 1, free: true }
