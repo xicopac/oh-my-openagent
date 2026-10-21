@@ -72,6 +72,8 @@ export const CATEGORY_ROLE_REQUIREMENTS: Record<string, RoleRequirement> = {
   "visual-engineering": { defaultTier: "strong" },
   ultrabrain: { defaultTier: "strong" },
   deep: { defaultTier: "strong" },
+  "deep-low": { defaultTier: "strong" },
+  "deep-high": { defaultTier: "strong" },
   artistry: { defaultTier: "strong" },
   quick: { defaultTier: "fast" },
   "unspecified-low": { defaultTier: "balanced" },

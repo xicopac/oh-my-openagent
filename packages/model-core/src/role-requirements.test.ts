@@ -35,6 +35,8 @@ describe("role requirements - role metadata not concrete models", () => {
       "visual-engineering",
       "ultrabrain",
       "deep",
+      "deep-low",
+      "deep-high",
       "artistry",
       "quick",
       "unspecified-low",

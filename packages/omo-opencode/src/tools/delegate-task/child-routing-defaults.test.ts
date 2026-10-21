@@ -61,10 +61,10 @@ async function resolveTier(tier: "fast" | "balanced" | "strong" | "master", extr
  * the free pool is exhausted. Plain DeepSeek V4 Flash (`opencode/deepseek-v4-flash`) remains a
  * paid strong-tier candidate and the master-tier parent inheritance, but it must never lead a
  * legacy child chain nor preempt the free pool. This is a two-part contract:
- *  - The legacy chain first rungs lead with their pre-Flash models (gpt-5.6-luna-fast for
- *    explore/librarian, claude-sonnet-5 for sisyphus-junior, gpt-6-astra for the high-capability
- *    categories, grok-4.6 for unspecified-low), and the sisyphus-junior chain carries no Flash
- *    rung at all.
+ *  - The legacy chain first rungs lead with non-Flash models (kimi-for-coding-highspeed for
+ *    explore/librarian, claude-sonnet-5 for sisyphus-junior, gpt-6-astra for ultrabrain and the
+ *    deep-high lane, claude-opus-5-5 for unspecified-high, claude-sonnet-5-5 for unspecified-low),
+ *    and the sisyphus-junior chain carries no Flash rung at all.
  *  - The dynamic band resolver picks a free model for balanced, keeps strong on paid Flash,
  *    fails over between free models when one is disabled, and only escalates balanced to paid
  *    Flash once every free candidate is unavailable.
@@ -73,16 +73,16 @@ describe("child routing defaults prefer best-eligible free models", () => {
   test("legacy chain first rungs are NOT Flash-first for child agents and high-capability categories", () => {
     // given - the hardcoded agent/category fallback chains
 
-    // when / then - ordinary child agents lead with their pre-Flash first rungs
+    // when / then - ordinary child agents lead with their non-Flash first rungs
     expect(AGENT_MODEL_REQUIREMENTS.explore.fallbackChain[0]).toEqual({
-      providers: ["openai", "openai-codex"],
-      model: "gpt-5.6-luna-fast",
-      variant: "low",
+      providers: ["kimi-for-coding"],
+      model: "kimi-for-coding-highspeed",
+      variant: "off",
     })
     expect(AGENT_MODEL_REQUIREMENTS.librarian.fallbackChain[0]).toEqual({
-      providers: ["openai", "openai-codex"],
-      model: "gpt-5.6-luna-fast",
-      variant: "low",
+      providers: ["kimi-for-coding"],
+      model: "kimi-for-coding-highspeed",
+      variant: "off",
     })
     expect(AGENT_MODEL_REQUIREMENTS["sisyphus-junior"].fallbackChain[0]).toEqual({
       providers: ["anthropic", "github-copilot", "opencode"],
@@ -94,26 +94,31 @@ describe("child routing defaults prefer best-eligible free models", () => {
       ),
     ).toBe(false)
 
-    // and the high-capability categories lead with their pre-Flash first rungs
+    // and the high-capability categories lead with their non-Flash first rungs
     expect(CATEGORY_MODEL_REQUIREMENTS.ultrabrain.fallbackChain[0]).toEqual({
-      providers: ["openai", "openai-codex"],
+      providers: ["openai", "chatgpt-subscription"],
       model: "gpt-6-astra",
       variant: "max",
     })
-    expect(CATEGORY_MODEL_REQUIREMENTS.deep.fallbackChain[0]).toEqual({
-      providers: ["openai", "openai-codex", "github-copilot", "opencode"],
+    expect(CATEGORY_MODEL_REQUIREMENTS["deep-high"].fallbackChain[0]).toEqual({
+      providers: ["openai", "chatgpt-subscription", "github-copilot", "opencode"],
       model: "gpt-6-astra",
       variant: "high",
+    })
+    expect(CATEGORY_MODEL_REQUIREMENTS["deep-low"].fallbackChain[0]).toEqual({
+      providers: ["openai", "chatgpt-subscription"],
+      model: "gpt-6.1-sol",
+      variant: "medium",
     })
     expect(CATEGORY_MODEL_REQUIREMENTS["unspecified-high"].fallbackChain[0]).toEqual({
-      providers: ["openai", "openai-codex", "github-copilot", "opencode"],
-      model: "gpt-6-astra",
-      variant: "high",
+      providers: ["anthropic", "anthropic-api", "github-copilot", "opencode"],
+      model: "claude-opus-5-5",
+      variant: "medium",
     })
     expect(CATEGORY_MODEL_REQUIREMENTS["unspecified-low"].fallbackChain[0]).toEqual({
-      providers: ["xai", "github-copilot", "opencode"],
-      model: "grok-4.6",
-      variant: "xhigh",
+      providers: ["anthropic", "anthropic-api", "github-copilot", "opencode"],
+      model: "claude-sonnet-5-5",
+      variant: "medium",
     })
   })
 
@@ -285,11 +290,11 @@ describe("routing cost matrix", () => {
     expect(AGENT_ROLE_REQUIREMENTS.librarian.defaultTier).toBe("fast")
     expect(AGENT_ROLE_REQUIREMENTS.general.defaultTier).toBe("balanced")
     expect(AGENT_ROLE_REQUIREMENTS["sisyphus-junior"].defaultTier).toBe("balanced")
-    // and the legacy explore chain still leads with gpt-5.6-luna-fast low
+    // and the legacy explore chain still leads with kimi-for-coding-highspeed off
     expect(AGENT_MODEL_REQUIREMENTS.explore.fallbackChain[0]).toEqual({
-      providers: ["openai", "openai-codex"],
-      model: "gpt-5.6-luna-fast",
-      variant: "low",
+      providers: ["kimi-for-coding"],
+      model: "kimi-for-coding-highspeed",
+      variant: "off",
     })
 
     // when - every row of the matrix is resolved against the controlled catalog

@@ -8,8 +8,8 @@ import type { ExecutorContext } from "./executor-types"
 import * as connectedProvidersCache from "../../shared/connected-providers-cache"
 import { unsafeTestValue } from "../../../../../test-support/unsafe-test-value"
 import {
-	DEEP_CATEGORY_PROMPT_APPEND,
-	DEEP_CATEGORY_PROMPT_APPEND_GPT_5_5,
+	DEEP_LOW_CATEGORY_PROMPT_APPEND,
+	DEEP_LOW_CATEGORY_PROMPT_APPEND_GPT,
 } from "./openai-categories"
 
 const PROMPT_INPUT_SENTINEL = "PROMPT_INPUT_SENTINEL"
@@ -52,7 +52,7 @@ describe("resolveCategoryExecution", () => {
 	test("fails explicitly with FREE_WORKER_POOL_EXHAUSTED when the category cache is not ready on first run", async () => {
 		//#given - no model catalog is readable yet, so no candidate can be proven free
 		const args = {
-			category: "deep",
+			category: "deep-low",
 			prompt: PROMPT_INPUT_SENTINEL,
 			description: DESCRIPTION_INPUT_SENTINEL,
 			run_in_background: false,
@@ -62,7 +62,7 @@ describe("resolveCategoryExecution", () => {
 		}
 		const executorCtx = createMockExecutorContext()
 		executorCtx.userCategories = {
-			deep: {},
+			"deep-low": {},
 		}
 		const inheritedModel = undefined
 		const systemDefaultModel = "anthropic/claude-sonnet-4-6"
@@ -102,7 +102,7 @@ describe("resolveCategoryExecution", () => {
 	test("uses category fallback_models for background/runtime fallback chain", async () => {
 		//#given
 		const args = {
-			category: "deep",
+			category: "deep-low",
 			prompt: PROMPT_INPUT_SENTINEL,
 			description: DESCRIPTION_INPUT_SENTINEL,
 			run_in_background: false,
@@ -112,7 +112,7 @@ describe("resolveCategoryExecution", () => {
 		}
 		const executorCtx = createMockExecutorContext()
 		executorCtx.userCategories = {
-			deep: {
+			"deep-low": {
 				model: "quotio/claude-opus-4-7",
 				fallback_models: ["quotio/kimi-k2.5", "openai/gpt-5.5(high)"],
 			},
@@ -287,6 +287,7 @@ describe("resolveCategoryExecution", () => {
 		executorCtx.userCategories = {
 			quick: {
 				model: "openai/gpt-5.4-preview",
+				reasoning: "medium",
 				fallback_models: [
 					{
 						model: "openai/gpt-5.4",
@@ -306,7 +307,8 @@ describe("resolveCategoryExecution", () => {
 		expect(result.categoryModel).toEqual({
 			providerID: "openai",
 			modelID: "gpt-5.4-preview",
-			variant: undefined,
+			reasoning: "medium",
+			variant: "medium",
 		})
 		cacheSpy.mockRestore()
 		agentsSpy.mockRestore()
@@ -472,7 +474,7 @@ describe("resolveCategoryExecution", () => {
 		})
 		const agentsSpy = spyOn(connectedProvidersCache, "readConnectedProvidersCache").mockReturnValue(["openai"])
 		const args = {
-			category: "deep",
+			category: "deep-low",
 			prompt: PROMPT_INPUT_SENTINEL,
 			description: DESCRIPTION_INPUT_SENTINEL,
 			run_in_background: false,
@@ -482,7 +484,7 @@ describe("resolveCategoryExecution", () => {
 		}
 		const executorCtx = createMockExecutorContext()
 		executorCtx.userCategories = {
-			deep: {
+			"deep-low": {
 				fallback_models: [
 					{
 						model: "openai/gpt-4",
@@ -541,7 +543,6 @@ describe("resolveCategoryExecution", () => {
 		expect(result.categoryModel).toEqual({
 			providerID: "animal-gateway-xai",
 			modelID: "grok-4-fast-non-reasoning",
-			variant: undefined,
 		})
 		expect(result.fallbackChain).toBeUndefined()
 	})
@@ -569,16 +570,16 @@ describe("resolveCategoryExecution", () => {
 		expect(result.categoryModel).toEqual({
 			providerID: "anthropic",
 			modelID: "claude-sonnet-4-6",
-			variant: undefined,
+			variant: "low",
 		})
 		expect(result.fallbackChain).toBeUndefined()
 	})
 
-	test("routes gpt-5.5 family models to the gpt-5.5 deep append", async () => {
+	test("routes gpt-5.5 family models to the deep-low GPT append", async () => {
 		//#given - the shipped family appends anchor the routing decision;
 		//#given the resolver under test must not be reused as its own oracle
 		const args = {
-			category: "deep",
+			category: "deep-low",
 			prompt: PROMPT_INPUT_SENTINEL,
 			description: DESCRIPTION_INPUT_SENTINEL,
 			run_in_background: false,
@@ -588,22 +589,22 @@ describe("resolveCategoryExecution", () => {
 		}
 		const executorCtx = createMockExecutorContext()
 		executorCtx.userCategories = {
-			deep: { model: "openai/gpt-5.5" },
+			"deep-low": { model: "openai/gpt-5.5" },
 		}
 
 		//#when
 		const result = await resolveCategoryExecution(args, executorCtx, undefined, "anthropic/claude-sonnet-4-6")
 
-		//#then - the 5.5 family append is selected, not the legacy one
+		//#then - the GPT append is selected, not the generic one
 		expect(result.error).toBeUndefined()
-		expect(result.categoryPromptAppend).toBe(DEEP_CATEGORY_PROMPT_APPEND_GPT_5_5)
-		expect(result.categoryPromptAppend).not.toBe(DEEP_CATEGORY_PROMPT_APPEND)
+		expect(result.categoryPromptAppend).toBe(DEEP_LOW_CATEGORY_PROMPT_APPEND_GPT)
+		expect(result.categoryPromptAppend).not.toBe(DEEP_LOW_CATEGORY_PROMPT_APPEND)
 	})
 
-	test("routes gpt-5.6 family models to the same gpt-5.5 deep append", async () => {
+	test("routes gpt-5.6 family models to the same deep-low GPT append", async () => {
 		//#given - 5.6 belongs to the same routed family as 5.5
 		const args = {
-			category: "deep",
+			category: "deep-low",
 			prompt: PROMPT_INPUT_SENTINEL,
 			description: DESCRIPTION_INPUT_SENTINEL,
 			run_in_background: false,
@@ -613,21 +614,21 @@ describe("resolveCategoryExecution", () => {
 		}
 		const executorCtx = createMockExecutorContext()
 		executorCtx.userCategories = {
-			deep: { model: "openai/gpt-5.6-sol" },
+			"deep-low": { model: "openai/gpt-5.6-sol" },
 		}
 
 		//#when
 		const result = await resolveCategoryExecution(args, executorCtx, undefined, "anthropic/claude-sonnet-4-6")
 
-		//#then - family routing collapses 5.6 onto the 5.5 append
+		//#then - family routing collapses 5.6 onto the same GPT append
 		expect(result.error).toBeUndefined()
-		expect(result.categoryPromptAppend).toBe(DEEP_CATEGORY_PROMPT_APPEND_GPT_5_5)
+		expect(result.categoryPromptAppend).toBe(DEEP_LOW_CATEGORY_PROMPT_APPEND_GPT)
 	})
 
-	test("routes non-family models to the legacy deep append", async () => {
+	test("routes non-family models to the generic deep-low append", async () => {
 		//#given
 		const args = {
-			category: "deep",
+			category: "deep-low",
 			prompt: PROMPT_INPUT_SENTINEL,
 			description: DESCRIPTION_INPUT_SENTINEL,
 			run_in_background: false,
@@ -637,7 +638,7 @@ describe("resolveCategoryExecution", () => {
 		}
 		const executorCtx = createMockExecutorContext()
 		executorCtx.userCategories = {
-			deep: { model: "openai/gpt-5.4" },
+			"deep-low": { model: "openai/gpt-5.4" },
 		}
 
 		//#when
@@ -645,15 +646,15 @@ describe("resolveCategoryExecution", () => {
 
 		//#then - the legacy append is selected, not the 5.5 family one
 		expect(result.error).toBeUndefined()
-		expect(result.categoryPromptAppend).toBe(DEEP_CATEGORY_PROMPT_APPEND)
-		expect(result.categoryPromptAppend).not.toBe(DEEP_CATEGORY_PROMPT_APPEND_GPT_5_5)
+		expect(result.categoryPromptAppend).toBe(DEEP_LOW_CATEGORY_PROMPT_APPEND)
+		expect(result.categoryPromptAppend).not.toBe(DEEP_LOW_CATEGORY_PROMPT_APPEND_GPT)
 	})
 
 	test("appends user prompt_append after the gpt-5.5 family deep append", async () => {
 		//#given
 		const userPromptAppend = "USER_PROMPT_APPEND_SENTINEL"
 		const args = {
-			category: "deep",
+			category: "deep-low",
 			prompt: PROMPT_INPUT_SENTINEL,
 			description: DESCRIPTION_INPUT_SENTINEL,
 			run_in_background: false,
@@ -663,7 +664,7 @@ describe("resolveCategoryExecution", () => {
 		}
 		const executorCtx = createMockExecutorContext()
 		executorCtx.userCategories = {
-			deep: {
+			"deep-low": {
 				model: "openai/gpt-5.5",
 				prompt_append: userPromptAppend,
 			},
@@ -675,7 +676,7 @@ describe("resolveCategoryExecution", () => {
 		//#then - the shipped family append carries the dynamic user payload
 		expect(result.error).toBeUndefined()
 		expect(result.categoryPromptAppend).toBe(
-			`${DEEP_CATEGORY_PROMPT_APPEND_GPT_5_5}\n\n${userPromptAppend}`,
+			`${DEEP_LOW_CATEGORY_PROMPT_APPEND_GPT}\n\n${userPromptAppend}`,
 		)
 	})
 
@@ -683,7 +684,7 @@ describe("resolveCategoryExecution", () => {
 		//#given
 		const userPromptAppend = "USER_PROMPT_APPEND_SENTINEL"
 		const args = {
-			category: "deep",
+			category: "deep-low",
 			prompt: PROMPT_INPUT_SENTINEL,
 			description: DESCRIPTION_INPUT_SENTINEL,
 			run_in_background: false,
@@ -693,7 +694,7 @@ describe("resolveCategoryExecution", () => {
 		}
 		const executorCtx = createMockExecutorContext()
 		executorCtx.userCategories = {
-			deep: {
+			"deep-low": {
 				model: "openai/gpt-5.4",
 				prompt_append: userPromptAppend,
 			},
@@ -705,7 +706,7 @@ describe("resolveCategoryExecution", () => {
 		//#then - the legacy family append carries the dynamic user payload
 		expect(result.error).toBeUndefined()
 		expect(result.categoryPromptAppend).toBe(
-			`${DEEP_CATEGORY_PROMPT_APPEND}\n\n${userPromptAppend}`,
+			`${DEEP_LOW_CATEGORY_PROMPT_APPEND}\n\n${userPromptAppend}`,
 		)
 	})
 
@@ -763,6 +764,11 @@ describe("resolveCategoryExecution", () => {
 
 	test("paid tier pins never make multiple ordinary categories resolve paid when a free model exists", async () => {
 		//#given free and paid candidates plus the production paid tier pins
+		providerModelsSpy?.mockReturnValue({
+			connected: ["anthropic"],
+			models: { anthropic: ["claude-opus-5-5"] },
+			updatedAt: new Date().toISOString(),
+		})
 		const executorCtx = createMockExecutorContext()
 		executorCtx.availableModelsOverride = new Set(["opencode/space-bunny-free", "opencode/deepseek-v4-flash"])
 		executorCtx.pricingCatalog = {

@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { afterAll, describe, test, expect } from "bun:test"
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -7,6 +7,12 @@ import { createGovernanceAuditWriter } from "../../shared/governance-audit"
 import { createDelegationFirstRuntime, type DelegationFirstRuntime } from "./runtime"
 import { extractEvidenceAnchors } from "./worker-evidence"
 import type { AttemptResult, WorkerCandidate } from "../delegation-ladder"
+
+afterAll(() => {
+  for (const entry of readdirSync(tmpdir())) {
+    if (entry.startsWith("post-evidence-")) rmSync(join(tmpdir(), entry), { recursive: true, force: true })
+  }
+})
 
 type GovernanceAuditWriter = ReturnType<typeof createGovernanceAuditWriter>
 

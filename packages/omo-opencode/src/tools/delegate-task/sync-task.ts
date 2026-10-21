@@ -56,6 +56,7 @@ export async function executeSyncTask(
       agentToUse,
       description: args.description,
       defaultDirectory: directory,
+      category: args.category,
       categoryModel,
     }, backstop)
 

@@ -4,6 +4,7 @@ import { setAdditionalAllowedMcpEnvVars } from "../features/claude-code-mcp-load
 import { applyOpenGatewayProviderConfig } from "../features/opengateway-provider";
 import type { ModelCacheState } from "../plugin-state";
 import { log } from "../shared";
+import { AGENT_DISPLAY_NAMES, getAgentListDisplayName } from "../shared/agent-display-names";
 import { applyAgentConfig } from "./agent-config-handler";
 import { applyCommandConfig } from "./command-config-handler";
 import { applyHookConfig } from "./hook-config-handler";
@@ -19,6 +20,7 @@ import {
 import { setDefaultAgentForSort } from "../shared/agent-sort-shim";
 import { getConfiguredDefaultAgent } from "./agent-config-assembly";
 import { applyConfiguredMasterModel } from "./master-model-authority";
+import { openCodeShellTypeResolver } from "../shared/opencode-shell"
 
 export { resolveCategoryConfig } from "./category-config-resolver";
 
@@ -75,6 +77,43 @@ function createAgentConfigCacheKey(config: Record<string, unknown>): string {
   })
 }
 
+function attachHiddenConfigKeyAliases(
+  config: Record<string, unknown>,
+  pluginConfig: OhMyOpenCodeConfig,
+): void {
+  const agents = config.agent
+  if (typeof agents !== "object" || agents === null) {
+    return
+  }
+
+  const agentMap = agents as Record<string, unknown>
+  const overrides = pluginConfig.agents as
+    | Record<string, { displayName?: string } | undefined>
+    | undefined
+  const configKeys = new Set([
+    ...Object.keys(AGENT_DISPLAY_NAMES),
+    ...Object.keys(overrides ?? {}),
+  ])
+
+  for (const configKey of configKeys) {
+    const displayName = getAgentListDisplayName(configKey, overrides)
+    if (!displayName || displayName === configKey) {
+      continue
+    }
+
+    const displayEntry = agentMap[displayName]
+    if (typeof displayEntry !== "object" || displayEntry === null) {
+      continue
+    }
+
+    agentMap[configKey] = {
+      ...(displayEntry as Record<string, unknown>),
+      hidden: true,
+    }
+    registerAgentName(configKey)
+  }
+}
+
 function replayAgentConfigSideEffects(params: {
   agentResult: Record<string, unknown>;
   configuredDefaultAgent: string | undefined;
@@ -94,6 +133,7 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
   let agentConfigSnapshot: AgentConfigSnapshot | undefined;
 
   return async (config: Record<string, unknown>) => {
+    openCodeShellTypeResolver.setConfiguredShell(config.shell);
     const formatterConfig = config.formatter;
 
     // AUTHORITATIVE MASTER MODEL: applied before anything reads config.model
@@ -147,6 +187,7 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
     }
 
     applyToolConfig({ config, pluginConfig, agentResult });
+    attachHiddenConfigKeyAliases(config, pluginConfig);
     await applyMcpConfig({ config, pluginConfig, ctx, pluginComponents });
     await applyCommandConfig({ config, pluginConfig, ctx, pluginComponents });
     if (runtimeSkillSourceUrl) {

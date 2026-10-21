@@ -1,4 +1,4 @@
-import { describe, test, expect } from "bun:test"
+import { afterAll, describe, test, expect } from "bun:test"
 import { mkdtempSync, rmSync, readFileSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -12,6 +12,14 @@ import {
   type HumanExplicitAuthorization,
 } from "./human-explicit-authorization"
 import { createToolExecuteBeforeHandler } from "../../plugin/tool-execute-before"
+
+afterAll(() => {
+  for (const entry of readdirSync(tmpdir())) {
+    if (entry.startsWith("human-auth-") || entry.startsWith("human-unified-")) {
+      rmSync(join(tmpdir(), entry), { recursive: true, force: true })
+    }
+  }
+})
 
 function makeRuntime(): { rt: DelegationFirstRuntime; root: string; availabilityDir: string } {
   const root = mkdtempSync(join(tmpdir(), "human-auth-"))

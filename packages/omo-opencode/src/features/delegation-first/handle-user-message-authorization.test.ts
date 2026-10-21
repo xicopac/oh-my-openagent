@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { afterAll, afterEach, describe, expect, test } from "bun:test"
+import { mkdtempSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -11,6 +11,12 @@ import { createDelegationFirstRuntime } from "./runtime"
 import { handleUserMessageHumanAuthorization } from "./handle-user-message-authorization"
 import { unsafeTestValue } from "../../../../../test-support/unsafe-test-value"
 import type { OhMyOpenCodeConfig } from "../../config"
+
+afterAll(() => {
+  for (const entry of readdirSync(tmpdir())) {
+    if (entry.startsWith("handoff-wire-")) rmSync(join(tmpdir(), entry), { recursive: true, force: true })
+  }
+})
 
 function makeRuntime(): { rt: DelegationFirstRuntime; root: string; availabilityDir: string } {
   const root = mkdtempSync(join(tmpdir(), "handoff-wire-"))
