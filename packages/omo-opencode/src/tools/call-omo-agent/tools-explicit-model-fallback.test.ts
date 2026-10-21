@@ -103,7 +103,7 @@ describe("call_omo_agent fallback chain for explicit user models (#8536)", () =>
     ])
   })
 
-  test("#given no agent model override #when launched #then the built-in fallback chain is still attached", async () => {
+  test("#given no agent model override #when launched #then no built-in fallback chain is attached", async () => {
     // given
     const builtinChain = AGENT_MODEL_REQUIREMENTS["explore"]?.fallbackChain
 
@@ -112,6 +112,6 @@ describe("call_omo_agent fallback chain for explicit user models (#8536)", () =>
 
     // then
     expect(builtinChain?.length).toBeGreaterThan(0)
-    expect(launchInput.fallbackChain).toEqual(builtinChain)
+    expect(launchInput.fallbackChain).toBeUndefined()
   })
 })

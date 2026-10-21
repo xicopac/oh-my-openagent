@@ -764,6 +764,11 @@ describe("resolveCategoryExecution", () => {
 
 	test("paid tier pins never make multiple ordinary categories resolve paid when a free model exists", async () => {
 		//#given free and paid candidates plus the production paid tier pins
+		providerModelsSpy?.mockReturnValue({
+			connected: ["anthropic"],
+			models: { anthropic: ["claude-opus-5-5"] },
+			updatedAt: new Date().toISOString(),
+		})
 		const executorCtx = createMockExecutorContext()
 		executorCtx.availableModelsOverride = new Set(["opencode/space-bunny-free", "opencode/deepseek-v4-flash"])
 		executorCtx.pricingCatalog = {

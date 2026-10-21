@@ -36,6 +36,7 @@ const cases: Array<{
   category?: string
   availableModels?: Record<string, string[]>
   expectedModel?: { providerID: string; modelID: string }
+  expectedError?: string
   config?: CategoryConfig
   variant?: string
   effort?: string
@@ -43,13 +44,14 @@ const cases: Array<{
   { name: "user model reasoning", config: { model: "openai/gpt-5.4", reasoning: "high" }, variant: "high" },
   { name: "user models reasoning", config: { models: [{ model: "openai/gpt-5.4", reasoning: "high" }] }, variant: "high" },
   { name: "promoted models reasoning", config: { models: ["fixture/unavailable", { model: "openai/gpt-5.4", reasoning: "high" }] }, variant: "high" },
-  { name: "builtin model", variant: builtin.variant },
+  // The fork's free-only policy keeps paid builtin pins out of ordinary children,
+  // so both builtin lanes now fail explicitly instead of dispatching.
+  { name: "builtin model", expectedError: "FREE_WORKER_POOL_EXHAUSTED" },
   {
     name: "builtin fallback without own variant",
     category: "quick",
     availableModels: { xai: ["grok-4.20-0309-non-reasoning"] },
-    expectedModel: { providerID: "xai", modelID: "grok-4.20-0309-non-reasoning" },
-    variant: "low",
+    expectedError: "FREE_WORKER_POOL_EXHAUSTED",
   },
   { name: "loaded reasoning overrides legacy variant", config: { model: "openai/gpt-5.4", variant: "low", reasoning: "high" }, variant: "high" },
   { name: "loaded reasoning overrides legacy default", config: { model: "openai/gpt-5.4", variant: "default", reasoning: "high" }, variant: "high" },
@@ -129,6 +131,11 @@ describe("category settings at provider request boundaries", () => {
             directory: "/tmp",
             userCategories: entry.config ? { [args.category!]: OmoCategoryConfigSchema.parse(entry.config) } : undefined,
           }, undefined, undefined)
+          if (entry.expectedError) {
+            expect(resolution.error).toContain(entry.expectedError)
+            expect(resolution.categoryModel).toBeUndefined()
+            return
+          }
           expect(resolution.error).toBeUndefined()
           expect(resolution.categoryModel).toBeDefined()
 

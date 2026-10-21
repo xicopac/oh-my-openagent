@@ -66,13 +66,13 @@ describe("writing category availability", () => {
     expect(result.error).not.toContain(SYSTEM_DEFAULT_MODEL)
   })
 
-  test("#given only the second Claude rung #when writing is spawned #then it runs on that rung", async () => {
+  test("#given only the second Claude rung #when writing is spawned #then it fails explicitly instead of running on the paid rung", async () => {
     stubProviderCache({ anthropic: ["claude-opus-4-6"], openai: ["gpt-6-sol"] })
 
     const result = await resolveCategoryExecution(args, executorContext(), undefined, SYSTEM_DEFAULT_MODEL)
 
-    expect(result.error).toBeUndefined()
-    expect(result.actualModel).toBe("anthropic/claude-opus-4-6")
+    expect(result.actualModel).toBeUndefined()
+    expect(result.error).toContain("FREE_WORKER_POOL_EXHAUSTED")
   })
 
   test("#given Copilot's dotted Opus 5.5 id #when writing config resolves #then the lane stays open", () => {
