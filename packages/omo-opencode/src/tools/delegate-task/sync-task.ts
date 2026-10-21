@@ -123,6 +123,7 @@ export async function executeSyncTask(
     }
 
     const cleanupRetrySession = (currentSessionID: string): void => {
+      executorCtx.delegationFirstRuntime?.detachChildSession(currentSessionID, "failed")
       cleanupSyncSessionSideEffects(currentSessionID, executorCtx)
     }
 
@@ -169,6 +170,7 @@ export async function executeSyncTask(
     })
   } finally {
     if (syncSessionID) {
+      executorCtx.delegationFirstRuntime?.detachChildSession(syncSessionID, "completed")
       cleanupSyncSessionSideEffects(syncSessionID, executorCtx)
       handedBackSyncSessions.add(syncSessionID)
 
