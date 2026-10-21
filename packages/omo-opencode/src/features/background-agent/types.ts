@@ -135,6 +135,8 @@ export interface LaunchInput {
   onSessionCreated?: (sessionId: string) => void | Promise<void>
   /** User tool overrides (ask/allow/deny) from category or agent config. Merged into launchTools before hardcoded restrictions. */
   userPermission?: Record<string, "ask" | "allow" | "deny">
+  /** Marks this launch as a delegation-first recovery probe (machine-consumed by the control plane). */
+  recoveryProbe?: boolean
 }
 
 export interface ResumeInput {

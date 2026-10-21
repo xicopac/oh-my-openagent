@@ -242,6 +242,12 @@ export type OnSubagentSessionAttached = (event: SubagentSessionCreatedEvent) => 
 
 export interface SubagentSessionDeletedEvent {
   sessionID: string
+  /**
+   * Terminal stage the manager observed before teardown. Absent means the
+   * session was deleted without a manager-observed terminal transition; the
+   * delegation watchdog treats that as an unexpected child exit.
+   */
+  terminalStage?: "completed" | "failed" | "cancelled"
 }
 
 export type OnSubagentSessionDeleted = (event: SubagentSessionDeletedEvent) => Promise<void>
@@ -326,6 +332,8 @@ export class BackgroundManager {
   private observedOutputSessions: Set<string> = new Set()
   private observedIncompleteTodosBySession: Map<string, boolean> = new Map()
   private rootDescendantCounts: Map<string, number>
+  private readonly syncSpawnRootsBySession = new Map<string, string>()
+  private readonly releasedSyncSpawnSessions = new Set<string>()
   private preStartDescendantReservations: Set<string>
   private enableParentSessionNotifications: boolean
   private modelFallbackControllerAccessor?: ModelFallbackControllerAccessor
@@ -424,8 +432,9 @@ export class BackgroundManager {
   async reserveSubagentSpawn(parentSessionID: string): Promise<{
     spawnContext: SubagentSpawnContext
     descendantCount: number
-    commit: () => number
+    commit: (childSessionID?: string) => number
     rollback: () => void
+    release: (sessionID?: string) => void
   }> {
     const spawnContext = await this.assertCanSpawn(parentSessionID)
     const maxDescendants = getMaxLiveDescendantsPerRoot(this.config)
@@ -440,12 +449,16 @@ export class BackgroundManager {
     }
     const descendantCount = this.registerRootDescendant(spawnContext.rootSessionID)
     let settled = false
+    let reservationReleased = false
 
     return {
       spawnContext,
       descendantCount,
-      commit: () => {
+      commit: (childSessionID?: string) => {
         settled = true
+        if (childSessionID) {
+          this.trackSyncSpawnSession(childSessionID, spawnContext.rootSessionID)
+        }
         return descendantCount
       },
       rollback: () => {
@@ -453,7 +466,40 @@ export class BackgroundManager {
         settled = true
         this.unregisterRootDescendant(spawnContext.rootSessionID)
       },
+      release: (sessionID?: string) => {
+        if (reservationReleased) return
+        reservationReleased = true
+        if (!sessionID) {
+          const currentCount = this.rootDescendantCounts.get(spawnContext.rootSessionID) ?? 0
+          if (currentCount <= 0) return
+          this.unregisterRootDescendant(spawnContext.rootSessionID)
+          return
+        }
+        this.releaseSubagentSpawn(sessionID, spawnContext.rootSessionID)
+      },
     }
+  }
+
+  private trackSyncSpawnSession(childSessionID: string, rootSessionID: string): void {
+    if (!childSessionID || !rootSessionID) return
+    this.syncSpawnRootsBySession.set(childSessionID, rootSessionID)
+  }
+
+  releaseSubagentSpawn(sessionID: string, rootSessionID?: string): void {
+    if (!sessionID) return
+    if (this.releasedSyncSpawnSessions.has(sessionID)) return
+    const mappedRoot = this.syncSpawnRootsBySession.get(sessionID)
+    const root = mappedRoot ?? rootSessionID
+    if (!root) return
+    this.releasedSyncSpawnSessions.add(sessionID)
+    this.syncSpawnRootsBySession.delete(sessionID)
+    const currentCount = this.rootDescendantCounts.get(root) ?? 0
+    if (currentCount <= 0) return
+    this.unregisterRootDescendant(root)
+  }
+
+  releaseRootDescendantForSession(sessionID: string, rootSessionID?: string): void {
+    this.releaseSubagentSpawn(sessionID, rootSessionID)
   }
 
   async acquireSyncSubagentConcurrency(model: string, taskId?: string): Promise<void> {
@@ -2058,6 +2104,8 @@ The fallback retry session is now created and can be inspected directly.
       }
 
       this.rootDescendantCounts.delete(sessionID)
+      this.syncSpawnRootsBySession.delete(sessionID)
+      this.releasedSyncSpawnSessions.delete(sessionID)
       clearDelegatedChildSessionBootstrap(sessionID)
       clearSessionAgent(sessionID)
       SessionCategoryRegistry.remove(sessionID)
@@ -2576,7 +2624,7 @@ The task was re-queued on a fallback model after a retryable failure.
       // detachChildSession) may never fire. Release the runtime slot now so a
       // cancelled paid child cannot leak the cap-1 slot and block all later
       // delegation (including ordinary free workers).
-      await this.onSubagentSessionDeleted?.({ sessionID: task.sessionId }).catch((error) => {
+      await this.onSubagentSessionDeleted?.({ sessionID: task.sessionId, terminalStage: "cancelled" }).catch((error) => {
         log("[background-agent] onSubagentSessionDeleted on cancel failed:", { taskId: task.id, sessionID: task.sessionId, error: String(error) })
       })
     }
@@ -2755,7 +2803,7 @@ The task was re-queued on a fallback model after a retryable failure.
         // @allow Notify tmux to close the pane immediately. client.session.abort() does not
         // reliably emit session.deleted, so the polling fallback (60-min SESSION_TIMEOUT_MS)
         // leaves panes orphaned for too long. See #4773.
-        await this.onSubagentSessionDeleted?.({ sessionID: task.sessionId }).catch((error) => {
+        await this.onSubagentSessionDeleted?.({ sessionID: task.sessionId, terminalStage: "completed" }).catch((error) => {
           log("[background-agent] onSubagentSessionDeleted callback failed:", { taskId: task.id, sessionID: task.sessionId, error: String(error) })
         })
       }
@@ -3378,6 +3426,8 @@ The task was re-queued on a fallback model after a retryable failure.
     this.pendingByParent.clear()
     this.notificationQueueByParent.clear()
     this.rootDescendantCounts.clear()
+    this.syncSpawnRootsBySession.clear()
+    this.releasedSyncSpawnSessions.clear()
     this.queuesByKey.clear()
     this.processingKeys.clear()
     this.taskHistory.clearAll()

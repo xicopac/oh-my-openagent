@@ -167,6 +167,35 @@ describe("createWatchdog", () => {
     ])
   })
 
+  test("duplicate register is a no-op preserving counters, stage, and creation milestone", () => {
+    // given
+    const events: WatchdogEventName[] = []
+    let now = 1_000_000
+    const wd = createWatchdog({}, {
+      now: () => now,
+      onEvent: (_sessionID, event) => events.push(event),
+    })
+    wd.register("s1", "w1")
+    wd.onActivity("s1")
+    wd.onActivity("s1")
+    wd.check("s1")
+    const before = wd.snapshot("s1")
+    const createdBefore = events.filter((e) => e === "child_session_created").length
+    // when
+    wd.register("s1", "w1")
+    const after = wd.snapshot("s1")
+    // then
+    expect(before).toBeDefined()
+    expect(after).toBeDefined()
+    expect(after!.progressCounter).toBe(2)
+    expect(after!.progressCounter).toBe(before!.progressCounter)
+    expect(after!.stage).toBe(before!.stage)
+    expect(after!.lastActivityAtMs).toBe(before!.lastActivityAtMs)
+    expect(after!.lastChangeAtMs).toBe(before!.lastChangeAtMs)
+    expect(createdBefore).toBe(1)
+    expect(events.filter((e) => e === "child_session_created").length).toBe(1)
+  })
+
   test("snapshot exposes only counters, stage, and timestamps", () => {
     // given
     const wd = createWatchdog()

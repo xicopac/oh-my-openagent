@@ -128,6 +128,7 @@ export function createWatchdog(policy: Partial<WatchdogPolicy> = {}, opts: Watch
 
   return {
     register(sessionID, workerID, initialStage = "session_created") {
+      if (states.has(sessionID)) return
       const now = clock()
       states.set(sessionID, {
         workerID,
