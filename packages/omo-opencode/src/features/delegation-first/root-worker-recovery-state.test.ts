@@ -170,4 +170,28 @@ describe("watchdog-controlled delegation recovery state", () => {
     expect(state.phase("root")).toBe("halt")
     expect(state.recoverySnapshot("root")).toMatchObject({ verified: false, failureReason: "still wrong" })
   })
+
+  test("verification clears stale evidence so one new failure does not re-promote", () => {
+    // given: a session that reached recovery_mode through two distinct failures
+    const state = createRootWorkerState()
+    state.recordDelegationFailure("root", failure("bg-1"))
+    state.recordDelegationFailure("root", failure("bg-2", "routing_exhausted"))
+    expect(state.phase("root")).toBe("recovery_mode")
+    state.beginRecoveryProbe("root", "probe-1", "nonce-1")
+
+    // when: the probe verifies recovery
+    expect(state.markRecoveryVerified("root", "probe-1")).toBe(true)
+
+    // then: the verified episode leaves no stale evidence behind
+    expect(state.recoverySnapshot("root").evidence).toEqual([])
+
+    // when: a single genuinely new failure arrives
+    const transition = state.recordDelegationFailure("root", failure("bg-3"))
+
+    // then: it starts a fresh degraded episode instead of re-promoting immediately
+    expect(transition.accepted).toBe(true)
+    expect(transition.after).not.toBe("recovery_mode")
+    expect(state.phase("root")).not.toBe("recovery_mode")
+    expect(state.recoverySnapshot("root").evidence.map((item) => item.id)).toEqual(["bg-3"])
+  })
 })

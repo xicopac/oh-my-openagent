@@ -515,6 +515,9 @@ export function createRootWorkerState(
       if (rec.recoveryPhase !== "recovery_mode" || rec.activeProbe?.probeID !== probeID) return false
       rec.verified = true
       rec.failureReason = null
+      rec.recoveryEvidence.clear()
+      rec.activeProbe = null
+      rec.verificationAttempts = 0
       rec.recoveryPhase = "recovery_verified"
       rec.recoveryUpdatedAtMs = Date.now()
       return true
