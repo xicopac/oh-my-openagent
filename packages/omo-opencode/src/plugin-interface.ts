@@ -38,9 +38,17 @@ export function createPluginInterface(args: {
 
     "chat.params": async (input: unknown, output: unknown) => {
       const chatParamsInput = input as {
+        sessionID?: unknown
         agent?: string | { name?: string }
         model?: { providerID?: unknown; modelID?: unknown; id?: unknown }
         message?: { variant?: string }
+      }
+      // Pre-dispatch ceiling gate: runs directly before every provider request.
+      // When the measured context exceeds the policy ceiling (150k nominal) the
+      // governor forces compaction here, before the request is dispatched.
+      const governorSessionID = chatParamsInput.sessionID
+      if (typeof governorSessionID === "string" && governorSessionID.length > 0) {
+        await hooks.contextGovernor?.preDispatchCeiling?.(governorSessionID)
       }
       const agentName =
         typeof chatParamsInput.agent === "string"

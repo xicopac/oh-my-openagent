@@ -6,10 +6,11 @@ describe("ContextGovernorConfigSchema", () => {
   test("defaults enabled to true (our fork enables the governor by default)", () => {
     const parsed = ContextGovernorConfigSchema.parse({})
     expect(parsed.enabled).toBe(true)
-    expect(parsed.prepare_at_tokens).toBe(110000)
-    expect(parsed.audit_at_tokens).toBe(135000)
+    // Budget policy defaults: PROACTIVE=60k, MANDATORY=90k, CEILING=150k, TARGET=15k.
+    expect(parsed.prepare_at_tokens).toBe(60000)
+    expect(parsed.audit_at_tokens).toBe(90000)
     expect(parsed.normal_limit_tokens).toBe(150000)
-    expect(parsed.target_after_compaction_tokens).toBe(60000)
+    expect(parsed.target_after_compaction_tokens).toBe(15000)
     expect(parsed.max_compaction_passes).toBe(3)
   })
 
