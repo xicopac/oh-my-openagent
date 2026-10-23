@@ -130,6 +130,12 @@ export type RootWorkerState = {
   decide(sessionID: string, tool: string | undefined, hint?: GruntToolHint): RootWorkerGateDecision
   noteWorkerRunning(sessionID: string): void
   noteWorkerEvidence(sessionID: string, anchors?: readonly string[]): void
+  /**
+   * Clear the root latch when a delegated child settles terminally:
+   * completed -> selective verification allowed (renewed broad work re-delegates);
+   * failed/cancelled/killed -> the root may delegate again immediately.
+   */
+  noteChildSettled(sessionID: string, terminal: "completed" | "failed" | "cancelled"): void
   noteDelegationHealthy(sessionID: string): void
   recordDelegationFailure(sessionID: string, evidence: DelegationFailureEvidence): DelegationFailureTransition
   beginRecoveryProbe(sessionID: string, probeID: string, nonce: string): boolean
@@ -473,6 +479,26 @@ export function createRootWorkerState(
         if (anchor) rec.evidenceAnchors.add(anchor)
       }
       if (rec.recoveryPhase === "normal") rec.workPhase = "worker_evidence_available"
+    },
+
+    noteChildSettled(sessionID, terminal) {
+      const rec = recordFor(sessionID)
+      if (rec.recoveryPhase !== "normal") return
+      // A session that has not delegated yet has no latch to clear.
+      if (rec.workPhase === "bootstrap") return
+      if (terminal === "completed") {
+        // A finished child must not pin the root in worker_active. Move to the
+        // evidence-available phase so selective/anchor verification is allowed
+        // and renewed broad work re-arms delegation (REASON_ADDITIONAL).
+        if (rec.workPhase === "worker_active" || rec.workPhase === "worker_required") {
+          rec.workPhase = "worker_evidence_available"
+        }
+        return
+      }
+      // failed / cancelled / killed: the root may delegate again immediately.
+      if (rec.workPhase === "worker_active") {
+        rec.workPhase = "worker_required"
+      }
     },
 
     noteDelegationHealthy(sessionID) {
