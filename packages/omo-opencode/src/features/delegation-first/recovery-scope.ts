@@ -1,3 +1,32 @@
+/**
+ * Delegation-recovery scope.
+ *
+ * While a root session is in `recovery_mode` the delegation control plane itself
+ * is under repair, so the root is authorized to act DIRECTLY — but only inside
+ * the delegation machinery and its supporting state. This module decides, with
+ * no model call, whether an incoming tool call is inside that scope.
+ *
+ * The allowance matrix is deliberately narrow:
+ *   - metadata/inspection commands (git status/log/rev-parse, pwd, ls, ps, ...)
+ *   - reads of config/state files under `.omo/`, `.opencode/`, `.agents/`,
+ *     `~/.config/opencode/` (governor config, omo config, skill/agent state)
+ *   - repairs to the delegation/watchdog/supervisor source and to config/state
+ *   - evidence writes under `/tmp` and `~/.omo`
+ *   - the single machine-consumed recovery `task` probe (never ordinary delegation)
+ *   - orchestration-process cleanup (restart/stop the opencode/omo/senpi units)
+ *
+ * Human-operated recovery procedure (when machine evidence has NOT promoted the
+ * session to `recovery_mode`, e.g. a cold control plane): an operator explicitly
+ * authorizes the repair and disables the delegation governor for the session.
+ *   1. `grantHumanAuthorization(sessionID, { scope, reason })` (trusted channel),
+ *      or set `resource_governor.enabled = false` in the session's omo config.
+ *   2. Run the real recovery probe through `task`; verification/re-handoff exits
+ *      recovery (`markRecoveryVerified` -> `reconcileStaleRecovery`/handoff).
+ *   3. Re-enable the governor once delegation is observed healthy.
+ * Recovery exits automatically once delegation is healthy again; no operator
+ * action is required for the ordinary (evidence-driven) case.
+ */
+
 import type { GruntToolHint } from "../grunt-guard"
 
 export type RecoveryScopeCategory =
@@ -61,6 +90,9 @@ const RECOVERY_PATH_MARKERS = [
   "/sys/fs/cgroup/",
   "/run/user/",
   "/var/log/",
+  "/tmp/",
+  "/var/tmp/",
+  "/.config/opencode/",
   "/tmp/oh-my-opencode",
 ] as const
 
@@ -88,7 +120,7 @@ const SAFE_INSPECTION_COMMANDS = [
   /^docker\s+(?:ps|logs|inspect|top|stats)(?:\s|$)/,
   /^tmux\s+(?:ls|list-sessions|list-panes|capture-pane)(?:\s|$)/,
   /^opencode\s+(?:models|doctor|debug|db|session)(?:\s|$)/,
-  /^(?:stat|readlink|realpath|pwd|whoami|id|hostname|uname)(?:\s|$)/,
+  /^(?:stat|readlink|realpath|pwd|whoami|id|hostname|uname|ls)(?:\s|$)/,
 ] as const
 
 const SAFE_ORCHESTRATION_PROCESS_MUTATIONS = [

@@ -2,6 +2,8 @@ export type PaidWorkerGate = {
   tryAcquire(): boolean
   release(): void
   activeCount(): number
+  /** The cap currently enforced by tryAcquire (never below 1). */
+  maxConcurrent(): number
   setMaxConcurrent(max: number): void
   /** Reset all active slots (test/teardown seam; keeps the max). */
   reset(): void
@@ -21,6 +23,9 @@ export function createPaidWorkerGate(maxConcurrent = 1): PaidWorkerGate {
     },
     activeCount() {
       return active
+    },
+    maxConcurrent() {
+      return max
     },
     setMaxConcurrent(next) {
       max = next >= 1 ? next : 1
