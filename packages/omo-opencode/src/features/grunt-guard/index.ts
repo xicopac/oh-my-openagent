@@ -5,9 +5,11 @@ export {
   GRUNT_TOOLS,
   READ_TOOLS,
   SEARCH_TOOLS,
+  APPROVED_ORCHESTRATION_TOOLS,
   analyzeGruntSignals,
   detectGruntWorkCycle,
   evaluateEarlyDelegation,
+  isMcpPrefixedTool,
   moduleRoot,
   type EarlyDelegationOptions,
   type EarlyDelegationVerdict,
@@ -17,11 +19,17 @@ export {
   type ToolActivityEvent,
 } from "./detector"
 export {
+  classifyBoundaryRole,
   createPreGruntGate,
+  decideDelegationFailure,
+  evaluateRootToolBoundary,
   type GruntToolHint,
   type PreGruntDecision,
   type PreGruntGate,
   type PreGruntGateOptions,
+  type RootToolBoundaryOptions,
+  type RootToolBoundaryResult,
+  type SessionRole,
 } from "./gate"
 export {
   classifyOperation,

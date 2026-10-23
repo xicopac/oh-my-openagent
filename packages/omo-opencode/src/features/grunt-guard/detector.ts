@@ -27,6 +27,22 @@ export const GRUNT_TOOLS: ReadonlySet<string> = new Set([
   "read",
   "session_search",
   "session_read",
+  "session_list",
+  "session_info",
+  "look_at",
+  "skill_mcp",
+  "interactive_bash",
+])
+
+/** Check if a tool name is an MCP-prefixed tool (e.g. mcp_*, mcp__*). */
+export function isMcpPrefixedTool(tool: string): boolean {
+  return /^mcp[_-]/i.test(tool)
+}
+
+/** Approved orchestration tools that are exempt from broad classification. */
+export const APPROVED_ORCHESTRATION_TOOLS: ReadonlySet<string> = new Set([
+  "task",
+  "call_omo_agent",
 ])
 
 /** Search-side tools (produce a set of candidates, not a single file read). */

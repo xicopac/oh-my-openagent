@@ -7,6 +7,7 @@
  */
 
 import type { GruntToolHint } from "./gate"
+import { isMcpPrefixedTool } from "./detector"
 
 /** Semantics of a bash `command` string (the `bash` tool's single argument). */
 export type ShellSemantics =
@@ -30,20 +31,15 @@ export type OperationClass =
 
 const DELEGATION_TOOL_NAMES = new Set(["task", "call_omo_agent"])
 
-const CONTROL_TOOL_NAMES = new Set([
+const CONTROL_TOOL_NAMES: ReadonlySet<string> = new Set([
   "background_output",
   "background_cancel",
-  "session_list",
   "session_read",
   "session_search",
-  "session_info",
-  "skill",
-  "skill_mcp",
   "todowrite",
   "todo_write",
   "question",
   "ask_user_question",
-  "interactive_bash",
   "create_goal",
   "update_goal",
   "get_goal",
@@ -51,7 +47,6 @@ const CONTROL_TOOL_NAMES = new Set([
   "monitor_stop",
   "monitor_list",
   "monitor_output",
-  "look_at",
   "lsp_status",
   "lsp_diagnostics",
   "lsp_goto_definition",
@@ -60,10 +55,9 @@ const CONTROL_TOOL_NAMES = new Set([
   "lsp_prepare_rename",
   "lsp_rename",
   "lsp_install_decision",
-  "skill_mcp",
 ])
 
-// Command keywords that unambiguously mean broad/recursive source discovery.
+/** Semantics of a bash `command` string (the `bash` tool's single argument). */
 const DISCOVERY_COMMANDS: RegExp[] = [
   /\bgrep\s+-[a-zA-Z]*[Rr]\b/,          // grep -R / grep -r / rgrep
   /(^|\s)(rg|ripgrep|ack|ag|fd|tree|locate)\b/,
@@ -186,6 +180,20 @@ export function classifyOperation(tool: string | undefined, hint?: GruntToolHint
 
   if (DELEGATION_TOOL_NAMES.has(name)) return "delegation"
   if (name.startsWith("team_")) return "control"
+
+  // MCP-prefixed tools are opaque to the classifier. An MCP `task`/`call_omo_agent`
+  // alias is still delegation; every other MCP tool is treated as broad so a root
+  // session cannot use an MCP bridge to bypass the delegation gate.
+  if (isMcpPrefixedTool(name)) {
+    const bare = name.replace(/^mcp[_-]+/i, "")
+    return DELEGATION_TOOL_NAMES.has(bare) ? "delegation" : "broad"
+  }
+
+  // `interactive_bash` must be classified through the shell semantic classifier,
+  // same as `bash`, so root cannot bypass the gate through interactive bash.
+  if (name === "interactive_bash") {
+    return hint?.command ? SHELL_TO_OPERATION[classifyShellCommand(hint.command)] : "broad"
+  }
 
   if (CONTROL_TOOL_NAMES.has(name)) return "control"
 

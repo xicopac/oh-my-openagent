@@ -19,6 +19,8 @@ import type { BackgroundManager } from "../features/background-agent"
 import type { DelegationFirstRuntime } from "../features/delegation-first"
 import type { GruntToolHint } from "../features/grunt-guard"
 
+import { classifyBoundaryRole } from "../features/grunt-guard/gate"
+
 const BACKGROUND_WAIT_BLOCK_MESSAGE = [
   "Background task wait is already managed by the plugin.",
   "End this response now and wait for the <system-reminder> completion notification.",
@@ -71,7 +73,7 @@ function gruntHintForTool(tool: string, args: Record<string, unknown>): GruntToo
   const materializationHint = materializationClaim ? { materialization: true as const } : {}
   const humanClaim = isHumanAuthorizationClaim(args["humanAuthorization"])
   const humanHint = humanClaim ? { humanAuthorization: humanClaim } : {}
-  if (tool.toLowerCase() === "bash") {
+  if (tool.toLowerCase() === "bash" || tool.toLowerCase() === "interactive_bash") {
     const command = typeof args.command === "string" ? args.command : undefined
     return { ...(command ? { command } : {}), ...materializationHint, ...humanHint }
   }
@@ -134,7 +136,11 @@ export function createToolExecuteBeforeHandler(args: {
     let recoveryAuthorized = false
     let materializationAuthorized = false
     let humanAuthorized = false
-    if (delegationFirstRuntime && !subagentSessions.has(input.sessionID)) {
+    const sessionRole = classifyBoundaryRole({
+      sessionID: input.sessionID,
+      subagentSessionIDs: subagentSessions,
+    })
+    if (delegationFirstRuntime && sessionRole === "root") {
       const contextPressure = rootContextPressure(hooks, input.sessionID)
       const hint = gruntHintForTool(input.tool, output.args)
       if (output.args["materialization"] === true) delete output.args["materialization"]
