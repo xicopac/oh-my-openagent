@@ -1,5 +1,12 @@
 import { z } from "zod"
 
+import {
+  MANDATORY_COMPACTION_TOKENS,
+  POST_COMPACTION_TARGET_TOKENS,
+  PRE_DISPATCH_CEILING_TOKENS,
+  PROACTIVE_COMPACTION_TOKENS,
+} from "../../hooks/context-governor/budget-policy"
+
 /**
  * Tier enum for twin (maintenance + validation) roles. Mirrors the shared
  * `MODEL_TIERS` in `@oh-my-opencode/delegate-core`; inlined here because the
@@ -71,14 +78,29 @@ export const ContextGovernorConfigSchema = z
      * feature to operate.
      */
     enabled: z.boolean().default(true),
-    /** Absolute-cap token count that triggers pre-audit capsule preparation (default: 110000, min: 1). */
-    prepare_at_tokens: z.number().int().min(1).default(110000),
-    /** Absolute-cap token count that triggers the twin audit (default: 135000, min: 1). */
-    audit_at_tokens: z.number().int().min(1).default(135000),
-    /** Absolute-cap token count that forces compaction under normal (large-window) operation (default: 150000, min: 1). */
-    normal_limit_tokens: z.number().int().min(1).default(150000),
-    /** Post-compaction target size in tokens; the compactor aims at (but does not exceed) this value (default: 60000, min: 1). */
-    target_after_compaction_tokens: z.number().int().min(1).default(60000),
+    /**
+     * Absolute-cap token count that triggers pre-audit capsule preparation
+     * (default: PROACTIVE_COMPACTION_TOKENS = 60000, min: 1).
+     * Sourced from the budget policy so the policy module is the single source of truth.
+     */
+    prepare_at_tokens: z.number().int().min(1).default(PROACTIVE_COMPACTION_TOKENS),
+    /**
+     * Absolute-cap token count that triggers the twin audit
+     * (default: MANDATORY_COMPACTION_TOKENS = 90000, min: 1).
+     */
+    audit_at_tokens: z.number().int().min(1).default(MANDATORY_COMPACTION_TOKENS),
+    /**
+     * Absolute-cap token count that forces compaction under normal (large-window)
+     * operation; also the pre-dispatch ceiling
+     * (default: PRE_DISPATCH_CEILING_TOKENS = 150000, min: 1).
+     */
+    normal_limit_tokens: z.number().int().min(1).default(PRE_DISPATCH_CEILING_TOKENS),
+    /**
+     * Post-compaction target size in tokens; the compactor aims at (but does not
+     * exceed) this value (default: POST_COMPACTION_TARGET_TOKENS = 15000, which
+     * sits inside the accepted POST_COMPACTION_MIN..MAX band of 10000..20000).
+     */
+    target_after_compaction_tokens: z.number().int().min(1).default(POST_COMPACTION_TARGET_TOKENS),
     /** Maximum summarize passes per convergent-compaction cycle; stops early when a pass stops yielding material reduction (default: 3, range: 1..5). */
     max_compaction_passes: z.number().int().min(1).max(5).default(3),
     /** Fraction of the model's actual context window that binds when it is smaller than `normal_limit_tokens` (default: 0.78, range: 0.1..1). Reuses the existing 78% margin from preemptive-compaction-trigger. */

@@ -9095,13 +9095,13 @@
           "type": "boolean"
         },
         "prepare_at_tokens": {
-          "default": 110000,
+          "default": 60000,
           "type": "integer",
           "minimum": 1,
           "maximum": 9007199254740991
         },
         "audit_at_tokens": {
-          "default": 135000,
+          "default": 90000,
           "type": "integer",
           "minimum": 1,
           "maximum": 9007199254740991
@@ -9113,7 +9113,7 @@
           "maximum": 9007199254740991
         },
         "target_after_compaction_tokens": {
-          "default": 60000,
+          "default": 15000,
           "type": "integer",
           "minimum": 1,
           "maximum": 9007199254740991
@@ -10154,13 +10154,9 @@
       "properties": {
         "commit_footer": {
           "default": false,
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "string"
-            }
+          "type": [
+            "boolean",
+            "string"
           ]
         },
         "include_co_authored_by": {

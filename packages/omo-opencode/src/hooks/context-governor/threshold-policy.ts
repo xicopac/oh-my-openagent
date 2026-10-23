@@ -1,5 +1,7 @@
 import type { ContextGovernorConfig } from "../../config/schema/context-governor"
 
+import { resolveContextBudget } from "./budget-policy"
+
 /**
  * Resolved token thresholds for a single (session, model) pair, after the
  * governor has reconciled the user's absolute-cap configuration against the
@@ -22,6 +24,15 @@ export type EffectiveThresholds = {
  *
  * Returns `null` when `actualLimit` is unknown or non-positive: the governor
  * is inert in that case so today's safe behavior (do nothing) is preserved.
+ *
+ * The budget policy (`resolveContextBudget`) is the authoritative source of
+ * the nominal thresholds: PROACTIVE=60k, MANDATORY=90k, PRE_DISPATCH_CEILING=150k
+ * and POST_COMPACTION_TARGET=15k (post-compaction accepted band 10k-20k). The
+ * configured absolute caps may only tighten those numbers (they are combined
+ * with `Math.min`), which is what lets QA/tests lower the thresholds while the
+ * shipped defaults stay pinned to the policy. For a window where the model
+ * shrinks the usable budget, the policy plan scales the ceiling down and the
+ * governor follows.
  */
 export function resolveEffectiveThresholds(args: {
   configured: ContextGovernorConfig
@@ -31,9 +42,17 @@ export function resolveEffectiveThresholds(args: {
 
   if (actualLimit === null || actualLimit <= 0) return null
 
+  // Authoritative policy plan for this model window. The configured absolute
+  // caps are overrides that can only lower the policy thresholds below.
+  const budget = resolveContextBudget({ windowTokens: actualLimit })
+
   const compactRel = Math.floor(actualLimit * configured.provider_relative_ratio)
 
-  let compactAt = Math.min(configured.normal_limit_tokens, compactRel)
+  let compactAt = Math.min(
+    configured.normal_limit_tokens,
+    budget.preDispatchCeiling,
+    compactRel,
+  )
   const providerBinds = compactAt < configured.normal_limit_tokens
 
   let prepareAt: number
@@ -52,8 +71,11 @@ export function resolveEffectiveThresholds(args: {
     auditAt = configured.audit_at_tokens
   }
 
+  // Policy post-compaction target (nominal 15k, kept inside the accepted
+  // 10k-20k band by the plan). Config may tighten it further.
   let targetAfter = Math.min(
     configured.target_after_compaction_tokens,
+    budget.postCompactionTarget,
     Math.floor(compactAt * 0.5),
   )
 

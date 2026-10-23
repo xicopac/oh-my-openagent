@@ -23,10 +23,11 @@ describe("ContextGovernorConfigSchema", () => {
 
     // then
     expect(cfg.enabled).toBe(true)
-    expect(cfg.prepare_at_tokens).toBe(110000)
-    expect(cfg.audit_at_tokens).toBe(135000)
+    // Budget-policy defaults.
+    expect(cfg.prepare_at_tokens).toBe(60000)
+    expect(cfg.audit_at_tokens).toBe(90000)
     expect(cfg.normal_limit_tokens).toBe(150000)
-    expect(cfg.target_after_compaction_tokens).toBe(60000)
+    expect(cfg.target_after_compaction_tokens).toBe(15000)
     expect(cfg.provider_relative_ratio).toBe(0.78)
     expect(cfg.capsule_head_max_chars).toBe(8000)
     expect(cfg.capsule_full_max_bytes).toBe(131072)
@@ -131,13 +132,13 @@ describe("resolveEffectiveThresholds", () => {
     expect(resolveEffectiveThresholds({ configured: defaults(), actualLimit: -1 })).toBeNull()
   })
 
-  test("#given defaults + 1M window #when resolved #then absolute limits bind and providerBinds=false", () => {
+  test("#given defaults + 1M window #when resolved #then the budget policy binds: 60k/90k/150k/15k", () => {
     const t = resolveEffectiveThresholds({ configured: defaults(), actualLimit: 1_000_000 })
     expect(t).toEqual<EffectiveThresholds>({
-      prepareAt: 110000,
-      auditAt: 135000,
+      prepareAt: 60000,
+      auditAt: 90000,
       compactAt: 150000,
-      targetAfter: 60000,
+      targetAfter: 15000,
       providerBinds: false,
     })
   })
@@ -151,11 +152,13 @@ describe("resolveEffectiveThresholds", () => {
 
   test("#given defaults + 128k window #when resolved #then provider ratio binds and thresholds scale strictly", () => {
     const t = resolveEffectiveThresholds({ configured: defaults(), actualLimit: 128_000 })
+    // Scaled from the policy 60k/90k/150k by the compact ratio 99840/150000,
+    // with the post-compaction target kept at the policy nominal 15k.
     expect(t).toEqual<EffectiveThresholds>({
-      prepareAt: 73216,
-      auditAt: 89856,
+      prepareAt: 39936,
+      auditAt: 59904,
       compactAt: 99840,
-      targetAfter: 49920,
+      targetAfter: 15000,
       providerBinds: true,
     })
     // ordering invariants
