@@ -95,4 +95,52 @@ describe("delegation recovery scope", () => {
       allowed: false,
     })
   })
+
+  test("allows delegation-machinery metadata commands (git log/rev-parse, pwd, ls)", () => {
+    const cases = [
+      ["bash", { command: "git status" }],
+      ["bash", { command: "git log --oneline -5" }],
+      ["bash", { command: "git rev-parse HEAD" }],
+      ["bash", { command: "pwd" }],
+      ["bash", { command: "ls -la packages/omo-opencode/src/features/delegation-first" }],
+      ["bash", { command: "git status && ls -la" }],
+    ] as const
+
+    for (const [tool, hint] of cases) {
+      expect(evaluateRecoveryScope(tool, hint), `${tool} ${JSON.stringify(hint)}`).toMatchObject({ allowed: true })
+    }
+  })
+
+  test("allows reads of governor/omo config and state files", () => {
+    const cases = [
+      ["read", { target: "~/.omo/omo.jsonc" }],
+      ["read", { target: "~/.config/opencode/opencode.json" }],
+      ["read", { target: "packages/omo-opencode/src/hooks/resource-governor/config.ts" }],
+      ["read", { target: ".opencode/oh-my-opencode.jsonc" }],
+      ["grep", { target: "packages/omo-opencode/src/hooks/resource-governor" }],
+    ] as const
+
+    for (const [tool, hint] of cases) {
+      expect(evaluateRecoveryScope(tool, hint), `${tool} ${JSON.stringify(hint)}`).toMatchObject({ allowed: true })
+    }
+  })
+
+  test("allows evidence writes under /tmp and ~/.omo", () => {
+    const cases = [
+      ["write", { target: "/tmp/omo-evidence/probe.txt" }],
+      ["write", { target: "/var/tmp/omo-recovery/probe.json" }],
+      ["write", { target: "~/.omo/evidence/probe.txt" }],
+      ["edit", { target: "/tmp/omo-evidence/recovery.md" }],
+    ] as const
+
+    for (const [tool, hint] of cases) {
+      expect(evaluateRecoveryScope(tool, hint), `${tool} ${JSON.stringify(hint)}`).toMatchObject({ allowed: true })
+    }
+  })
+
+  test("still denies product work and unrelated mutation while recovery is active", () => {
+    expect(evaluateRecoveryScope("write", { target: "packages/web/src/app/page.tsx" })).toMatchObject({ allowed: false })
+    expect(evaluateRecoveryScope("read", { target: "apps/storefront/src/cart.ts" })).toMatchObject({ allowed: false })
+    expect(evaluateRecoveryScope("bash", { command: "rm -rf packages/web" })).toMatchObject({ allowed: false })
+  })
 })
