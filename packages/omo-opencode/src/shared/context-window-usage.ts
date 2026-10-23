@@ -24,6 +24,7 @@ interface AssistantMessageInfo {
 	role: "assistant";
 	providerID?: string;
 	modelID?: string;
+	finish?: string | boolean | null;
 	tokens: {
 		input: number;
 		output: number;
@@ -158,7 +159,15 @@ async function fetchContextWindowUsage(
 
 		if (assistantMessages.length === 0) return null;
 
-		const lastAssistant = assistantMessages[assistantMessages.length - 1];
+		// An in-flight assistant message reports zero tokens, which would pin the
+		// measurement to 0 (and mask the previous turn's real usage) whenever a hook
+		// measures mid-turn, e.g. from tool.execute.after. Prefer the most recent
+		// assistant message that actually finished, falling back to the last one.
+		const completedAssistantMessages = assistantMessages.filter(
+			(m) => (typeof m.finish === "string" && m.finish.length > 0) || m.finish === true,
+		)
+		const pool = completedAssistantMessages.length > 0 ? completedAssistantMessages : assistantMessages
+		const lastAssistant = pool[pool.length - 1];
 		const lastTokens = lastAssistant?.tokens;
 		if (!lastAssistant || !lastTokens) return null;
 

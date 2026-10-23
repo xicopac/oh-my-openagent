@@ -346,4 +346,57 @@ describe("getContextWindowUsage", () => {
       })
     })
   })
+
+  describe("#given an in-flight trailing assistant message with zero tokens", () => {
+    describe("#when context usage is resolved mid-turn", () => {
+      it("#then measures the last finished assistant message instead of the in-flight one", async () => {
+        // given a finished turn (real tokens) followed by an in-flight message (0 tokens)
+        const ctx = {
+          client: {
+            session: {
+              messages: async () => ({
+                data: [
+                  {
+                    info: {
+                      role: "assistant",
+                      providerID: "anthropic",
+                      modelID: "claude-sonnet-4-5",
+                      finish: "stop",
+                      tokens: {
+                        input: 120000,
+                        output: 2000,
+                        reasoning: 0,
+                        cache: { read: 0, write: 0 },
+                      },
+                    },
+                  },
+                  {
+                    info: {
+                      role: "assistant",
+                      providerID: "anthropic",
+                      modelID: "claude-sonnet-4-5",
+                      tokens: {
+                        input: 0,
+                        output: 0,
+                        reasoning: 0,
+                        cache: { read: 0, write: 0 },
+                      },
+                    },
+                  },
+                ],
+              }),
+            },
+          },
+        }
+
+        // when
+        const usage = await getContextWindowUsage(ctx as never, "ses_inflight_skip", {
+          anthropicContext1MEnabled: false,
+        })
+
+        // then the finished turn's 122000 tokens are measured, not 0
+        expect(usage?.remainingTokens).toBe(200000 - 122000)
+      })
+    })
+  })
 })
