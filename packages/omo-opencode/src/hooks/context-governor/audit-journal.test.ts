@@ -152,6 +152,10 @@ async function fireToolAfter(
     { tool: "bash", sessionID, callID },
     { title: "", output: "test", metadata: null },
   )
+  // Governor-initiated compaction is deferred to the idle seam.
+  await hook.event({
+    event: { type: "session.idle", properties: { sessionID } },
+  })
 }
 
 type AuditJournal = Array<Record<string, unknown>>

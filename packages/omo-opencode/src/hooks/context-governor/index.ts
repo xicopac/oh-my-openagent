@@ -156,6 +156,21 @@ type LeaseMeta = {
   grant_usage: number
 }
 
+/**
+ * A governor-initiated compaction that could not run inside the busy
+ * `tool.execute.after` / `chat.params` seams (a real `session.summarize`
+ * blocks while the session is mid-turn and times out after 60s). The decision
+ * is recorded here and executed at the next `session.idle`, where the session
+ * is quiescent and `session.summarize` completes.
+ */
+type PendingCompaction = {
+  effective: EffectiveThresholds
+  /** `force_compact` expires the active lease after the compaction finishes. */
+  expireLease: boolean
+  /** Reason code recorded on the deferral audit line. */
+  reason: string
+}
+
 type GovernorSessionState = {
   phase: GovernorPhase
   providerID: string | null
@@ -179,6 +194,8 @@ type GovernorSessionState = {
   history: HistoryEntry[]
   /** Last working document built for the compaction path; its text survives compaction. */
   lastWorkingDocument: WorkingDocument | null
+  /** Compaction scheduled by a busy seam, to run at the next session.idle. */
+  pendingCompaction: PendingCompaction | null
 }
 
 /**
@@ -204,6 +221,7 @@ function initialState(): GovernorSessionState {
     last_assessment: null,
     history: [],
     lastWorkingDocument: null,
+    pendingCompaction: null,
   }
 }
 
@@ -621,6 +639,60 @@ export function createContextGovernorHook(
     }
   }
 
+  /**
+   * Record a compaction decision without running it now. `session.summarize`
+   * cannot complete while the session is mid-turn (the caller would deadlock
+   * until the 60s timeout), so every governor-initiated compaction is deferred
+   * to the next `session.idle`, where the session is quiescent.
+   */
+  function scheduleCompaction(
+    sessionID: string,
+    sessionState: GovernorSessionState,
+    effective: EffectiveThresholds,
+    expireLease: boolean,
+    reason: string,
+  ): boolean {
+    if (compactionInProgress.has(sessionID)) return false
+    if (sessionState.pendingCompaction) return false
+    if (!sessionState.providerID || !sessionState.modelID) return false
+    sessionState.pendingCompaction = { effective, expireLease, reason }
+    auditEvent(sessionID, "compaction_deferred", {
+      reason_code: reason,
+      before_tokens: sessionState.lastUsedTokens,
+      target_tokens: effective.targetAfter,
+      provider: sessionState.providerID,
+      model: sessionState.modelID,
+    })
+    return true
+  }
+
+  /**
+   * Run a scheduled compaction at the idle seam. The pending record is cleared
+   * before the await so a re-entrant idle (the compaction itself can emit idle)
+   * cannot double-run; a compaction already in flight leaves the pending record
+   * untouched so the next idle retries it.
+   */
+  async function executePendingCompaction(sessionID: string): Promise<void> {
+    const sessionState = state.get(sessionID)
+    if (!sessionState) return
+    const pending = sessionState.pendingCompaction
+    if (!pending) return
+    if (compactionInProgress.has(sessionID)) return
+    sessionState.pendingCompaction = null
+    const store = getLeaseStore()
+    try {
+      await performSummarize(sessionID, sessionState, pending.effective)
+      if (pending.expireLease) {
+        store.expireLease(sessionID)
+        auditEvent(sessionID, "exit_expansion", { reason_code: "lease_expired_forced" })
+      }
+    } finally {
+      sessionState.entered_at_tokens = null
+      sessionState.next_reassessment_tokens = null
+      sessionState.turns_since_assessment = 0
+    }
+  }
+
   function updateBlockedFlag(sessionID: string, decision: GovernorDecision): void {
     if (
       decision.kind === "defer_lease" ||
@@ -747,6 +819,16 @@ export function createContextGovernorHook(
         if (wasExpanded) {
           auditEvent(sessionID, "exit_expansion", { reason_code: "external_compaction" })
         }
+      }
+      return
+    }
+
+    if (event.type === "session.idle") {
+      // Idle seam: the session is quiescent, so a deferred `session.summarize`
+      // completes here (unlike the busy tool.execute.after / chat.params seams).
+      const sessionID = resolveSessionEventID(props)
+      if (sessionID) {
+        await executePendingCompaction(sessionID)
       }
       return
     }
@@ -932,22 +1014,21 @@ export function createContextGovernorHook(
         return
       case "compact":
       case "compact_degraded":
-        await performSummarize(sessionID, sessionState, effective)
-        sessionState.entered_at_tokens = null
-        sessionState.next_reassessment_tokens = null
-        sessionState.turns_since_assessment = 0
+        scheduleCompaction(sessionID, sessionState, effective, false, decision.kind)
         return
       case "force_compact":
-        sessionState.phase = "forcing"
-        await performSummarize(sessionID, sessionState, effective)
-        if (activeLease) {
-          store.expireLease(sessionID)
-          auditEvent(sessionID, "exit_expansion", { reason_code: "lease_expired_forced" })
+        if (
+          scheduleCompaction(
+            sessionID,
+            sessionState,
+            effective,
+            activeLease !== null,
+            "force_compact",
+          )
+        ) {
+          sessionState.phase = "forcing"
+          sessionState.lease_meta = { turns_since_grant: 0, tokens_since_grant: 0, grant_usage: 0 }
         }
-        sessionState.lease_meta = { turns_since_grant: 0, tokens_since_grant: 0, grant_usage: 0 }
-        sessionState.entered_at_tokens = null
-        sessionState.next_reassessment_tokens = null
-        sessionState.turns_since_assessment = 0
         return
       case "renew_lease": {
         const outcome = store.renewLease(sessionID, {
@@ -1083,8 +1164,9 @@ export function createContextGovernorHook(
       }
     }
 
-    // Over the ceiling: block and force compaction before the next provider
-    // request can be dispatched.
+    // Over the ceiling: block and schedule compaction for the next idle seam.
+    // Running `session.summarize` here (inside `chat.params`, mid-turn) would
+    // deadlock until the 60s timeout, so the decision is deferred.
     blockedByGovernor.add(sessionID)
     auditEvent(sessionID, "pre_dispatch_ceiling", {
       used_tokens: usedTokens,
@@ -1094,23 +1176,15 @@ export function createContextGovernorHook(
       model: sessionState.modelID,
     })
 
-    if (
-      sessionState.providerID &&
-      sessionState.modelID &&
-      !compactionInProgress.has(sessionID)
-    ) {
-      try {
-        const workingDocument = buildCompactionWorkingDocument(sessionState)
-        sessionState.lastWorkingDocument = workingDocument
-        persistWorkingDocument(sessionID, workingDocument)
-        compactionInProgress.add(sessionID)
-        await summarizeOnce(sessionID, sessionState)
-        invalidateContextWindowUsageCache(ctx, sessionID)
-      } catch (error) {
-        sessionState.last_audit_error = String(error)
-        auditEvent(sessionID, "pre_dispatch_ceiling_failed", { reason_code: "summarize_error" })
-      } finally {
-        compactionInProgress.delete(sessionID)
+    if (sessionState.providerID && sessionState.modelID && !compactionInProgress.has(sessionID)) {
+      const actualLimit = resolveActualContextLimit(
+        sessionState.providerID,
+        sessionState.modelID,
+        deps.modelCacheState,
+      )
+      const effective = resolveEffectiveThresholds({ configured: cfg, actualLimit })
+      if (effective) {
+        scheduleCompaction(sessionID, sessionState, effective, false, "pre_dispatch_ceiling")
       }
     }
 

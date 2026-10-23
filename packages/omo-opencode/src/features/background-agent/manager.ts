@@ -326,6 +326,12 @@ export class BackgroundManager {
 
   private queuesByKey: Map<string, QueueItem[]> = new Map()
   private processingKeys: Set<string> = new Set()
+  // Task ids with a cancel in flight. While the cancel awaits the session
+  // abort, a concurrent completion/idle path must not report the child as
+  // "completed": the watchdog-reclaimed child is truthfully "cancelled", and a
+  // stale "completed" terminal makes the liveness record terminal early so its
+  // deduped blocked wake never fires.
+  private readonly cancellingTaskIds = new Set<string>()
   private completionTimers: Map<string, ReturnType<typeof setTimeout>> = new Map()
   private readonly syncAttachedSessions = new Set<string>()
   private readonly resumesAwaitingAdmission = new Set<string>()
@@ -2703,6 +2709,7 @@ The task was re-queued on a fallback model after a retryable failure.
     const source = options?.source ?? "cancel"
     const abortSession = options?.abortSession !== false
     const reason = options?.reason
+    this.cancellingTaskIds.add(taskId)
 
     if (task.status === "pending") {
       const rawKey = this.getRawConcurrencyKeyFromTask(task)
@@ -2725,7 +2732,10 @@ The task was re-queued on a fallback model after a retryable failure.
     const wasRunning = task.status === "running"
     if (wasRunning && abortSession && task.sessionId) {
       const aborted = await this.abortSessionWithLogging(task.sessionId, `task cancellation (${source})`)
-      if (!aborted) return false
+      if (!aborted) {
+        this.cancellingTaskIds.delete(taskId)
+        return false
+      }
 
       clearDelegatedChildSessionBootstrap(task.sessionId)
       SessionCategoryRegistry.remove(task.sessionId)
@@ -2778,6 +2788,7 @@ The task was re-queued on a fallback model after a retryable failure.
     }
 
     if (options?.skipNotification) {
+      this.cancellingTaskIds.delete(taskId)
       this.cleanupPendingByParent(task)
       this.scheduleTaskRemoval(task.id)
       log(`[background-agent] Task cancelled via ${source} (notification skipped):`, task.id)
@@ -2793,6 +2804,7 @@ The task was re-queued on a fallback model after a retryable failure.
       log("[background-agent] Error in notifyParentSession for cancelled task:", { taskId: task.id, error: err })
     }
 
+    this.cancellingTaskIds.delete(taskId)
     return true
   }
 
@@ -2856,6 +2868,15 @@ The task was re-queued on a fallback model after a retryable failure.
     // Guard: Check if task is still running (could have been completed by another path)
     if (task.status !== "running") {
       log("[background-agent] Task already completed, skipping:", { taskId: task.id, status: task.status, source })
+      return false
+    }
+
+    // Guard: a cancel is in flight for this task. The abort of a cancelled
+    // child can emit idle/progress that races the completion path; reporting
+    // the child as "completed" would make the liveness record terminal before
+    // the truthful "cancelled" stage arrives.
+    if (this.cancellingTaskIds.has(task.id)) {
+      log("[background-agent] Task cancel in flight, skipping completion:", { taskId: task.id, source })
       return false
     }
 

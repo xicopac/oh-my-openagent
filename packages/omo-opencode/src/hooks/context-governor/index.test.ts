@@ -113,6 +113,15 @@ async function fireMessageUpdated(
   })
 }
 
+async function fireIdle(
+  hook: ReturnType<typeof createContextGovernorHook>,
+  sessionID: string,
+): Promise<void> {
+  await hook.event({
+    event: { type: "session.idle", properties: { sessionID } },
+  })
+}
+
 async function fireToolAfter(
   hook: ReturnType<typeof createContextGovernorHook>,
   sessionID: string,
@@ -122,6 +131,8 @@ async function fireToolAfter(
     { tool: "bash", sessionID, callID },
     { title: "", output: "test", metadata: null },
   )
+  // Governor-initiated compaction is deferred to the idle seam.
+  await fireIdle(hook, sessionID)
 }
 
 function makeCacheStateWithLimit(limit: number): {
@@ -454,6 +465,110 @@ describe("createContextGovernorHook", () => {
     await fireToolAfter(hook, sessionID, "call_1")
 
     // then: first measure 1100 -> compact; post-compaction measure 150 <= target 250 -> stop after one pass
+    expect(ctx.client.session.summarize).toHaveBeenCalledTimes(1)
+  })
+
+  it("defers compaction to the idle seam instead of running inside tool.execute.after", async () => {
+    // given
+    const ctx = createMockCtx()
+    const hook = createContextGovernorHook(ctx as never, {
+      pluginConfig: { context_governor: tinyCfg() } as never,
+      modelCacheState: makeCacheStateWithLimit(TINY_LIMIT),
+      directory: () => dir,
+    })
+    const sessionID = "ses_defer"
+
+    await fireMessageUpdated(hook, { sessionID, input: 1100 })
+    hook.ingestVerdict(sessionID, SAFE_VERDICT)
+
+    // when: crossing compactAt inside the busy tool seam (no idle fired yet)
+    await hook["tool.execute.after"](
+      { tool: "bash", sessionID, callID: "call_1" },
+      { title: "", output: "test", metadata: null },
+    )
+
+    // then: nothing is dispatched while the session is busy
+    expect(ctx.client.session.summarize).not.toHaveBeenCalled()
+
+    // when: the session goes idle
+    await fireIdle(hook, sessionID)
+
+    // then: the deferred compaction runs exactly once
+    expect(ctx.client.session.summarize).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not double-run a deferred compaction when idle fires twice", async () => {
+    // given
+    const ctx = createMockCtx()
+    const hook = createContextGovernorHook(ctx as never, {
+      pluginConfig: { context_governor: tinyCfg() } as never,
+      modelCacheState: makeCacheStateWithLimit(TINY_LIMIT),
+      directory: () => dir,
+    })
+    const sessionID = "ses_defer_once"
+
+    await fireMessageUpdated(hook, { sessionID, input: 1100 })
+    hook.ingestVerdict(sessionID, SAFE_VERDICT)
+    await hook["tool.execute.after"](
+      { tool: "bash", sessionID, callID: "call_1" },
+      { title: "", output: "test", metadata: null },
+    )
+
+    // when: idle fires twice
+    await fireIdle(hook, sessionID)
+    // a re-entrant idle (e.g. emitted by the compaction itself) must be a no-op
+    await fireIdle(hook, sessionID)
+
+    // then: one compaction
+    expect(ctx.client.session.summarize).toHaveBeenCalledTimes(1)
+  })
+
+  it("leaves a deferred compaction pending when the session never goes idle", async () => {
+    // given
+    const ctx = createMockCtx()
+    const hook = createContextGovernorHook(ctx as never, {
+      pluginConfig: { context_governor: tinyCfg() } as never,
+      modelCacheState: makeCacheStateWithLimit(TINY_LIMIT),
+      directory: () => dir,
+    })
+    const sessionID = "ses_defer_pending"
+
+    await fireMessageUpdated(hook, { sessionID, input: 1100 })
+    hook.ingestVerdict(sessionID, SAFE_VERDICT)
+    await hook["tool.execute.after"](
+      { tool: "bash", sessionID, callID: "call_1" },
+      { title: "", output: "test", metadata: null },
+    )
+
+    // then: no spin, no dispatch; the decision stays pending for the next idle
+    expect(ctx.client.session.summarize).not.toHaveBeenCalled()
+    expect(hook.diagnose(sessionID).latest_decision).toBe("compact")
+  })
+
+  it("pre-dispatch ceiling defers compaction instead of blocking the chat.params seam", async () => {
+    // given
+    const ctx = createMockCtx()
+    const hook = createContextGovernorHook(ctx as never, {
+      pluginConfig: { context_governor: tinyCfg() } as never,
+      modelCacheState: makeCacheStateWithLimit(TINY_LIMIT),
+      directory: () => dir,
+    })
+    const sessionID = "ses_ceiling_defer"
+
+    await fireMessageUpdated(hook, { sessionID, input: 20000 })
+
+    // when: over the pre-dispatch ceiling (blocked)
+    const result = await hook.preDispatchCeiling(sessionID)
+
+    // then: blocked, but nothing dispatched mid-turn
+    expect(result.blocked).toBe(true)
+    expect(result.mustCompact).toBe(true)
+    expect(ctx.client.session.summarize).not.toHaveBeenCalled()
+
+    // when: idle
+    await fireIdle(hook, sessionID)
+
+    // then: the deferred compaction runs
     expect(ctx.client.session.summarize).toHaveBeenCalledTimes(1)
   })
 })

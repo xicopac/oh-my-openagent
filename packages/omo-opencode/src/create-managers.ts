@@ -353,12 +353,13 @@ export function createManagers(args: {
   }))
 
   delegationFirstRuntime?.setRecoverySink({
-    cancel: async (sessionID, reason) => {
+    cancel: async (sessionID, reason, options) => {
       const task = backgroundManager.findBySession(sessionID)
       if (task) {
         await backgroundManager.cancelTask(task.id, {
           source: "watchdog-reclaim",
           reason,
+          skipNotification: options?.suppressNotification === true,
         })
       }
     },

@@ -92,6 +92,15 @@ async function fireMessage(
   })
 }
 
+async function fireIdle(
+  hook: ReturnType<typeof createContextGovernorHook>,
+  sessionID: string,
+): Promise<void> {
+  await hook.event({
+    event: { type: "session.idle", properties: { sessionID } },
+  })
+}
+
 async function fireToolAfter(
   hook: ReturnType<typeof createContextGovernorHook>,
   sessionID: string,
@@ -101,6 +110,8 @@ async function fireToolAfter(
     { tool: "bash", sessionID, callID },
     { title: "", output: "test", metadata: null },
   )
+  // Governor-initiated compaction is deferred to the idle seam.
+  await fireIdle(hook, sessionID)
 }
 
 function makeGovernor(
@@ -234,6 +245,9 @@ describe("pre-dispatch ceiling (chat.params seam)", () => {
     expect(overResult.boundary).toBe("over_ceiling")
     expect(overResult.mustCompact).toBe(true)
     expect(overResult.blocked).toBe(true)
+    // Deferred: nothing dispatched inside the busy chat.params seam.
+    expect(ctx.client.session.summarize).not.toHaveBeenCalled()
+    await fireIdle(hook, over)
     expect(ctx.client.session.summarize).toHaveBeenCalledTimes(1)
     const call = ctx.client.session.summarize.mock.calls[0]?.[0]
     expect(call?.path?.id).toBe(over)
