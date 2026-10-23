@@ -104,7 +104,18 @@ export type RelaunchOutcome =
  * BackgroundManager exists.
  */
 export type RecoverySink = {
-  cancel: (sessionID: string, reason: string) => Promise<void> | void
+  /**
+   * Cancel the child session for `sessionID`. `options.suppressNotification`
+   * is set when the cancel is an intermediate step of a retrying episode (a
+   * replacement child is being dispatched): the parent must be woken exactly
+   * once, at the episode terminal, so the intermediate cancel stays silent
+   * while the retry/attempt trail remains fully journaled.
+   */
+  cancel: (
+    sessionID: string,
+    reason: string,
+    options?: { suppressNotification?: boolean },
+  ) => Promise<void> | void
   /** Re-dispatch a replacement child from a retained assignment + failover action. */
   relaunch?: (
     assignment: ReplayableAssignment,
@@ -309,10 +320,14 @@ export function createDelegationFirstRuntime(
   // how many components (watchdog sweep, hard breaker, model-unavailable
   // failover) observe the same terminal condition.
   const cancelIssued = new Set<string>()
-  function issueCancel(sessionID: string, reason: string): void {
+  function issueCancel(
+    sessionID: string,
+    reason: string,
+    options?: { suppressNotification?: boolean },
+  ): void {
     if (cancelIssued.has(sessionID)) return
     cancelIssued.add(sessionID)
-    void sink?.cancel(sessionID, reason)
+    void sink?.cancel(sessionID, reason, options)
   }
 
   function markModelRecovered(modelKey: string): void {
@@ -417,7 +432,7 @@ export function createDelegationFirstRuntime(
     stallMode: NonNullable<WatchdogCheckResult["stallMode"]>,
     correlated: boolean,
     stage: ChildStage,
-  ): void {
+  ): boolean {
     const lineage = lineageByAssignment.get(assignment.assignment_id) ?? initialLineage(assignment)
     const action = recommendFailoverAction({
       workers: assignment.workers,
@@ -449,7 +464,7 @@ export function createDelegationFirstRuntime(
         assignment_id: assignment.assignment_id,
         attempt: lineage.attempt_number,
       })
-      return
+      return false
     }
 
     if (action.kind === "alternate_worker") {
@@ -498,7 +513,7 @@ export function createDelegationFirstRuntime(
         assignment_id: assignment.assignment_id,
         attempt: nextLineage.attempt_number,
       })
-      return
+      return false
     }
 
     const outcome = relaunch(assignment, action, replacementPrompt)
@@ -509,6 +524,7 @@ export function createDelegationFirstRuntime(
     } else {
       applyRelaunchOutcome(sessionID, assignment.assignment_id, nextLineage.attempt_number, action.worker.model_id, outcome)
     }
+    return true
   }
 
   return {
@@ -971,6 +987,7 @@ export function createDelegationFirstRuntime(
       const assignmentID = assignmentIDFor(sessionID)
       const assignment = assignmentID ? assignmentsById.get(assignmentID) : undefined
 
+      let replacementDispatched = false
       if (decision.retry) {
         audit?.write(sessionID, {
           subsystem: "delegation",
@@ -980,7 +997,13 @@ export function createDelegationFirstRuntime(
           alternate_worker: decision.correlated ? true : false,
         })
         if (assignment) {
-          tryRedispatch(sessionID, assignment, result.stallMode, decision.correlated, result.stage)
+          replacementDispatched = tryRedispatch(
+            sessionID,
+            assignment,
+            result.stallMode,
+            decision.correlated,
+            result.stage,
+          )
         } else {
           audit?.write(sessionID, {
             subsystem: "delegation",
@@ -1037,7 +1060,13 @@ export function createDelegationFirstRuntime(
 
       // Truthful terminal: a reclaimed child is cancelled, never left running.
       watchdog.onTerminal(sessionID, "cancelled")
-      issueCancel(sessionID, decision.reason)
+      // Single terminal wake per episode: when a replacement child was
+      // dispatched the reclaim cancel is an intermediate step, so the parent
+      // wake is suppressed here and fires once at the episode terminal
+      // (exhausted/blocked/completed). Retry/attempt details stay journaled.
+      issueCancel(sessionID, decision.reason, {
+        suppressNotification: replacementDispatched,
+      })
     },
     watchdogActivity(sessionID) {
       watchdog.onActivity(sessionID)

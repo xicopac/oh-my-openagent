@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createDelegationFirstRuntime } from "./runtime"
+import type { ReplayableAssignment } from "./replay"
 import type { GovernanceAuditWriter } from "../../shared/governance-audit"
 
 type CapturedEvent = { sessionID: string; fields: Record<string, unknown> }
@@ -190,5 +191,67 @@ describe("delegation-first child stall lifecycle and recovery", () => {
     expect(
       events.filter((e) => e.fields.event === "hard_circuit_breaker_tripped"),
     ).toHaveLength(1)
+  })
+
+  test("reclaim cancel suppresses the parent wake while a replacement is dispatched, then notifies at the episode terminal", () => {
+    // given: a retained assignment with two free workers and a relaunch sink
+    const { writer, events } = captureAudit()
+    const rt = createDelegationFirstRuntime(writer, {
+      modelAvailabilityFilePath: `/tmp/omo-suppress-reclaim-${process.pid}.json`,
+    })
+    const cancels: Array<{ sessionID: string; suppress: boolean | undefined }> = []
+    const relaunches: string[] = []
+    rt.setRecoverySink({
+      cancel: (sessionID, _reason, options) => {
+        cancels.push({ sessionID, suppress: options?.suppressNotification })
+      },
+      relaunch: () => {
+        relaunches.push("replacement")
+        return { kind: "launched", taskID: "bg-2", sessionID: "child2" }
+      },
+    })
+    const assignment: ReplayableAssignment = {
+      assignment_id: "job1",
+      root_session_id: "parent",
+      parent_session_id: "parent",
+      parent_message_id: "msg-1",
+      prompt: "map the auth flow",
+      agent: "explore",
+      category: "explore",
+      workers: [
+        { model_id: "opengateway/explore", tier: "free", capability: 0.7, free: true },
+        { model_id: "opengateway/other", tier: "free", capability: 0.6, free: true },
+      ],
+    }
+    rt.retainAssignment(assignment, "child1")
+    rt.attachChildSession("parent", "child1")
+    rt.markRequestStarted("child1")
+    const t0 = Date.now()
+
+    // when: the first stall reclaims child1 and a replacement is dispatched
+    rt.checkAllWatchdogs(t0 + 200_000)
+    rt.reclaimStalled("child1", "opengateway/explore", t0 + 200_000)
+
+    // then: the intermediate cancel is suppressed (the episode continues)
+    expect(relaunches).toEqual(["replacement"])
+    expect(cancels).toEqual([{ sessionID: "child1", suppress: true }])
+
+    // when: the replacement (same episode) stalls and the reclaim budget is exhausted
+    rt.noteReplacementSession("job1", "child2")
+    rt.attachChildSession("parent", "child2")
+    rt.markRequestStarted("child2")
+    rt.checkAllWatchdogs(t0 + 400_000)
+    rt.reclaimStalled("child2", "opengateway/other", t0 + 400_000)
+
+    // then: the episode-terminal cancel notifies (no suppression)
+    expect(cancels).toEqual([
+      { sessionID: "child1", suppress: true },
+      { sessionID: "child2", suppress: false },
+    ])
+    // and retry/attempt details stay fully journaled
+    const firstAttempt = eventNames(events, "child1")
+    expect(firstAttempt).toContain("worker_retry_planned")
+    expect(firstAttempt).toContain("worker_retry_dispatched")
+    expect(eventNames(events, "child2")).toContain("retry_chain_exhausted")
   })
 })

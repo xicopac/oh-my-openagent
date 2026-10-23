@@ -2419,6 +2419,31 @@ describe("BackgroundManager.tryCompleteTask", () => {
     expect(concurrencyManager.getCount(concurrencyKey)).toBe(0)
   })
 
+  test("suppresses completion while a cancel is in flight so the terminal stage is truthfully cancelled", async () => {
+    // given: a running child whose watchdog reclaim cancel is mid-flight
+    const task: BackgroundTask = {
+      id: "task-cancelling",
+      sessionId: "session-cancelling",
+      parentSessionId: "session-parent",
+      parentMessageId: "msg-1",
+      description: "stalled child",
+      prompt: "test",
+      agent: "explore",
+      status: "running",
+      startedAt: new Date(),
+    }
+    const cancellingTaskIds = cast<{ cancellingTaskIds: Set<string> }>(manager).cancellingTaskIds
+    cancellingTaskIds.add(task.id)
+
+    // when: an idle/completion path races the cancel
+    const completed = await tryCompleteTaskForTest(manager, task)
+
+    // then: the spurious "completed" stage is suppressed
+    expect(completed).toBe(false)
+    expect(task.status).toBe("running")
+    cancellingTaskIds.delete(task.id)
+  })
+
   test("should prevent double completion and double release", async () => {
     // given
     const concurrencyKey = "anthropic/claude-opus-4.7"
