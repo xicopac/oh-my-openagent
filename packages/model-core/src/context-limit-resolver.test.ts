@@ -245,4 +245,75 @@ describe("resolveActualContextLimit", () => {
     // then
     expect(actualLimit).toBe(200_000)
   })
+
+  it("resolves the live limit when the static cache misses", () => {
+    // given a model absent from the static cache but known to live metadata
+    const modelContextLimitsCache = new Map<string, number>()
+
+    // when
+    const actualLimit = resolveActualContextLimit("opencode", "deepseek-v4.1-flash", {
+      anthropicContext1MEnabled: false,
+      modelContextLimitsCache,
+      resolveLiveContextLimit: (providerID, modelID) =>
+        providerID === "opencode" && modelID === "deepseek-v4.1-flash" ? 1_000_000 : null,
+    })
+
+    // then the real window drives the governor instead of returning null
+    expect(actualLimit).toBe(1_000_000)
+  })
+
+  it("prefers the static cache over the live fallback", () => {
+    // given the static cache already knows the model
+    const modelContextLimitsCache = new Map<string, number>([["openai/gpt-5", 400_000]])
+
+    // when the live source reports a different value
+    const actualLimit = resolveActualContextLimit("openai", "gpt-5", {
+      anthropicContext1MEnabled: false,
+      modelContextLimitsCache,
+      resolveLiveContextLimit: () => 999_999,
+    })
+
+    // then the static configuration wins (known-limit models are unchanged)
+    expect(actualLimit).toBe(400_000)
+  })
+
+  it("returns null when neither the static cache nor the live fallback resolves", () => {
+    // given an empty cache and an unresolved live lookup
+    const actualLimit = resolveActualContextLimit("opencode", "unknown-model", {
+      anthropicContext1MEnabled: false,
+      modelContextLimitsCache: new Map(),
+      resolveLiveContextLimit: () => null,
+    })
+
+    // then the governor stays inert
+    expect(actualLimit).toBeNull()
+  })
+
+  it("ignores a non-positive live limit", () => {
+    // given a live source that returns an unusable value
+    const actualLimit = resolveActualContextLimit("opencode", "zero-model", {
+      anthropicContext1MEnabled: false,
+      modelContextLimitsCache: new Map(),
+      resolveLiveContextLimit: () => 0,
+    })
+
+    // then it is treated as unresolved
+    expect(actualLimit).toBeNull()
+  })
+
+  it("does not consult the live fallback for Anthropic providers", () => {
+    // given an Anthropic model outside the GA 1M allowlist
+    delete process.env[ANTHROPIC_CONTEXT_ENV_KEY]
+    delete process.env[VERTEX_CONTEXT_ENV_KEY]
+
+    // when a live source would report a different window
+    const actualLimit = resolveActualContextLimit("anthropic", "claude-sonnet-4-5", {
+      anthropicContext1MEnabled: false,
+      modelContextLimitsCache: new Map(),
+      resolveLiveContextLimit: () => 500_000,
+    })
+
+    // then the Anthropic default is preserved
+    expect(actualLimit).toBe(200_000)
+  })
 })

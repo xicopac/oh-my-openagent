@@ -6,6 +6,14 @@ const ANTHROPIC_GA_1M_LIMIT = 1_000_000
 export type ContextLimitModelCacheState = {
   anthropicContext1MEnabled: boolean
   modelContextLimitsCache?: Map<string, number>
+  /**
+   * Optional live-metadata fallback consulted ONLY when the static
+   * `modelContextLimitsCache` has no entry for the model. It lets the adapter
+   * resolve a model's real context window from OpenCode's live provider model
+   * metadata (provider model list / models.dev cache) without model-core
+   * depending on any adapter code. Must return a positive token count or null.
+   */
+  resolveLiveContextLimit?: (providerID: string, modelID: string) => number | null
 }
 
 function isAnthropicProvider(providerID: string, modelID: string): boolean {
@@ -47,5 +55,14 @@ export function resolveActualContextLimit(
     return DEFAULT_ANTHROPIC_ACTUAL_LIMIT
   }
 
-  return modelCacheState?.modelContextLimitsCache?.get(`${providerID}/${modelID}`) ?? null
+  const cachedLimit = modelCacheState?.modelContextLimitsCache?.get(`${providerID}/${modelID}`)
+  if (typeof cachedLimit === "number") return cachedLimit
+
+  // Models absent from the static config-derived cache (e.g. gateway models
+  // whose `limit.context` exists only in live provider model metadata) still
+  // resolve their real window here, so the absolute policy thresholds apply.
+  const liveLimit = modelCacheState?.resolveLiveContextLimit?.(providerID, modelID)
+  if (typeof liveLimit === "number" && liveLimit > 0) return liveLimit
+
+  return null
 }
