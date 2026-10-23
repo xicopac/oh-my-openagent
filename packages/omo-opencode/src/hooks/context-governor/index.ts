@@ -31,6 +31,15 @@ import {
 import { resolveEffectiveThresholds, type EffectiveThresholds } from "./threshold-policy"
 import type { VerifierVerdict } from "./verdict"
 
+import { PRE_DISPATCH_CEILING_TOKENS, resolveContextBudget } from "./budget-policy"
+import { boundChildResult } from "./context-payload-budget"
+import {
+  buildWorkingDocument,
+  DEFAULT_WORKING_DOCUMENT_TOKENS,
+  type HistoryEntry,
+  type WorkingDocument,
+} from "./working-document"
+
 export { encodeSessionId } from "./capsule-store"
 export { evaluateGovernorDecision, leaseExpired } from "./governor"
 export type {
@@ -38,6 +47,36 @@ export type {
   GovernorDecision,
   GovernorPhase,
 } from "./governor"
+
+export {
+  PROACTIVE_COMPACTION_TOKENS,
+  MANDATORY_COMPACTION_TOKENS,
+  PRE_DISPATCH_CEILING_TOKENS,
+  POST_COMPACTION_MIN_TOKENS,
+  POST_COMPACTION_MAX_TOKENS,
+  POST_COMPACTION_TARGET_TOKENS,
+  resolveOutputReserve,
+  resolveContextBudget,
+  boundaryDecision,
+  measureContextReduction,
+} from "./budget-policy"
+export type { ModelContextBudget, ContextBudgetPlan } from "./budget-policy"
+
+export {
+  estimateTokens,
+  boundChildResult,
+  boundToolOutput,
+  createRereadGuard,
+} from "./context-payload-budget"
+export type { BoundedPayload } from "./context-payload-budget"
+
+export { buildWorkingDocument, DEFAULT_WORKING_DOCUMENT_TOKENS } from "./working-document"
+export type {
+  HistoryEntry,
+  HistoryRef,
+  WorkingDocumentInput,
+  WorkingDocument,
+} from "./working-document"
 
 const COMPACTION_TIMEOUT_MS = 60_000
 const CAPSULE_STALENESS_GRACE = 5
@@ -136,7 +175,18 @@ type GovernorSessionState = {
     context_tokens: number
     ts: string
   } | null
+  /** Bounded (last MAX_HISTORY_ENTRIES) transcript reference used to build the working document. */
+  history: HistoryEntry[]
+  /** Last working document built for the compaction path; its text survives compaction. */
+  lastWorkingDocument: WorkingDocument | null
 }
+
+/**
+ * Maximum transcript entries retained per session for the working-document
+ * history reference. The full history is never inlined: only the bounded
+ * head/tail reference is carried, so this cap keeps memory bounded too.
+ */
+const MAX_HISTORY_ENTRIES = 200
 
 function initialState(): GovernorSessionState {
   return {
@@ -152,6 +202,8 @@ function initialState(): GovernorSessionState {
     next_reassessment_tokens: null,
     turns_since_assessment: 0,
     last_assessment: null,
+    history: [],
+    lastWorkingDocument: null,
   }
 }
 
@@ -163,6 +215,66 @@ export function isCompactionBlockedByGovernor(sessionID: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function extractHistoryText(info: Record<string, unknown>): string {
+  const parts = info.parts
+  if (!Array.isArray(parts)) return ""
+  const texts: string[] = []
+  for (const part of parts) {
+    if (isRecord(part) && part.type === "text" && typeof part.text === "string") {
+      texts.push(part.text)
+    }
+  }
+  return texts.join(" ")
+}
+
+/**
+ * Child-result tools whose output re-enters the parent context. Their results
+ * are bounded with `boundChildResult` (head/tail + retrieval reference) so a
+ * huge delegated result never floods the parent.
+ */
+const CHILD_RESULT_TOOLS = new Set(["task", "call_omo_agent", "background_output"])
+const CHILD_RESULT_MAX_TOKENS = 8_000
+
+function applyChildResultBudget(
+  tool: string,
+  callID: string,
+  output: { output: string },
+): void {
+  if (!CHILD_RESULT_TOOLS.has(tool)) return
+  if (typeof output.output !== "string" || output.output.length === 0) return
+  const bounded = boundChildResult(output.output, {
+    maxTokens: CHILD_RESULT_MAX_TOKENS,
+    retrievalRef: callID.length > 0 ? callID : undefined,
+  })
+  if (bounded.truncated) {
+    output.output = bounded.text
+  }
+}
+
+/**
+ * Record one bounded transcript reference per message (deduped by id, capped at
+ * MAX_HISTORY_ENTRIES). Only ids/roles/a short text snippet are kept; full
+ * history is never retained or inlined.
+ */
+function captureHistoryEntry(
+  sessionState: GovernorSessionState,
+  info: Record<string, unknown>,
+): void {
+  const id = typeof info.id === "string" ? info.id : undefined
+  const role = typeof info.role === "string" ? info.role : undefined
+  const text = extractHistoryText(info)
+  const history = sessionState.history
+  const last = history[history.length - 1]
+  if (id !== undefined && last?.id === id) {
+    history[history.length - 1] = { id, role, text }
+    return
+  }
+  history.push({ id, role, text })
+  if (history.length > MAX_HISTORY_ENTRIES) {
+    history.splice(0, history.length - MAX_HISTORY_ENTRIES)
+  }
 }
 
 function mapAnchorRanges(verdict: VerifierVerdict): RetainedRange[] {
@@ -232,6 +344,20 @@ export type ContextGovernorDiagnostic = {
   audit_journal_path: string | null
 }
 
+/**
+ * Outcome of the pre-dispatch ceiling check. `over_ceiling` means the measured
+ * context exceeds the policy ceiling and the next provider request must not be
+ * dispatched until compaction runs; `blocked` is true in that case.
+ */
+export type PreDispatchCeilingResult = {
+  readonly checked: boolean
+  readonly usedTokens: number | null
+  readonly ceiling: number
+  readonly boundary: "under_ceiling" | "at_ceiling" | "over_ceiling" | "unknown"
+  readonly mustCompact: boolean
+  readonly blocked: boolean
+}
+
 export type ContextGovernorHook = {
   event: (input: { event: { type: string; properties?: unknown } }) => Promise<void>
   ingestVerdict: (
@@ -243,6 +369,19 @@ export type ContextGovernorHook = {
     output: { title: string; output: string; metadata: unknown },
   ) => Promise<void>
   diagnose: (sessionID: string) => ContextGovernorDiagnostic
+  /**
+   * Pre-dispatch ceiling gate, invoked on the real pre-dispatch path
+   * (`chat.params`, before every provider request). When the measured context
+   * exceeds the policy pre-dispatch ceiling it forces compaction and reports
+   * `blocked: true`; otherwise it is a no-op.
+   */
+  preDispatchCeiling: (sessionID: string) => Promise<PreDispatchCeilingResult>
+  /**
+   * Working-document text injected into the compaction context
+   * (`experimental.session.compacting`) so objective/phase/history reference
+   * survive compaction. Returns `undefined` when there is nothing to inject.
+   */
+  injectCompactionContext: (sessionID: string) => string | undefined
 }
 
 export function createContextGovernorHook(
@@ -283,6 +422,84 @@ export function createContextGovernorHook(
       auditEvent(sessionID, "session_init", { enabled: resolveConfig().enabled === true })
     }
     return s
+  }
+
+  /**
+   * Resolve the pre-dispatch ceiling for a session. Uses the model-aware policy
+   * plan when the provider/model context limit is known, otherwise the fixed
+   * policy ceiling (150k). This is the number enforced before a provider request.
+   */
+  function resolvePreDispatchCeiling(sessionState: GovernorSessionState): number {
+    if (sessionState.providerID && sessionState.modelID) {
+      const actualLimit = resolveActualContextLimit(
+        sessionState.providerID,
+        sessionState.modelID,
+        deps.modelCacheState,
+      )
+      if (actualLimit !== null && actualLimit > 0) {
+        return resolveContextBudget({ windowTokens: actualLimit }).preDispatchCeiling
+      }
+    }
+    return PRE_DISPATCH_CEILING_TOKENS
+  }
+
+  function clipText(value: string, maxChars: number): string {
+    const normalized = value.replace(/\s+/g, " ").trim()
+    if (normalized.length <= maxChars) return normalized
+    return normalized.slice(0, maxChars)
+  }
+
+  /**
+   * Build the compact working document for the compaction path. Large history is
+   * referenced (never inlined); the objective is the first captured user turn,
+   * the phase/next-action come from the governor state machine, and the token
+   * bound is DEFAULT_WORKING_DOCUMENT_TOKENS.
+   */
+  function buildCompactionWorkingDocument(sessionState: GovernorSessionState): WorkingDocument {
+    const ceiling = resolvePreDispatchCeiling(sessionState)
+    const history = sessionState.history
+    const firstUser = history.find((entry) => entry.role === "user" && entry.text.trim().length > 0)
+    const objective = clipText(firstUser?.text ?? "", 400)
+    const constraints: string[] = [`pre-dispatch ceiling ${ceiling} tokens`]
+    if (sessionState.lastEffective) {
+      constraints.push(`post-compaction target ${sessionState.lastEffective.targetAfter} tokens`)
+    }
+    return buildWorkingDocument({
+      objective: objective.length > 0 ? objective : "Continue the current session",
+      constraints,
+      phase: sessionState.phase,
+      nextAction: sessionState.phase === "idle" ? "continue" : `resolve phase ${sessionState.phase}`,
+      decisions: sessionState.last_assessment
+        ? [`${sessionState.last_assessment.decision}: ${sessionState.last_assessment.reason}`]
+        : [],
+      history,
+      maxTokens: DEFAULT_WORKING_DOCUMENT_TOKENS,
+    })
+  }
+
+  function persistWorkingDocument(sessionID: string, doc: WorkingDocument): void {
+    try {
+      const path = join(
+        resolveDirectory(),
+        ".omo/context-twin",
+        encodeSessionId(sessionID),
+        "working-document.json",
+      )
+      writeAtomicText(
+        path,
+        JSON.stringify({
+          text: doc.text,
+          estimatedTokens: doc.estimatedTokens,
+          truncated: doc.truncated,
+          historyRef: doc.historyRef ?? null,
+        }),
+      )
+    } catch (error) {
+      log("[context-governor] Failed to persist working document", {
+        sessionID,
+        error: String(error),
+      })
+    }
   }
 
   function isCapsuleFresh(sessionID: string, currentSeq: number): boolean {
@@ -328,12 +545,20 @@ export function createContextGovernorHook(
 
     compactionInProgress.add(sessionID)
     const beforeTokens = sessionState.lastUsedTokens
+
+    // Build and persist the working document before summarizing so the
+    // objective/phase/history reference survives the compaction.
+    const workingDocument = buildCompactionWorkingDocument(sessionState)
+    sessionState.lastWorkingDocument = workingDocument
+    persistWorkingDocument(sessionID, workingDocument)
+
     auditEvent(sessionID, "compaction_started", {
       before_tokens: beforeTokens,
       target_tokens: effective.targetAfter,
       max_passes: maxPasses,
       provider: sessionState.providerID,
       model: sessionState.modelID,
+      working_document_tokens: workingDocument.estimatedTokens,
     })
     try {
       let previousUsed = sessionState.lastUsedTokens
@@ -530,7 +755,12 @@ export function createContextGovernorHook(
 
     const info = isRecord(props?.info) ? props?.info : undefined
     const sessionID = resolveMessageEventSessionID(props)
-    if (!info || info.role !== "assistant" || !info.finish || !sessionID) return
+    if (!info || !sessionID) return
+
+    // Bounded transcript reference for the compaction working document.
+    captureHistoryEntry(getOrInitState(sessionID), info)
+
+    if (info.role !== "assistant" || !info.finish) return
 
     const sessionState = getOrInitState(sessionID)
     if (typeof info.providerID === "string") sessionState.providerID = info.providerID
@@ -561,10 +791,13 @@ export function createContextGovernorHook(
 
   const toolExecuteAfter = async (
     input: { tool: string; sessionID: string; callID: string },
-    _output: { title: string; output: string; metadata: unknown },
+    output: { title: string; output: string; metadata: unknown },
   ): Promise<void> => {
     const cfg = resolveConfig()
     if (cfg.enabled !== true) return
+
+    // Bound child/delegated results before they re-enter the parent context.
+    applyChildResultBudget(input.tool, input.callID, output)
 
     const sessionID = input.sessionID
     const sessionState = getOrInitState(sessionID)
@@ -800,10 +1033,114 @@ export function createContextGovernorHook(
     }
   }
 
+  const preDispatchCeiling = async (sessionID: string): Promise<PreDispatchCeilingResult> => {
+    const cfg = resolveConfig()
+    const sessionState = getOrInitState(sessionID)
+    const ceiling = resolvePreDispatchCeiling(sessionState)
+
+    if (cfg.enabled !== true) {
+      return {
+        checked: false,
+        usedTokens: null,
+        ceiling,
+        boundary: "unknown",
+        mustCompact: false,
+        blocked: false,
+      }
+    }
+
+    const usedTokens = sessionState.lastUsedTokens
+    if (usedTokens <= 0) {
+      return {
+        checked: false,
+        usedTokens: null,
+        ceiling,
+        boundary: "unknown",
+        mustCompact: false,
+        blocked: false,
+      }
+    }
+
+    if (usedTokens < ceiling) {
+      return {
+        checked: true,
+        usedTokens,
+        ceiling,
+        boundary: "under_ceiling",
+        mustCompact: false,
+        blocked: false,
+      }
+    }
+
+    if (usedTokens === ceiling) {
+      return {
+        checked: true,
+        usedTokens,
+        ceiling,
+        boundary: "at_ceiling",
+        mustCompact: false,
+        blocked: false,
+      }
+    }
+
+    // Over the ceiling: block and force compaction before the next provider
+    // request can be dispatched.
+    blockedByGovernor.add(sessionID)
+    auditEvent(sessionID, "pre_dispatch_ceiling", {
+      used_tokens: usedTokens,
+      ceiling,
+      reason_code: "over_ceiling",
+      provider: sessionState.providerID,
+      model: sessionState.modelID,
+    })
+
+    if (
+      sessionState.providerID &&
+      sessionState.modelID &&
+      !compactionInProgress.has(sessionID)
+    ) {
+      try {
+        const workingDocument = buildCompactionWorkingDocument(sessionState)
+        sessionState.lastWorkingDocument = workingDocument
+        persistWorkingDocument(sessionID, workingDocument)
+        compactionInProgress.add(sessionID)
+        await summarizeOnce(sessionID, sessionState)
+        invalidateContextWindowUsageCache(ctx, sessionID)
+      } catch (error) {
+        sessionState.last_audit_error = String(error)
+        auditEvent(sessionID, "pre_dispatch_ceiling_failed", { reason_code: "summarize_error" })
+      } finally {
+        compactionInProgress.delete(sessionID)
+      }
+    }
+
+    return {
+      checked: true,
+      usedTokens,
+      ceiling,
+      boundary: "over_ceiling",
+      mustCompact: true,
+      blocked: true,
+    }
+  }
+
+  const injectCompactionContext = (sessionID: string): string | undefined => {
+    const cfg = resolveConfig()
+    if (cfg.enabled !== true) return undefined
+    const sessionState = state.get(sessionID)
+    if (!sessionState) return undefined
+    const doc = buildCompactionWorkingDocument(sessionState)
+    sessionState.lastWorkingDocument = doc
+    if (doc.text.trim().length === 0) return undefined
+    return doc.text
+  }
+
   return {
     event: eventHandler,
     ingestVerdict,
     "tool.execute.after": toolExecuteAfter,
     diagnose,
+    preDispatchCeiling,
+    injectCompactionContext,
   }
 }

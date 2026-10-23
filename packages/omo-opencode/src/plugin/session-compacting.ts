@@ -46,6 +46,9 @@ type CompactionHookDependencies = {
   claudeCodeHooks?: {
     "experimental.session.compacting"?: SessionCompactingHook
   } | null
+  contextGovernor?: {
+    injectCompactionContext?: (sessionID: string) => string | undefined
+  } | null
 }
 
 const DEFAULT_AUTOCONTINUE_DUPLICATE_GUARD_MS = 10_000
@@ -118,6 +121,13 @@ export function createSessionCompactingHandler(
     })
     await runCompactionStep("compactionContextInjector.inject", input.sessionID, () => {
       const inject = hooks.compactionContextInjector?.inject
+      const context = inject ? inject(input.sessionID) : undefined
+      if (context) {
+        output.context.push(context)
+      }
+    })
+    await runCompactionStep("contextGovernor.injectCompactionContext", input.sessionID, () => {
+      const inject = hooks.contextGovernor?.injectCompactionContext
       const context = inject ? inject(input.sessionID) : undefined
       if (context) {
         output.context.push(context)
