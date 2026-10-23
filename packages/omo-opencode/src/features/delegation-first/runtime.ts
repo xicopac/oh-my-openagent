@@ -153,6 +153,10 @@ export type DelegationFirstRuntime = {
   setRecoverySink(sink: RecoverySink): void
   /** COST-SAFETY: reserve one paid-child slot (false when at the cap). */
   tryAcquirePaidChild(): boolean
+  /** COST-SAFETY: re-point the live paid-child cap (clamped to >= 1). */
+  setPaidChildConcurrency(max: number): void
+  /** COST-SAFETY: the cap tryAcquirePaidChild is actually enforcing. */
+  paidChildConcurrencyMax(): number
   /** COST-SAFETY: mark a launched child session as paid so detach releases its slot. */
   markPaidChildSession(sessionID: string): void
   /** COST-SAFETY: release a paid-child slot directly (sync/terminal paths). */
@@ -871,6 +875,12 @@ export function createDelegationFirstRuntime(
     },
     tryAcquirePaidChild() {
       return paidGate.tryAcquire()
+    },
+    setPaidChildConcurrency(max) {
+      paidGate.setMaxConcurrent(max)
+    },
+    paidChildConcurrencyMax() {
+      return paidGate.maxConcurrent()
     },
     markPaidChildSession(sessionID) {
       paidSessions.add(sessionID)

@@ -38,4 +38,28 @@ describe("paid worker concurrency gate", () => {
     gate.setMaxConcurrent(1)
     expect(gate.tryAcquire()).toBe(false)
   })
+
+  test("setMaxConcurrent grows a live gate so the next acquire succeeds", () => {
+    // given - a cap-1 gate with its only slot held
+    const gate = createPaidWorkerGate(1)
+    expect(gate.tryAcquire()).toBe(true)
+    expect(gate.tryAcquire()).toBe(false)
+    // when - the cap is raised while a slot is already active
+    gate.setMaxConcurrent(2)
+    // then - the newly permitted slot is acquirable and reported
+    expect(gate.tryAcquire()).toBe(true)
+    expect(gate.activeCount()).toBe(2)
+    expect(gate.maxConcurrent()).toBe(2)
+  })
+
+  test("maxConcurrent reports the enforced cap and clamps to 1", () => {
+    const gate = createPaidWorkerGate(1)
+    expect(gate.maxConcurrent()).toBe(1)
+    gate.setMaxConcurrent(0)
+    expect(gate.maxConcurrent()).toBe(1)
+    gate.setMaxConcurrent(-3)
+    expect(gate.maxConcurrent()).toBe(1)
+    gate.setMaxConcurrent(4)
+    expect(gate.maxConcurrent()).toBe(4)
+  })
 })

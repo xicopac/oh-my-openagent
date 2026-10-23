@@ -427,13 +427,20 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         if (paidApprovalNonce === null) {
           return "PAID_WORKER_CONSENT_CONSUMED: internal error, a paid launch reached execution without an approved single-use consent."
         }
+        // The gate is built from STARTUP config, so reconcile it with the live
+        // config (the same source the message reads) before reserving a slot.
+        // Without this a live edit is enforced stale until process restart.
+        const freshMax = maxConcurrentPaidWorkers(modelOptions.modelRouting)
         const gate = options.delegationFirstRuntime
+        if (gate) gate.setPaidChildConcurrency(freshMax)
+        else paidWorkerGate.setMaxConcurrent(freshMax)
         const ok = gate
           ? gate.tryAcquirePaidChild()
           : paidWorkerGate.tryAcquire()
         if (!ok) {
+          const enforcedMax = gate ? gate.paidChildConcurrencyMax() : paidWorkerGate.maxConcurrent()
           notifyChildLaunchBlocked(options, ctx, "paid_slot_exhaustion")
-          return `PAID_WORKER_CONCURRENCY_LIMIT: maximum ${maxConcurrentPaidWorkers(modelOptions.modelRouting)} concurrent paid child request(s) reached. Wait for an existing paid child to finish, then retry.`
+          return `PAID_WORKER_CONCURRENCY_LIMIT: maximum ${enforcedMax} concurrent paid child request(s) reached. Wait for an existing paid child to finish, then retry.`
         }
         paidSlotAcquired = true
       }
