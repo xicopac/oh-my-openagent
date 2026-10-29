@@ -12,7 +12,7 @@ function getTimeString(value: unknown): string {
 
 export async function formatTaskResult(task: BackgroundTask, client: BackgroundOutputClient): Promise<string> {
   if (!task.sessionId) {
-    return `Error: Task has no sessionID`
+    return formatDurableResult(task)
   }
 
   let messagesResult: BackgroundOutputMessagesResult
@@ -22,16 +22,19 @@ export async function formatTaskResult(task: BackgroundTask, client: BackgroundO
       getBackgroundOutputFetchTimeoutMs(),
     )
   } catch (error) {
+    if (task.result) return formatDurableResult(task)
     return `Error fetching messages: ${error instanceof Error ? error.message : String(error)}`
   }
 
   const errorMessage = getErrorMessage(messagesResult)
   if (errorMessage) {
+    if (task.result) return formatDurableResult(task)
     return `Error fetching messages: ${errorMessage}`
   }
 
   const messages = extractMessages(messagesResult)
   if (!Array.isArray(messages) || messages.length === 0) {
+    if (task.result) return formatDurableResult(task)
     return `Task Result
 
 Task ID: ${task.id}
@@ -139,4 +142,19 @@ Session ID: ${task.sessionId}
 ---
 
 ${textContent || "(No text output)"}`
+}
+
+
+function formatDurableResult(task: BackgroundTask): string {
+  const duration = formatDuration(task.startedAt ?? new Date(), task.completedAt)
+  return `Task Result
+
+Task ID: ${task.id}
+Description: ${task.description}
+Duration: ${duration}
+Session ID: ${task.sessionId ?? "unavailable"}
+
+---
+
+${task.result?.trim() || "(No terminal result was persisted before the worker session was cleaned up)"}`
 }

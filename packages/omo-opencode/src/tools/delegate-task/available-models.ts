@@ -117,6 +117,33 @@ export async function getModelsWithPricingAndMetadataForDelegateTask(client: Ope
   return { models: base.models, pricing: base.pricing, modelInfo }
 }
 
+function collectCachedModelsAndPricing(
+  providerModelsCache: connectedProvidersCache.ProviderModelsCache | null,
+): { models: Set<string>; pricing: PricingCatalog } {
+  const pricing: Record<string, ModelPricing> = {}
+  const models = new Set<string>()
+  if (!providerModelsCache?.models) return { models, pricing }
+
+  const connected = new Set(providerModelsCache.connected)
+  for (const [providerID, entries] of Object.entries(providerModelsCache.models)) {
+    if (!connected.has(providerID)) continue
+    for (const item of entries) {
+      const modelID = typeof item === "string" ? item : item.id
+      if (!modelID) continue
+      const key = `${providerID}/${modelID}`
+      models.add(key)
+      if (typeof item === "string") continue
+      const cost = extractModelPricing(item.cost)
+      if (cost) pricing[key] = cost
+    }
+  }
+  return { models, pricing }
+}
+
+export function getCachedPricingForDelegateTask(): PricingCatalog {
+  return collectCachedModelsAndPricing(connectedProvidersCache.readProviderModelsCache()).pricing
+}
+
 /**
  * Live model + pricing discovery for delegate-task. Merges the connected
  * provider-models cache and the live `client.model.list()` result, and derives
@@ -128,25 +155,11 @@ export async function getModelsWithPricingForDelegateTask(
   client: OpencodeClient,
 ): Promise<{ models: Set<string>; pricing: PricingCatalog }> {
   const providerModelsCache = connectedProvidersCache.readProviderModelsCache()
-  const pricing: Record<string, ModelPricing> = {}
-
   if (providerModelsCache?.models) {
-    const connected = new Set(providerModelsCache.connected)
-    const models = new Set<string>()
-    for (const [providerID, entries] of Object.entries(providerModelsCache.models)) {
-      if (!connected.has(providerID)) continue
-      for (const item of entries) {
-        const modelID = typeof item === "string" ? item : item.id
-        if (!modelID) continue
-        const key = `${providerID}/${modelID}`
-        models.add(key)
-        if (typeof item === "string") continue
-        const cost = extractModelPricing(item.cost)
-        if (cost) pricing[key] = cost
-      }
-    }
-    return { models, pricing }
+    return collectCachedModelsAndPricing(providerModelsCache)
   }
+
+  const pricing: Record<string, ModelPricing> = {}
 
   const connectedProviders = connectedProvidersCache.readConnectedProvidersCache()
   if (!connectedProviders || connectedProviders.length === 0) {

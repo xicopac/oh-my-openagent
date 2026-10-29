@@ -81,7 +81,7 @@ export function createBackgroundTask(
         let sessionId = task.sessionId
         while (!sessionId && Date.now() - waitStart < WAIT_FOR_SESSION_TIMEOUT_MS) {
           const updated = manager.getTask(task.id)
-          if (updated?.status === "error" || updated?.status === "cancelled" || updated?.status === "interrupt") {
+          if (updated?.status === "error" || updated?.status === "cancelled" || updated?.status === "interrupt" || updated?.status === "blocked") {
             return `Task ${`entered error state`}\.\n\nTask ID: ${task.id}`
           }
           sessionId = updated?.sessionId

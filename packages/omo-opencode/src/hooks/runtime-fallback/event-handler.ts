@@ -75,6 +75,7 @@ export function createEventHandler(deps: HookDeps, helpers: AutoRetryHelpers) {
     sessionRetryInFlight.delete(sessionID)
     sessionAwaitingFallbackResult.delete(sessionID)
     deps.internallyAbortedSessions.delete(sessionID)
+    deps.terminalQuotaSessions?.delete(sessionID)
     sessionStatusRetryKeys.delete(sessionID)
     helpers.clearSessionFallbackTimeout(sessionID)
   }
@@ -128,6 +129,7 @@ export function createEventHandler(deps: HookDeps, helpers: AutoRetryHelpers) {
       sessionRetryInFlight.delete(sessionID)
       sessionAwaitingFallbackResult.delete(sessionID)
       deps.internallyAbortedSessions.delete(sessionID)
+      deps.terminalQuotaSessions?.delete(sessionID)
       helpers.clearSessionFallbackTimeout(sessionID)
       sessionStatusRetryKeys.delete(sessionID)
       SessionCategoryRegistry.remove(sessionID)
@@ -212,6 +214,12 @@ export function createEventHandler(deps: HookDeps, helpers: AutoRetryHelpers) {
       cancelledSessions.add(sessionID)
       resetRetryState(sessionID)
       log(`[${HOOK_NAME}] session.error matched cancellation; cleared retry state`, { sessionID, resolvedAgent })
+      return
+    }
+
+    if (deps.terminalQuotaSessions?.has(sessionID)) {
+      helpers.clearSessionFallbackTimeout(sessionID)
+      log(`[${HOOK_NAME}] session.error fallback suppressed for BLOCKED_QUOTA session`, { sessionID, resolvedAgent })
       return
     }
 

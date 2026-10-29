@@ -52,6 +52,7 @@ import {
   createWatchdog,
   createRecoveryCoordinator,
   DEFAULT_RECOVERY_POLICY,
+  type ChildActivitySignal,
   type ChildStage,
   type RecoveryCoordinator,
   type RecoveryPolicy,
@@ -90,6 +91,12 @@ export type DelegationFirstConfig = {
   modelAvailabilityFilePath?: string
   /** COST-SAFETY: maximum concurrent paid child requests (default 1). */
   maxConcurrentPaidWorkers?: number
+  /**
+   * Terminal HOLD hook: the liveness supervisor reached a blocked/exhausted
+   * terminal state and will not retry. The adapter quiesces disposable
+   * process scopes owned by that child within a bounded deadline.
+   */
+  onTerminalHold?: (sessionID: string, reason: string) => void
 }
 
 /** Result of a governed replacement-child re-dispatch. */
@@ -114,7 +121,7 @@ export type RecoverySink = {
   cancel: (
     sessionID: string,
     reason: string,
-    options?: { suppressNotification?: boolean },
+    options?: { suppressNotification?: boolean; blocked?: boolean },
   ) => Promise<void> | void
   /** Re-dispatch a replacement child from a retained assignment + failover action. */
   relaunch?: (
@@ -122,6 +129,12 @@ export type RecoverySink = {
     action: RedispatchAction,
     replacementPrompt: string,
   ) => Promise<RelaunchOutcome> | RelaunchOutcome
+  /** Report a terminal BLOCKED worker to its parent exactly once. */
+  notifyBlocked?: (
+    sessionID: string,
+    reason: string,
+    parentSessionID?: string,
+  ) => Promise<void> | void
 }
 
 export type ChildLivenessProbe = (parentSessionID: string) => {
@@ -173,8 +186,8 @@ export type DelegationFirstRuntime = {
   /** COST-SAFETY: release a paid-child slot directly (sync/terminal paths). */
   releasePaidChild(): void
   /** Evaluate a timed-out stall and reclaim it (cancel + governed re-dispatch) automatically. */
-  reclaimStalled(sessionID: string, providerModel: string | null, nowMs?: number): void
-  watchdogActivity(sessionID: string): void
+  reclaimStalled(sessionID: string, providerModel: string | null, nowMs?: number): boolean
+  watchdogActivity(sessionID: string, signal?: ChildActivitySignal): void
   watchdogProcessStart(sessionID: string): void
   watchdogProcessEnd(sessionID: string): void
   watchdogTerminal(sessionID: string): void
@@ -295,6 +308,7 @@ export function createDelegationFirstRuntime(
 
   const freeWorkerHint = cfg.pricing ? discoverFreeModels(cfg.pricing)[0] ?? null : null
   const rootState: RootWorkerState = createRootWorkerState()
+  let runtimeApi: DelegationFirstRuntime | undefined
 
   // Liveness supervisor: detector/notifier ONLY. It never cancels a child — the
   // watchdog/recovery paths below are the single cancel authority — so it cannot
@@ -303,8 +317,33 @@ export function createDelegationFirstRuntime(
   // BLOCKED state to the parent exactly once (the notifier dedupes by id+kind,
   // so there are no repeated paid-parent wakes and no polling loops).
   const liveness = createLivenessSupervisor({
+    onStallDetected: (id, kind) => {
+      if (kind !== "progress_stall" && kind !== "heartbeat_missing") return
+      const assignmentID = sessionToAssignment.get(id)
+      const providerModel = assignmentID ? lineageByAssignment.get(assignmentID)?.current_worker ?? null : null
+      if (runtimeApi?.reclaimStalled(id, providerModel)) return
+      if (watchdog.sessions().includes(id)) {
+        const check = watchdog.check(id)
+        if (check.stallMode === "QUIET_BUT_ACTIVE" || check.health === "TERMINAL") return
+      }
+      const parentID = sessionJob.get(id)
+      if (parentID) {
+        rootState.recordDelegationFailure(parentID, {
+          id: `liveness-stall:${id}:${kind}`,
+          kind: "watchdog_reclaim_exhausted",
+          reason: kind,
+          observedAtMs: Date.now(),
+          taskID: id,
+        })
+      }
+      void sink?.notifyBlocked?.(id, kind, parentID)
+    },
     onEvent: (event) => {
       if (event.kind !== "wake_parent") return
+      if (event.wakeReason === "blocked" || event.wakeReason === "exhausted") {
+        cfg.onTerminalHold?.(event.id, event.wakeReason)
+        void sink?.notifyBlocked?.(event.id, event.wakeReason, sessionJob.get(event.id))
+      }
       audit?.write(event.id, {
         subsystem: "delegation",
         event: "worker_liveness_blocked",
@@ -312,7 +351,18 @@ export function createDelegationFirstRuntime(
         paid_root_wake: event.paidRootWake,
       })
       const parentID = sessionJob.get(event.id)
-      if (parentID) rootState.noteChildSettled(parentID, "failed")
+      if (parentID) {
+        rootState.noteChildSettled(parentID, "failed")
+        if (event.wakeReason === "blocked" || event.wakeReason === "exhausted") {
+          rootState.recordDelegationFailure(parentID, {
+            id: `liveness-blocked:${event.id}`,
+            kind: "watchdog_reclaim_exhausted",
+            reason: event.wakeReason,
+            observedAtMs: Date.now(),
+            taskID: event.id,
+          })
+        }
+      }
     },
   })
 
@@ -323,7 +373,7 @@ export function createDelegationFirstRuntime(
   function issueCancel(
     sessionID: string,
     reason: string,
-    options?: { suppressNotification?: boolean },
+    options?: { suppressNotification?: boolean; blocked?: boolean },
   ): void {
     if (cancelIssued.has(sessionID)) return
     cancelIssued.add(sessionID)
@@ -426,13 +476,17 @@ export function createDelegationFirstRuntime(
     }
   }
 
+  type RedispatchResult =
+    | { dispatched: true }
+    | { dispatched: false; blockedReason?: string }
+
   function tryRedispatch(
     sessionID: string,
     assignment: ReplayableAssignment,
     stallMode: NonNullable<WatchdogCheckResult["stallMode"]>,
     correlated: boolean,
     stage: ChildStage,
-  ): boolean {
+  ): RedispatchResult {
     const lineage = lineageByAssignment.get(assignment.assignment_id) ?? initialLineage(assignment)
     const action = recommendFailoverAction({
       workers: assignment.workers,
@@ -464,7 +518,7 @@ export function createDelegationFirstRuntime(
         assignment_id: assignment.assignment_id,
         attempt: lineage.attempt_number,
       })
-      return false
+      return { dispatched: false }
     }
 
     if (action.kind === "alternate_worker") {
@@ -513,7 +567,7 @@ export function createDelegationFirstRuntime(
         assignment_id: assignment.assignment_id,
         attempt: nextLineage.attempt_number,
       })
-      return false
+      return { dispatched: false }
     }
 
     const outcome = relaunch(assignment, action, replacementPrompt)
@@ -521,13 +575,17 @@ export function createDelegationFirstRuntime(
       void outcome.then((resolved) =>
         applyRelaunchOutcome(sessionID, assignment.assignment_id, nextLineage.attempt_number, action.worker.model_id, resolved),
       )
-    } else {
-      applyRelaunchOutcome(sessionID, assignment.assignment_id, nextLineage.attempt_number, action.worker.model_id, outcome)
+      return { dispatched: true }
     }
-    return true
+
+    applyRelaunchOutcome(sessionID, assignment.assignment_id, nextLineage.attempt_number, action.worker.model_id, outcome)
+    if (outcome.kind === "blocked") {
+      return { dispatched: false, blockedReason: outcome.reason }
+    }
+    return { dispatched: true }
   }
 
-  return {
+  const api: DelegationFirstRuntime = {
     beginDelegation(jobID, parentSessionID, prompt, workers) {
       jobSession.set(jobID, parentSessionID)
       audit?.write(parentSessionID, {
@@ -571,7 +629,7 @@ export function createDelegationFirstRuntime(
     },
     attachChildSession(parentSessionID, childSessionID) {
       sessionJob.set(childSessionID, parentSessionID)
-      watchdog.register(childSessionID, parentSessionID)
+      watchdog.register(childSessionID, childSessionID)
       const assignmentID = sessionToAssignment.get(childSessionID)
       const providerId = assignmentID ? lineageByAssignment.get(assignmentID)?.current_worker : undefined
       liveness.register({
@@ -785,7 +843,8 @@ export function createDelegationFirstRuntime(
 
       if (!assignment || !sink?.relaunch) {
         watchdog.onTerminal(sessionID, "failed")
-        issueCancel(sessionID, reason)
+        liveness.cancel(sessionID)
+        issueCancel(sessionID, reason, { blocked: true })
         audit?.write(sessionID, {
           subsystem: "delegation",
           event: "retry_chain_exhausted",
@@ -822,7 +881,8 @@ export function createDelegationFirstRuntime(
       )
       if (selection.kind === "no_eligible_worker") {
         watchdog.onTerminal(sessionID, "failed")
-        issueCancel(sessionID, reason)
+        liveness.cancel(sessionID)
+        issueCancel(sessionID, reason, { blocked: true })
         audit?.write(sessionID, {
           subsystem: "delegation",
           event: "retry_chain_exhausted",
@@ -873,9 +933,34 @@ export function createDelegationFirstRuntime(
         void outcome.then((resolved) =>
           applyRelaunchOutcome(sessionID, id, nextLineage.attempt_number, selection.worker.model_id, resolved),
         )
-      } else {
-        applyRelaunchOutcome(sessionID, id, nextLineage.attempt_number, selection.worker.model_id, outcome)
+        return
       }
+
+      applyRelaunchOutcome(sessionID, id, nextLineage.attempt_number, selection.worker.model_id, outcome)
+      if (outcome.kind !== "blocked") return
+
+      const parentID = sessionJob.get(sessionID) ?? assignment.parent_session_id
+      if (parentID) {
+        rootState.recordDelegationFailure(parentID, {
+          id: `relaunch-denied:${id}`,
+          kind: "routing_exhausted",
+          reason: "recovery_relaunch_denied",
+          observedAtMs: Date.now(),
+          taskID: sessionID,
+        })
+        audit?.write(parentID, {
+          subsystem: "delegation",
+          event: "delegation_failure_recorded",
+          kind: "routing_exhausted",
+          reason: "recovery_relaunch_denied",
+          detail: outcome.reason,
+          model: modelKey,
+          session_id: sessionID,
+        })
+      }
+      watchdog.onTerminal(sessionID, "failed")
+      liveness.cancel(sessionID)
+      issueCancel(sessionID, `recovery relaunch denied: ${outcome.reason}`, { blocked: true })
     },
     unavailableModels() {
       return availability.unavailableKeys()
@@ -907,9 +992,9 @@ export function createDelegationFirstRuntime(
     setRecoverySink(next) {
       sink = next
     },
-    reclaimStalled(sessionID, providerModel, nowMs) {
+    reclaimStalled(sessionID, providerModel, nowMs): boolean {
       const result = watchdog.check(sessionID, nowMs)
-      if (!result.timedOut || result.stallMode === null || result.stallMode === "QUIET_BUT_ACTIVE") return
+      if (!result.timedOut || result.stallMode === null || result.stallMode === "QUIET_BUT_ACTIVE") return false
       const episodeKey = assignmentIDFor(sessionID) ?? sessionID
       const snapshot = watchdog.snapshot(sessionID)
       const atMs = nowMs ?? Date.now()
@@ -943,12 +1028,15 @@ export function createDelegationFirstRuntime(
         }
         recovery.reset(episodeKey)
         watchdog.onTerminal(sessionID, "cancelled")
+        liveness.cancel(sessionID)
         releaseChildSessionState(sessionID)
-        issueCancel(sessionID, `hard circuit breaker tripped after ${durationMs}ms in ${result.stallMode}`)
-        return
+        issueCancel(sessionID, `hard circuit breaker tripped after ${durationMs}ms in ${result.stallMode}`, {
+          blocked: true,
+        })
+        return true
       }
       const decision = recovery.evaluate(episodeKey, providerModel, result.stallMode, true, nowMs)
-      if (decision.kind !== "reclaim") return
+      if (decision.kind !== "reclaim") return false
 
       recovery.recordReclaim(episodeKey, providerModel, nowMs)
       // A mid-stream stall is a provider/model health signal: feed it into the
@@ -988,6 +1076,7 @@ export function createDelegationFirstRuntime(
       const assignment = assignmentID ? assignmentsById.get(assignmentID) : undefined
 
       let replacementDispatched = false
+      let relaunchDeniedReason: string | undefined
       if (decision.retry) {
         audit?.write(sessionID, {
           subsystem: "delegation",
@@ -997,13 +1086,36 @@ export function createDelegationFirstRuntime(
           alternate_worker: decision.correlated ? true : false,
         })
         if (assignment) {
-          replacementDispatched = tryRedispatch(
+          const redispatch = tryRedispatch(
             sessionID,
             assignment,
             result.stallMode,
             decision.correlated,
             result.stage,
           )
+          replacementDispatched = redispatch.dispatched
+          if (!redispatch.dispatched && redispatch.blockedReason !== undefined) {
+            relaunchDeniedReason = redispatch.blockedReason
+            const parentID = sessionJob.get(sessionID) ?? assignment.parent_session_id
+            if (parentID) {
+              rootState.recordDelegationFailure(parentID, {
+                id: `relaunch-denied:${episodeKey}`,
+                kind: "routing_exhausted",
+                reason: "recovery_relaunch_denied",
+                observedAtMs: Date.now(),
+                taskID: sessionID,
+              })
+              audit?.write(parentID, {
+                subsystem: "delegation",
+                event: "delegation_failure_recorded",
+                kind: "routing_exhausted",
+                reason: "recovery_relaunch_denied",
+                detail: relaunchDeniedReason,
+                stall_mode: result.stallMode,
+                session_id: sessionID,
+              })
+            }
+          }
         } else {
           audit?.write(sessionID, {
             subsystem: "delegation",
@@ -1060,18 +1172,30 @@ export function createDelegationFirstRuntime(
 
       // Truthful terminal: a reclaimed child is cancelled, never left running.
       watchdog.onTerminal(sessionID, "cancelled")
+      liveness.cancel(sessionID)
       // Single terminal wake per episode: when a replacement child was
       // dispatched the reclaim cancel is an intermediate step, so the parent
       // wake is suppressed here and fires once at the episode terminal
       // (exhausted/blocked/completed). Retry/attempt details stay journaled.
-      issueCancel(sessionID, decision.reason, {
-        suppressNotification: replacementDispatched,
-      })
+      issueCancel(
+        sessionID,
+        relaunchDeniedReason !== undefined
+          ? `recovery relaunch denied: ${relaunchDeniedReason}`
+          : decision.reason,
+        {
+          suppressNotification: replacementDispatched,
+          blocked: !decision.retry || relaunchDeniedReason !== undefined,
+        },
+      )
+      return true
     },
-    watchdogActivity(sessionID) {
-      watchdog.onActivity(sessionID)
+    watchdogActivity(sessionID, signal = "alive") {
+      watchdog.onActivity(sessionID, signal)
       liveness.heartbeat(sessionID)
-      liveness.progress(sessionID)
+      if (signal !== "alive") {
+        liveness.progress(sessionID)
+      }
+      if (signal === "alive") return
       if (!modelRecoveredSessions.has(sessionID)) {
         const assignmentID = sessionToAssignment.get(sessionID)
         const worker = assignmentID ? lineageByAssignment.get(assignmentID)?.current_worker : undefined
@@ -1553,6 +1677,8 @@ export function createDelegationFirstRuntime(
       modelRecoveredSessions.clear()
     },
   }
+  runtimeApi = api
+  return api
 }
 
 function buildWorkerFirstSteering(reason: string | null, scope: string | null): string {
@@ -1567,7 +1693,8 @@ function buildWorkerFirstSteering(reason: string | null, scope: string | null): 
   if (reason === REASON_RECOVERY_TERMINAL) {
     return [
       "DELEGATION_RECOVERY_HALTED",
-      "delegation recovery has halted in an unsafe terminal phase (handoff/halt); no further work is permitted in this session.",
+      "delegation recovery has halted in an unsafe terminal phase (handoff/halt); new dispatch and write work are blocked in this session.",
+      "Read-only diagnostics and result retrieval (read/grep/glob/LSP/session/background_output) remain permitted.",
       "Verified recovery reconciles back to normal execution automatically; an unsafe halt requires operator reconciliation.",
     ].join(" ")
   }

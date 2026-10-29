@@ -89,6 +89,12 @@ export interface HookDeps {
   sessionFallbackTimeouts: Map<string, RuntimeFallbackTimeout>
   sessionStatusRetryKeys: Map<string, Set<string>>
   /**
+   * Sessions that already received their single terminal BLOCKED_QUOTA wake.
+   * While a session is in this set the hook must not schedule retries, fall
+   * back to another model, or wake the parent again.
+   */
+  terminalQuotaSessions?: Set<string>
+  /**
    * Sessions whose in-flight request was aborted by us (to swap in a fallback
    * model), as opposed to a user-initiated stop. Consumed by
    * handleSessionError so the resulting session.error{isAbort:true} does NOT

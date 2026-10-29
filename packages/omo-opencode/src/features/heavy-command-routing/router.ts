@@ -62,21 +62,33 @@ export function shellSingleQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`
 }
 
+export type AiJobOwnershipBinding = {
+  readonly unitName: string
+  readonly commandPrefix: string
+}
+
 export function buildAiJobCommand(
   kind: ResourceClass,
   command: string,
   timeoutSec: number,
-  opts?: { readonly aiJobBin?: string },
+  opts?: { readonly aiJobBin?: string; readonly ownership?: AiJobOwnershipBinding },
 ): string {
   const type = jobTypeFor(kind)
   const slice = kind === "emulator" ? AI_EMULATOR_SLICE : AI_WORK_SLICE
   // Keep env/bash-c/cd prefixes; strip only the GNU timeout (RuntimeMaxSec is authoritative).
-  const inner = stripGnuTimeout(command)
+  const inner = `${opts?.ownership?.commandPrefix ?? ""}${stripGnuTimeout(command)}`
   const escaped = shellSingleQuote(inner)
   const bin = opts?.aiJobBin ?? AI_JOB_BIN
   const timeoutFlag = kind === "emulator" ? "--timeout 0" : `--timeout ${Math.round(timeoutSec)}`
   const diagnostic = `printf '[ai-routing] class=%s type=%s slice=%s\\n' ${kind.toUpperCase()} ${type} ${slice}`
-  return `${diagnostic} && ${bin} run ${type} ${timeoutFlag} -- /bin/bash -lc ${escaped}`
+  const ownershipFlags = opts?.ownership ? ` --name ${aiJobNameSuffix(opts.ownership.unitName)}` : ""
+  return `${diagnostic} && ${bin} run ${type} ${timeoutFlag}${ownershipFlags} -- /bin/bash -lc ${escaped}`
+}
+
+function aiJobNameSuffix(unitName: string): string {
+  const match = /^ai-(?:build|test|gradle|heavy|emulator)-([0-9a-f]{6})\.service$/.exec(unitName)
+  if (!match) throw new Error(`[routing] invalid ai-job unit name: ${unitName}`)
+  return match[1]!
 }
 
 export function decideHeavyCommandRouting(command: string, deps?: RoutingDeps): RoutingDecision {

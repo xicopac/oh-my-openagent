@@ -2,7 +2,7 @@ import { log, promptWithRetryInDirectory } from "../../shared"
 import { stripAgentListSortPrefix } from "../../shared/agent-display-names"
 import { applySessionPromptParams } from "../../shared/session-prompt-params-helpers"
 import { setSessionTools } from "../../shared/session-tools-store"
-import { setSessionAgent, subagentSessions, updateSessionAgent } from "../claude-code-session-state"
+import { clearSessionAgent, setSessionAgent, subagentSessions, updateSessionAgent } from "../claude-code-session-state"
 import { getTaskToastManager } from "../task-toast-manager"
 import type { ConcurrencyManager } from "./concurrency"
 import type { OnSubagentSessionCreated, OpencodeClient, QueueItem } from "./constants"
@@ -75,9 +75,18 @@ export async function startTask(
 
   const sessionID = createResult.data.id
   const normalizedAgent = stripAgentListSortPrefix(input.agent)
-  await input.onSessionCreated?.(sessionID)
   subagentSessions.add(sessionID)
   setSessionAgent(sessionID, normalizedAgent)
+  try {
+    await input.onSessionCreated?.(sessionID)
+  } catch (error) {
+    subagentSessions.delete(sessionID)
+    clearSessionAgent(sessionID)
+    if (typeof client.session.abort === "function") {
+      await client.session.abort({ path: { id: sessionID } }).catch(() => {})
+    }
+    throw error
+  }
 
   task.status = "running"
   task.startedAt = new Date()

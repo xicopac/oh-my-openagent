@@ -111,7 +111,7 @@ export async function executeUnstableAgentTask(
       }
 
       const currentTask = manager.getTask(task.id)
-      if (currentTask && (currentTask.status === "interrupt" || currentTask.status === "error" || currentTask.status === "cancelled")) {
+      if (currentTask && (currentTask.status === "interrupt" || currentTask.status === "error" || currentTask.status === "cancelled" || currentTask.status === "blocked")) {
         terminalStatus = { status: currentTask.status, error: currentTask.error }
         break
       }

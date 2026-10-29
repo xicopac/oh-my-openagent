@@ -24,7 +24,7 @@ import {
 } from "./lifecycle"
 import { classifyStallMode, type StallClassification } from "./stall"
 import { DEFAULT_STALL_TIMEOUTS, type StallTimeoutPolicy } from "./timeouts"
-import type { ChildStage, StallMode, WorkerStatus } from "./types"
+import type { ChildActivitySignal, ChildStage, StallMode, WorkerStatus } from "./types"
 
 export type WatchdogEventName =
   | "watchdog_progress"
@@ -45,7 +45,7 @@ export type Watchdog = {
   register(sessionID: string, workerID: string, initialStage?: ChildStage): void
   unregister(sessionID: string): void
   sessions(): string[]
-  onActivity(sessionID: string): void
+  onActivity(sessionID: string, signal?: ChildActivitySignal): void
   onProcessStart(sessionID: string): void
   onProcessEnd(sessionID: string): void
   /** Advance to a lifecycle stage (request_started, first_response, terminal). */
@@ -80,6 +80,7 @@ type SessionState = {
   lastChangeAtMs: number
   lastActivityAtMs: number
   hasActiveLongProcess: boolean
+  activeLongProcessCount: number
   longProcessStartedAtMs: number
   lastHealth: Level1Health | null
 }
@@ -143,6 +144,7 @@ export function createWatchdog(policy: Partial<WatchdogPolicy> = {}, opts: Watch
         lastChangeAtMs: now,
         lastActivityAtMs: now,
         hasActiveLongProcess: false,
+        activeLongProcessCount: 0,
         longProcessStartedAtMs: 0,
         lastHealth: null,
       })
@@ -159,21 +161,31 @@ export function createWatchdog(policy: Partial<WatchdogPolicy> = {}, opts: Watch
     sessions() {
       return [...states.keys()]
     },
-    onActivity(sessionID) {
+    onActivity(sessionID, signal = "alive") {
       const state = stateFor(sessionID)
       if (!state) return
       const now = clock()
+      state.lastActivityAtMs = now
+      // An alive signal only proves the session emitted an event. Startup/user
+      // echoes are not a provider response and must not advance the stage.
+      if (signal === "alive") return
+
+      // A provider response implies the request started even if the caller
+      // missed the explicit request-start transition.
+      if (state.stage === "session_created") {
+        advance(state, sessionID, "request_started")
+      }
+
+      if (signal === "provider_response") {
+        state.lastChangeAtMs = now
+        advance(state, sessionID, "first_response")
+        return
+      }
+
       state.progressCounter += 1
       state.lastChangeAtMs = now
-      state.lastActivityAtMs = now
-      if (state.status === "starting" || state.status === "pending") {
-        state.status = "running"
-      }
-      // First observed output after dispatch is the provider's first response;
-      // a later distinct advance is first meaningful progress.
-      if (state.stage === "request_started" || state.stage === "session_created") {
-        advance(state, sessionID, "first_response")
-      } else if (state.stage === "first_response" && !state.firstProgressEmitted && state.progressCounter >= 2) {
+      advance(state, sessionID, "first_response")
+      if (state.stage === "first_response" && !state.firstProgressEmitted && state.progressCounter >= 2) {
         state.firstProgressEmitted = true
         emit(sessionID, "child_first_progress", {
           worker_id: state.workerID,
@@ -185,12 +197,18 @@ export function createWatchdog(policy: Partial<WatchdogPolicy> = {}, opts: Watch
     onProcessStart(sessionID) {
       const state = stateFor(sessionID)
       if (!state) return
+      state.activeLongProcessCount += 1
+      if (state.hasActiveLongProcess) return
       state.hasActiveLongProcess = true
       state.longProcessStartedAtMs = clock()
     },
     onProcessEnd(sessionID) {
       const state = stateFor(sessionID)
       if (!state) return
+      if (state.activeLongProcessCount > 0) {
+        state.activeLongProcessCount -= 1
+      }
+      if (state.activeLongProcessCount > 0) return
       state.hasActiveLongProcess = false
       state.longProcessStartedAtMs = 0
     },
@@ -212,6 +230,11 @@ export function createWatchdog(policy: Partial<WatchdogPolicy> = {}, opts: Watch
     onTerminal(sessionID, stage = "completed") {
       const state = stateFor(sessionID)
       if (!state) return
+      // A terminal child holds no live process: reset the overlap refcount so a
+      // leaked start can never keep the parent classified QUIET_BUT_ACTIVE.
+      state.activeLongProcessCount = 0
+      state.hasActiveLongProcess = false
+      state.longProcessStartedAtMs = 0
       advance(state, sessionID, stage)
     },
     check(sessionID, nowMs) {
@@ -231,7 +254,7 @@ export function createWatchdog(policy: Partial<WatchdogPolicy> = {}, opts: Watch
             worker_id: state.workerID,
             session_id: sessionID,
             progress_counter: state.progressCounter,
-            previous_progress_counter: state.previousProgressCounter,
+            previous_progress_counter: meta.previousProgressCounter,
             last_change_at_ms: state.lastChangeAtMs,
             health: result.health,
             stage: state.stage,
@@ -269,7 +292,7 @@ export function createWatchdog(policy: Partial<WatchdogPolicy> = {}, opts: Watch
               worker_id: state.workerID,
               session_id: sessionID,
               progress_counter: state.progressCounter,
-              previous_progress_counter: state.previousProgressCounter,
+              previous_progress_counter: meta.previousProgressCounter,
               last_change_at_ms: state.lastChangeAtMs,
               health: result.health,
               stage: state.stage,

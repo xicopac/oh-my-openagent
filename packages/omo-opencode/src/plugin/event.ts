@@ -5,9 +5,17 @@ import type { Managers } from "../create-managers";
 import type { PluginContext } from "./types";
 
 import { getMainSessionID, subagentSessions, syncSubagentSessions } from "../features/claude-code-session-state";
+import {
+  hasOutputSignalFromPart,
+  isInternalInitiatorTextPart,
+  resolveMessagePartInfo,
+  resolveSessionNextPartInfo,
+} from "../features/background-agent/session-stream-activity";
+import type { ChildActivitySignal } from "../features/worker-supervisor";
 import { invalidateContextWindowUsageCache } from "../shared/dynamic-truncator";
 import { resolveSessionEventID } from "../shared/event-session-id";
 import { log } from "../shared/logger";
+import { isRecord } from "../shared/record-type-guard";
 import { normalizeSessionStatusToIdle } from "./session-status-normalizer";
 import { pruneRecentSyntheticIdles } from "./recent-synthetic-idles";
 import { extractErrorMessage, extractErrorName } from "./event-error-utils";
@@ -43,7 +51,94 @@ function sessionIDForProgressEvent(props: Record<string, unknown> | undefined): 
     if (typeof nested === "string") return nested
   }
   return resolveSessionEventID(props) ?? undefined
-}export function createEventHandler(args: {
+}
+
+function hasCompletionMarker(value: unknown): boolean {
+  return value === true || (typeof value === "string" && value.length > 0)
+}
+
+function assistantMessageHasProviderOutput(
+  info: Record<string, unknown>,
+  props: Record<string, unknown> | undefined,
+): boolean {
+  if (info.error !== undefined && info.error !== null) return true
+  if (hasCompletionMarker(info.finish) || hasCompletionMarker(info.finished) || hasCompletionMarker(info.completed)) {
+    return true
+  }
+  const time = isRecord(info.time) ? info.time : undefined
+  if (typeof time?.completed === "number" && time.completed > 0) return true
+  const parts = Array.isArray(info.parts)
+    ? info.parts
+    : Array.isArray(props?.parts)
+      ? props.parts
+      : []
+  if (parts.some((part) => isRecord(part) && typeof part.type === "string")) return true
+  const tokens = isRecord(info.tokens) ? info.tokens : undefined
+  if (typeof tokens?.output === "number" && tokens.output > 0) return true
+  return typeof tokens?.reasoning === "number" && tokens.reasoning > 0
+}
+
+/**
+ * A child session can emit startup/user echoes before the provider answers.
+ * An assistant message.updated is created before the stream starts, so an
+ * empty assistant message is still startup state. Only actual assistant/model
+ * output proves a provider response; only text/reasoning/tool output proves
+ * meaningful progress. Everything else is a liveness signal and must not
+ * advance the watchdog lifecycle.
+ */
+function childActivitySignal(
+  type: string,
+  props: Record<string, unknown> | undefined,
+  sessionID: string,
+  assistantSessions: Set<string>,
+): ChildActivitySignal {
+  if (type === "message.updated") {
+    const info = isRecord(props?.info) ? props.info : undefined
+    if (info?.role === "assistant") {
+      assistantSessions.add(sessionID)
+      return assistantMessageHasProviderOutput(info, props) ? "provider_response" : "alive"
+    }
+    return "alive"
+  }
+
+  if (type === "message.part.updated" || type === "message.part.delta") {
+    const part = resolveMessagePartInfo(props)
+    const role = part?.role ?? (typeof props?.role === "string" ? props.role : undefined)
+    // Subagent prompts and internal wakes are user-role text parts. They are
+    // startup echoes, not provider output.
+    if (role === "user" || isInternalInitiatorTextPart(part, sessionID)) {
+      return "alive"
+    }
+    const isStreamDelta = type === "message.part.delta"
+    const isToolPart = part?.tool !== undefined || part?.type === "tool" || part?.type === "tool_result"
+    // A bare legacy part before any assistant message is startup state. Genuine
+    // provider parts follow the assistant message.updated, carry an explicit
+    // assistant role, are tool parts, or arrive as deltas.
+    if (!assistantSessions.has(sessionID) && !isToolPart && !isStreamDelta && role !== "assistant") {
+      return "alive"
+    }
+    assistantSessions.add(sessionID)
+    return hasOutputSignalFromPart(part, sessionID) || isStreamDelta ? "progress" : "provider_response"
+  }
+
+  if (type.startsWith("session.next.")) {
+    if (type === "session.next.synthetic" || type === "session.next.retried") {
+      return "alive"
+    }
+    assistantSessions.add(sessionID)
+    const part = resolveSessionNextPartInfo(type, props)
+    return hasOutputSignalFromPart(part, sessionID) ? "progress" : "provider_response"
+  }
+
+  if (type.startsWith("step.")) {
+    assistantSessions.add(sessionID)
+    return "progress"
+  }
+
+  return "alive"
+}
+
+export function createEventHandler(args: {
   ctx: PluginContext;
   pluginConfig: OhMyOpenCodeConfig;
   firstMessageVariantGate: FirstMessageVariantGate;
@@ -65,6 +160,7 @@ function sessionIDForProgressEvent(props: Record<string, unknown> | undefined): 
   const recentSyntheticIdles = new Map<string, number>();
   const recentRealIdles = new Map<string, number>();
   const recentAnyIdles = new Map<string, number>();
+  const assistantMessageSessions = new Set<string>();
   const dedupWindowMs = 500;
   const teamHandlers = createEventTeamHandlers({ pluginConfig, pluginContext, managers });
 
@@ -155,7 +251,10 @@ function sessionIDForProgressEvent(props: Record<string, unknown> | undefined): 
     if (managers.delegationFirstRuntime && isChildProgressEvent(event.type)) {
       const sessionID = sessionIDForProgressEvent(props);
       if (sessionID) {
-        managers.delegationFirstRuntime.watchdogActivity(sessionID);
+        managers.delegationFirstRuntime.watchdogActivity(
+          sessionID,
+          childActivitySignal(event.type, props, sessionID, assistantMessageSessions),
+        );
       }
     }
 
@@ -176,6 +275,16 @@ function sessionIDForProgressEvent(props: Record<string, unknown> | undefined): 
     }
 
     if (event.type === "session.deleted") {
+      const deletedSessionID = resolveSessionEventID(props) ?? getEventSessionID(input)
+      if (deletedSessionID) {
+        assistantMessageSessions.delete(deletedSessionID)
+        void managers.taskProcessOwnership.cleanupTask(deletedSessionID, "session-deleted").catch((err) => {
+          log("[event] task process cleanup on session.deleted failed:", {
+            sessionID: deletedSessionID,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        })
+      }
       await handleSessionDeletedEvent({
         props,
         tmuxIntegrationEnabled,
@@ -194,6 +303,15 @@ function sessionIDForProgressEvent(props: Record<string, unknown> | undefined): 
     if (event.type === "session.idle") {
       const sessionID = resolveSessionEventID(props);
       if (sessionID) {
+        // A foreground heavy tool must be finished before its session can idle.
+        // If an abort skipped tool.execute.after, this closes the still-active
+        // ai-job scope without waking the parent or polling the model.
+        void managers.taskProcessOwnership.cleanupTask(sessionID, "session-idle").catch((err) => {
+          log("[event] task process cleanup on session.idle failed:", {
+            sessionID,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        });
         await dispatchOpenClawSessionEvent({ pluginConfig, pluginContext, managers, rawEvent: event.type, sessionID });
       }
       await dispatchIdleOnlyHooks(input);
@@ -244,6 +362,15 @@ function sessionIDForProgressEvent(props: Record<string, unknown> | undefined): 
     }
 
     if (event.type === "session.error") {
+      const erroredSessionID = resolveSessionEventID(props)
+      if (erroredSessionID) {
+        void managers.taskProcessOwnership.cleanupTask(erroredSessionID, "session-error").catch((err) => {
+          log("[event] task process cleanup on session.error failed:", {
+            sessionID: erroredSessionID,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        })
+      }
       try {
         const sessionID = resolveSessionEventID(props);
         const error = props?.error;

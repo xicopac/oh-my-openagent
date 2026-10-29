@@ -11,6 +11,7 @@ export type PendingParentWake = {
   promptContext: ParentWakePromptContext
   notifications: string[]
   shouldReply: boolean
+  workerIDs?: string[]
   queuedAt?: number
   dispatchedAt?: number
   noReplyAdmittedAt?: number
@@ -36,6 +37,7 @@ export function cloneParentWake(wake: PendingParentWake): PendingParentWake {
     promptContext,
     notifications: [...wake.notifications],
     shouldReply: wake.shouldReply,
+    ...(wake.workerIDs !== undefined ? { workerIDs: [...wake.workerIDs] } : {}),
     ...(wake.queuedAt !== undefined ? { queuedAt: wake.queuedAt } : {}),
     ...(wake.dispatchedAt !== undefined ? { dispatchedAt: wake.dispatchedAt } : {}),
     ...(wake.noReplyAdmittedAt !== undefined ? { noReplyAdmittedAt: wake.noReplyAdmittedAt } : {}),
@@ -106,6 +108,7 @@ function isBackgroundTaskFailureHeader(line: string): boolean {
   return line === "[BACKGROUND TASK ERROR]"
     || line === "[BACKGROUND TASK CANCELLED]"
     || line === "[BACKGROUND TASK INTERRUPTED]"
+    || line === "[BACKGROUND TASK BLOCKED]"
     || (line.startsWith("[ALL BACKGROUND TASKS FINISHED") && line.endsWith("]"))
 }
 

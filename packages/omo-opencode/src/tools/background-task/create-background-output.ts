@@ -200,12 +200,18 @@ export function createBackgroundOutput(
           // post-evidence verification reads for this completed child.
           delegationFirstRuntime?.noteChildEvidence(resolvedTask.parentSessionId, resultText)
           if (delegationFirstRuntime) {
-            maybeVerifyRecoveryProbe(delegationFirstRuntime, resolvedTask.parentSessionId, resultText)
+            maybeVerifyRecoveryProbe(delegationFirstRuntime, resolvedTask.parentSessionId, resultText, {
+              probeResult: resolvedTask.recoveryProbe === true,
+            })
           }
           return resultText
         }
 
-        if (resolvedTask.status === "error" || resolvedTask.status === "cancelled" || resolvedTask.status === "interrupt") {
+        if (resolvedTask.status === "blocked" && resolvedTask.result) {
+          return formatTaskResult(resolvedTask, client)
+        }
+
+        if (resolvedTask.status === "error" || resolvedTask.status === "cancelled" || resolvedTask.status === "interrupt" || resolvedTask.status === "blocked") {
           return formatTaskStatus(resolvedTask)
         }
 

@@ -17,6 +17,7 @@ const TERMINAL_TASK_STATUSES = new Set<BackgroundTask["status"]>([
   "error",
   "cancelled",
   "interrupt",
+  "blocked",
 ])
 
 function getRegistry(): BackgroundTaskRegistry {

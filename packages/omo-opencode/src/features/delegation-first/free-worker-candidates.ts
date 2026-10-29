@@ -190,6 +190,89 @@ export function buildDelegationWorkerCandidates(input: BuildWorkerCandidatesInpu
   return candidates
 }
 
+export type ReselectFreeWorkerInput = {
+  pricing?: PricingCatalog
+  available: ReadonlySet<string>
+  resolvedModelID: string | null
+  unavailable?: ReadonlySet<string>
+  modelInfo?: ReadonlyMap<string, ModelCapabilityInfo>
+  mainModel?: string
+  required?: WorkerCapabilityRequirement
+  pinned?: boolean
+}
+
+export type ReselectFreeWorkerResult = {
+  modelID: string | null
+  reselected: boolean
+  candidates: WorkerCandidate[]
+  freeCandidatesExhausted: boolean
+}
+
+/**
+ * Free-first re-selection at the dispatch boundary. When the resolved model is
+ * not an available capability-sufficient $0 candidate, pick the first such
+ * candidate from the same ladder the escalation path uses. Never mutates the
+ * caller's resolved model when a pin is set or no adequate free candidate
+ * exists; in the latter case `freeCandidatesExhausted` reports the truth so the
+ * paid gate can surface the real reason instead of guessing.
+ */
+export function reselectFreeWorker(input: ReselectFreeWorkerInput): ReselectFreeWorkerResult {
+  const candidates = input.pricing
+    ? buildDelegationWorkerCandidates({
+        pricing: input.pricing,
+        available: input.available,
+        resolvedModelID: input.resolvedModelID,
+        ...(input.unavailable === undefined ? {} : { unavailable: input.unavailable }),
+        ...(input.modelInfo === undefined ? {} : { modelInfo: input.modelInfo }),
+        ...(input.mainModel === undefined ? {} : { mainModel: input.mainModel }),
+        ...(input.required === undefined ? {} : { required: input.required }),
+        allowPaid: false,
+      })
+    : []
+
+  const hasPricingEvidence = input.pricing !== undefined && Object.keys(input.pricing).length > 0
+  const availableCandidates = candidates.filter((candidate) =>
+    input.available.has(candidate.model_id)
+    && !(input.unavailable?.has(candidate.model_id) ?? false),
+  )
+  const freeCandidatesExhausted = hasPricingEvidence && availableCandidates.length === 0 && input.available.size > 0
+
+  if (input.pinned || !input.resolvedModelID) {
+    return {
+      modelID: input.resolvedModelID,
+      reselected: false,
+      candidates,
+      freeCandidatesExhausted,
+    }
+  }
+
+  if (availableCandidates.some((candidate) => candidate.model_id === input.resolvedModelID)) {
+    return {
+      modelID: input.resolvedModelID,
+      reselected: false,
+      candidates,
+      freeCandidatesExhausted,
+    }
+  }
+
+  const selected = availableCandidates[0]
+  if (!selected) {
+    return {
+      modelID: input.resolvedModelID,
+      reselected: false,
+      candidates,
+      freeCandidatesExhausted,
+    }
+  }
+
+  return {
+    modelID: selected.model_id,
+    reselected: true,
+    candidates,
+    freeCandidatesExhausted,
+  }
+}
+
 /**
  * Convenience for callers that only need a free/sufficient boolean per model.
  * Returns the estimated USD cost for a fixed token budget (0 when free/unknown)

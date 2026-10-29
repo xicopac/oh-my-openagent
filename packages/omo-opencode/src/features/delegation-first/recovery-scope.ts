@@ -13,7 +13,9 @@
  *   - repairs to the delegation/watchdog/supervisor source and to config/state
  *   - evidence writes under `/tmp` and `~/.omo`
  *   - the single machine-consumed recovery `task` probe (never ordinary delegation)
- *   - orchestration-process cleanup (restart/stop the opencode/omo/senpi units)
+ *   - orchestration-unit cleanup (restart/stop the scoped opencode/omo/senpi systemd units;
+ *     process-wide signals such as pkill are never in scope because they can kill another
+ *     live session's host)
  *
  * Human-operated recovery procedure (when machine evidence has NOT promoted the
  * session to `recovery_mode`, e.g. a cold control plane): an operator explicitly
@@ -125,7 +127,6 @@ const SAFE_INSPECTION_COMMANDS = [
 
 const SAFE_ORCHESTRATION_PROCESS_MUTATIONS = [
   /^systemctl(?:\s+--user)?\s+(?:restart|start|stop|reset-failed)\s+[\w@.-]*(?:opencode|omo|oh-my-openagent|senpi|lsp-daemon)[\w@.-]*(?:\.service)?$/,
-  /^pkill\s+(?:-[A-Z0-9]+\s+)*(?:-f\s+)?['"]?[^;&|]*(?:opencode|omo|oh-my-openagent|senpi|lsp-daemon)[^;&|]*['"]?$/,
 ] as const
 
 function normalizePath(value: string): string {

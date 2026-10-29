@@ -29,6 +29,7 @@ export function createStaleSessionCleanup(
         sessionRetryInFlight.delete(sessionID)
         sessionAwaitingFallbackResult.delete(sessionID)
         internallyAbortedSessions.delete(sessionID)
+        deps.terminalQuotaSessions?.delete(sessionID)
         clearSessionFallbackTimeout(sessionID)
         clearDelegatedChildSessionBootstrap(sessionID)
         SessionCategoryRegistry.remove(sessionID)

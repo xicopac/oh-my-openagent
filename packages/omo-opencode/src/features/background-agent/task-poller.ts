@@ -25,6 +25,7 @@ const TERMINAL_TASK_STATUSES = new Set<BackgroundTask["status"]>([
   "error",
   "cancelled",
   "interrupt",
+  "blocked",
 ])
 
 export function pruneStaleTasksAndNotifications(args: {

@@ -3,6 +3,7 @@ import type { CreatedHooks } from "../create-hooks"
 import { log as defaultLog } from "../shared/logger"
 import type { PluginContext } from "./types"
 import type { DelegationFirstRuntime } from "../features/delegation-first"
+import type { TaskProcessOwnership } from "../features/task-process-ownership"
 import { subagentSessions } from "../features/claude-code-session-state"
 
 const METADATA_LINKED_TOOLS = new Set([
@@ -46,11 +47,12 @@ export function createToolExecuteAfterHandler(args: {
   hooks: CreatedHooks
   log?: typeof defaultLog
   delegationFirstRuntime?: DelegationFirstRuntime
+  taskProcessOwnership?: TaskProcessOwnership
 }): (
   input: ToolExecuteAfterInput,
   output: ToolExecuteAfterOutput | undefined,
 ) => Promise<void> {
-  const { hooks, delegationFirstRuntime } = args
+  const { hooks, delegationFirstRuntime, taskProcessOwnership } = args
   const log = args.log ?? defaultLog
 
   // OpenCode injects tool call ids into execute() context and after-hook input via undocumented runtime fields.
@@ -60,6 +62,18 @@ export function createToolExecuteAfterHandler(args: {
     input: ToolExecuteAfterInput,
     output: ToolExecuteAfterOutput | undefined,
   ): Promise<void> => {
+    const normalizedToolName = input.tool.toLowerCase()
+    if (normalizedToolName === "bash" || normalizedToolName === "interactive_bash") {
+      delegationFirstRuntime?.watchdogProcessEnd(input.sessionID)
+      const callID = input.callID ?? input.callId ?? input.call_id ?? ""
+      void taskProcessOwnership?.finishCall(input.sessionID, callID).catch((error) => {
+        log("[task-process-ownership] finishCall failed", {
+          sessionID: input.sessionID,
+          callID,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+    }
     if (delegationFirstRuntime && !subagentSessions.has(input.sessionID)) {
       delegationFirstRuntime.onToolActivity(input.sessionID, input.tool)
     }

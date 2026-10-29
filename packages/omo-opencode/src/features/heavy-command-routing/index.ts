@@ -11,7 +11,7 @@ export {
   resolveTimeoutSec,
   shellSingleQuote,
 } from "./router"
-export type { JobType, RoutingDecision, RoutingDeps } from "./router"
+export type { AiJobOwnershipBinding, JobType, RoutingDecision, RoutingDeps } from "./router"
 
 export {
   AI_CONTROL_SLICE_MARKER,

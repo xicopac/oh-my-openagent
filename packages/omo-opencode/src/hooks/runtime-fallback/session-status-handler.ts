@@ -32,6 +32,11 @@ export function createSessionStatusHandler(
 
     if (!sessionID || status?.type !== "retry") return
 
+    if (deps.terminalQuotaSessions?.has(sessionID)) {
+      log(`[${HOOK_NAME}] session.status retry suppressed for BLOCKED_QUOTA session`, { sessionID })
+      return
+    }
+
     const retryMessage = typeof status.message === "string" ? status.message : ""
     const retrySignal = extractAutoRetrySignal({ status: retryMessage, message: retryMessage })
     if (!retrySignal) {

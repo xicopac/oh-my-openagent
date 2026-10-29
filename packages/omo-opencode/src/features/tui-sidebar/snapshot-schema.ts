@@ -19,6 +19,7 @@ const BACKGROUND_TASK_STATUS_VALUES = [
   "error",
   "cancelled",
   "interrupt",
+  "blocked",
 ] as const satisfies readonly BackgroundTaskStatus[]
 
 const AgentRowSchema = z.object({

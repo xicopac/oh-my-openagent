@@ -150,6 +150,8 @@ export interface DelegateTaskToolOptions {
   paidConsentAudit?: GovernanceAuditWriter
   /** Test/harness seam: explicit root-authority hint. Production never sets it; authority is derived from the session hierarchy. */
   isRootSession?: boolean
+  /** Production wiring: the host has no interactive operator, so paid consent must fail closed. */
+  nonInteractive?: boolean
 }
 
 import type { DelegatedModelConfig } from "../../shared/model-resolution-types"

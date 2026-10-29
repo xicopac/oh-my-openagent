@@ -591,10 +591,10 @@ export function createLivenessSupervisor(
         if (lastProgress !== undefined) {
           const timeSinceProgress = msSince(lastProgress, tickNow)
           if (timeSinceProgress >= policy.progressStallMs) {
-            // No progress for too long — stall
             if (rec.status !== "failed") {
               rec.failure = "progress_stall"
               records.set(id, rec)
+              deps.onStallDetected?.(id, "progress_stall")
               continue
             }
           }
@@ -605,11 +605,10 @@ export function createLivenessSupervisor(
         if (lastHb !== undefined) {
           const timeSinceHb = msSince(lastHb, tickNow)
           if (timeSinceHb >= policy.missingHeartbeatDeadlineMs) {
-            // No heartbeat for too long — even if we just got one, this is
-            // a heartbeat_missing failure
             if (rec.status !== "failed") {
               rec.failure = "heartbeat_missing"
               records.set(id, rec)
+              deps.onStallDetected?.(id, "heartbeat_missing")
             }
             // Fall through to recovery
           }

@@ -17,7 +17,8 @@ const JOB_STATUS_PRIORITY: Record<BackgroundTaskStatus, number> = {
   interrupt: 2,
   error: 3,
   cancelled: 4,
-  completed: 5,
+  blocked: 5,
+  completed: 6,
 }
 
 export function deriveConfig(v: {

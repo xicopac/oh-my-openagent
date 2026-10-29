@@ -15,6 +15,7 @@ export {
   type WorkerHealth,
   type WorkerSignal,
   type WorkerStatus,
+  type ChildActivitySignal,
   type ChildStage,
   type StallMode,
 } from "./types"

@@ -122,6 +122,17 @@ import { TaskHistory } from "./task-history"
 import { checkAndInterruptStaleTasks, pruneStaleTasksAndNotifications, type SessionStatusMap } from "./task-poller"
 import { toBackgroundTaskSnapshots } from "./task-snapshot"
 import {
+  createWorkerRecordStore,
+  terminalOutcomeForStatus,
+  workerStateForStatus,
+  type WorkerRecord,
+  type WorkerRecordPatch,
+  type WorkerRecordState,
+  type WorkerRecordStore,
+  type WorkerTerminalOutcome,
+} from "./worker-record"
+import type { DelegationFirstRuntime } from "../delegation-first"
+import {
   archiveBackgroundTask,
   forgetBackgroundTask,
   getRegisteredBackgroundTask,
@@ -161,6 +172,7 @@ const TERMINAL_BACKGROUND_TASK_STATUSES = new Set<BackgroundTask["status"]>([
   "error",
   "cancelled",
   "interrupt",
+  "blocked",
 ])
 
 const PENDING_PARENT_WAKE_RETRY_MS = 1_000
@@ -257,12 +269,24 @@ export interface SubagentSessionDeletedEvent {
 
 export type OnSubagentSessionDeleted = (event: SubagentSessionDeletedEvent) => Promise<void>
 
+/** Fired once when a background task reaches a terminal status. */
+export type OnTaskTerminal = (event: {
+  taskId: string
+  sessionId?: string
+  parentSessionId?: string
+  status: string
+  reason?: string
+  recoveryProbe?: boolean
+}) => void
+
 /** Fired when a child's provider/model is unavailable (e.g. "Model is disabled"). */
 export type OnSubagentModelUnavailable = (sessionID: string, providerModel: string, reason: string) => void
 
 const MAX_TASK_REMOVAL_RESCHEDULES = 6
 const MAX_COMPLETED_TASK_ARCHIVE_SIZE = 100
 const PARENT_WAKE_FAILURE_REQUEUE_WINDOW_MS = 5_000
+const EMPTY_TURN_PROBE_AFTER_MS = 45_000
+const EMPTY_TURN_TERMINAL_MS = 90_000
 
 export interface BackgroundManagerConfig {
   pluginContext: PluginInput
@@ -274,9 +298,19 @@ export interface BackgroundManagerConfig {
   onSubagentModelUnavailable?: OnSubagentModelUnavailable
   /** Fired once the provider request for a child session has been dispatched. */
   onSubagentRequestStarted?: (sessionID: string) => void
+  /** Fired once when a task reaches completed/error/cancelled (before TTL removal). */
+  onTaskTerminal?: OnTaskTerminal
+  /**
+   * Marks a task's launching parent session as busy with a long-running
+   * process for the delegation-first watchdog, and releases it exactly once
+   * when the task reaches a terminal status.
+   */
+  delegationFirstRuntime?: Pick<DelegationFirstRuntime, "watchdogProcessStart" | "watchdogProcessEnd">
   onShutdown?: () => void | Promise<void>
   enableParentSessionNotifications?: boolean
   modelFallbackControllerAccessor?: ModelFallbackControllerAccessor
+  /** Durable worker identity/state/result records. Defaults to ~/.omo/workers. */
+  workerRecordStore?: WorkerRecordStore
   log?: typeof log
   /**
    * Shared Resource Governor pre-dispatch authorization. Every child spawned
@@ -322,6 +356,10 @@ export class BackgroundManager {
   private onSubagentSessionDeleted?: OnSubagentSessionDeleted
   private onSubagentModelUnavailable?: OnSubagentModelUnavailable
   private onSubagentRequestStarted?: (sessionID: string) => void
+  private onTaskTerminal?: OnTaskTerminal
+  private readonly terminalNotifiedTaskIds = new Set<string>()
+  private readonly delegationFirstRuntime?: Pick<DelegationFirstRuntime, "watchdogProcessStart" | "watchdogProcessEnd">
+  private readonly longProcessHolds = new Map<string, string>()
   private onShutdown?: () => void | Promise<void>
 
   private queuesByKey: Map<string, QueueItem[]> = new Map()
@@ -342,6 +380,11 @@ export class BackgroundManager {
   private readonly parentWakeNotifier: ParentWakeNotifier
   private parentWakeTextDeltaBuffers: Map<string, string> = new Map()
   private observedOutputSessions: Set<string> = new Set()
+  private readonly terminalMessageCache = new Map<string, Array<{
+    info?: { role?: string }
+    parts?: Array<{ type?: string; text?: string; content?: unknown }>
+  }>>()
+  private readonly terminalMessageCacheAt = new Map<string, number>()
   private observedIncompleteTodosBySession: Map<string, boolean> = new Map()
   private rootDescendantCounts: Map<string, number>
   private readonly syncSpawnRootsBySession = new Map<string, string>()
@@ -349,6 +392,7 @@ export class BackgroundManager {
   private preStartDescendantReservations: Set<string>
   private enableParentSessionNotifications: boolean
   private modelFallbackControllerAccessor?: ModelFallbackControllerAccessor
+  private readonly workerRecordStore: WorkerRecordStore
   private logger: typeof log
   private loggedSessionStatusUnavailable = false
   readonly taskHistory = new TaskHistory()
@@ -378,11 +422,14 @@ export class BackgroundManager {
     this.onSubagentSessionDeleted = options?.onSubagentSessionDeleted
     this.onSubagentModelUnavailable = options?.onSubagentModelUnavailable
     this.onSubagentRequestStarted = options?.onSubagentRequestStarted
+    this.onTaskTerminal = options?.onTaskTerminal
+    this.delegationFirstRuntime = options?.delegationFirstRuntime
     this.onShutdown = options?.onShutdown
     this.rootDescendantCounts = new Map()
     this.preStartDescendantReservations = new Set()
     this.enableParentSessionNotifications = options?.enableParentSessionNotifications ?? true
     this.modelFallbackControllerAccessor = options?.modelFallbackControllerAccessor
+    this.workerRecordStore = options?.workerRecordStore ?? createWorkerRecordStore()
     this.authorizeChildDispatch = options?.authorizeChildDispatch
     this.resourceGovernorDefaultChildTokens = options?.resourceGovernorDefaultChildTokens
     this.settleChildDispatch = options?.settleChildDispatch
@@ -395,6 +442,11 @@ export class BackgroundManager {
         enqueueNotificationForParent: this.enqueueNotificationForParent.bind(this),
         onPendingWakeRequeued: (sessionID) => this.updateBackgroundTaskMarker(sessionID),
         onScheduledFlushSettled: (sessionID) => this.recordScheduledFlushSettled(sessionID),
+        onWakeDispatched: (_sessionID, wake) => {
+          for (const workerID of wake.workerIDs ?? []) {
+            this.workerRecordStore.markNotificationDelivered(workerID, new Date())
+          }
+        },
       },
       {
         pendingRetryMs: PENDING_PARENT_WAKE_RETRY_MS,
@@ -406,6 +458,14 @@ export class BackgroundManager {
       },
     )
     this.registerProcessCleanup()
+    const recoveryTimer = setTimeout(() => {
+      void this.recoverTerminalWorkerRecords().catch((error) => {
+        log("[background-agent] Worker record recovery failed:", {
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+    }, 1_000)
+    recoveryTimer.unref?.()
   }
 
   private async abortSessionWithLogging(sessionID: string, reason: string): Promise<boolean> {
@@ -562,6 +622,8 @@ export class BackgroundManager {
     this.completedTaskArchive.delete(task.id)
     this.tasks.set(task.id, task)
     rememberBackgroundTask(task)
+    this.persistWorkerRecord(task, workerStateForStatus(task.status) ?? "dispatched")
+    this.beginLongProcessHold(task)
     if (!task.parentSessionId) {
       return
     }
@@ -571,7 +633,26 @@ export class BackgroundManager {
     this.tasksByParentSession.set(task.parentSessionId, taskIDs)
   }
 
+  private beginLongProcessHold(task: BackgroundTask): void {
+    if (!task.parentSessionId || this.longProcessHolds.has(task.id)) {
+      return
+    }
+    this.longProcessHolds.set(task.id, task.parentSessionId)
+    this.delegationFirstRuntime?.watchdogProcessStart(task.parentSessionId)
+  }
+
+  private endLongProcessHold(task: BackgroundTask): void {
+    const parentSessionID = this.longProcessHolds.get(task.id)
+    if (parentSessionID === undefined) {
+      return
+    }
+    this.longProcessHolds.delete(task.id)
+    this.delegationFirstRuntime?.watchdogProcessEnd(parentSessionID)
+  }
+
   private removeTask(task: BackgroundTask): void {
+    this.terminalNotifiedTaskIds.delete(task.id)
+    this.endLongProcessHold(task)
     this.archiveCompletedTask(task)
     archiveBackgroundTask(task)
     this.tasks.delete(task.id)
@@ -601,6 +682,7 @@ export class BackgroundManager {
       model: task.model,
       error: task.error,
       category: task.category,
+      ...(task.result !== undefined ? { result: task.result } : {}),
     }
 
     this.completedTaskArchive.set(task.id, archivedTask)
@@ -684,6 +766,7 @@ export class BackgroundManager {
     this.updateTaskParent(task, snapshot.parentSessionId)
 
     removeTaskToastTracking(task.id)
+    this.endLongProcessHold(task)
     if (task.status !== "running" && task.status !== "pending") {
       this.scheduleTaskRemoval(task.id)
     }
@@ -797,6 +880,7 @@ export class BackgroundManager {
         category: input.category,
         cwd: input.cwd,
         onSessionCreated: input.onSessionCreated,
+        ...(input.recoveryProbe ? { recoveryProbe: true } : {}),
       }
       if (launchAuth) {
         this.escrowByTask.set(task.id, {
@@ -872,14 +956,14 @@ export class BackgroundManager {
         try {
           await this.concurrencyManager.acquire(item.rawConcurrencyKey ?? key, item.task.id)
         } catch (error) {
-          if (item.task.status === "cancelled" || item.task.status === "error" || item.task.status === "interrupt") {
+          if (item.task.status === "cancelled" || item.task.status === "error" || item.task.status === "interrupt" || item.task.status === "blocked") {
             this.rollbackPreStartDescendantReservation(item.task)
             continue
           }
           throw error
         }
 
-        if (item.task.status === "cancelled" || item.task.status === "error" || item.task.status === "interrupt") {
+        if (item.task.status === "cancelled" || item.task.status === "error" || item.task.status === "interrupt" || item.task.status === "blocked") {
           this.rollbackPreStartDescendantReservation(item.task)
           this.concurrencyManager.release(key)
           continue
@@ -994,20 +1078,45 @@ export class BackgroundManager {
     }
 
     const sessionID = createResult.data.id
+    this.persistWorkerRecord(task, "starting", { sessionID })
 
-    if (task.status === "cancelled") {
+    if (task.status === "cancelled" || task.status === "blocked") {
       clearDelegatedChildSessionBootstrap(sessionID)
       await this.abortSessionWithLogging(sessionID, "cancelled pre-start cleanup")
       this.concurrencyManager.release(concurrencyKey)
       return
     }
 
-    await input.onSessionCreated?.(sessionID)
-    this.settlePreStartDescendantReservation(task)
+    // Register the child BEFORE awaiting the caller callback. The callback may
+    // perform asynchronous work and child events can arrive while it runs;
+    // progress handlers gate on subagentSessions membership and the watchdog
+    // can only record activity for a registered child. Registering after the
+    // callback dropped those early events.
     subagentSessions.add(sessionID)
     setSessionAgent(sessionID, input.agent)
+    try {
+      this.onSubagentSessionAttached?.({
+        sessionID,
+        parentID: input.parentSessionId,
+        title: input.description,
+      })
+      await input.onSessionCreated?.(sessionID)
+    } catch (error) {
+      clearDelegatedChildSessionBootstrap(sessionID)
+      clearSessionAgent(sessionID)
+      subagentSessions.delete(sessionID)
+      await this.onSubagentSessionDeleted?.({ sessionID, terminalStage: "failed" }).catch((cleanupError) => {
+        log("[background-agent] onSubagentSessionDeleted after onSessionCreated failure failed:", {
+          sessionID,
+          error: String(cleanupError),
+        })
+      })
+      await this.abortSessionWithLogging(sessionID, "onSessionCreated callback error")
+      throw error
+    }
+    this.settlePreStartDescendantReservation(task)
 
-    if (this.tasks.get(task.id)?.status === "cancelled") {
+    if (this.tasks.get(task.id)?.status === "cancelled" || this.tasks.get(task.id)?.status === "blocked") {
       clearDelegatedChildSessionBootstrap(sessionID)
       clearSessionAgent(sessionID)
       await this.abortSessionWithLogging(sessionID, "cancelled during launch setup")
@@ -1038,6 +1147,7 @@ export class BackgroundManager {
     }
     task.concurrencyKey = concurrencyKey
     task.concurrencyGroup = concurrencyKey
+    this.persistWorkerRecord(task, "running")
 
     if (task.retryNotification) {
       const attemptNumber = boundAttempt.attemptNumber
@@ -1239,14 +1349,6 @@ The fallback retry session is now created and can be inspected directly.
 
     this.onSubagentRequestStarted?.(sessionID)
 
-    // Unconditional: without tmux, attachChildSession never fires and the root
-    // worker-first phase deadlocks at worker_required after child completion.
-    this.onSubagentSessionAttached?.({
-      sessionID,
-      parentID: input.parentSessionId,
-      title: input.description,
-    })
-
     invokeTmuxSessionCreatedCallback({
       callback: this.onSubagentSessionCreated,
       tmuxEnabled: this.tmuxEnabled,
@@ -1259,7 +1361,37 @@ The fallback retry session is now created and can be inspected directly.
   }
 
   getTask(id: string): BackgroundTask | undefined {
-    return this.tasks.get(id) ?? this.completedTaskArchive.get(id) ?? getRegisteredBackgroundTask(id)
+    const live = this.tasks.get(id) ?? this.completedTaskArchive.get(id) ?? getRegisteredBackgroundTask(id)
+    if (live) return live
+    const record = this.workerRecordStore.get(id)
+    if (!record || !record.terminalAt) return undefined
+    return this.taskFromWorkerRecord(record)
+  }
+
+  private taskFromWorkerRecord(record: WorkerRecord): BackgroundTask {
+    const status: BackgroundTask["status"] = record.terminalOutcome === "completed"
+      ? "completed"
+      : record.terminalOutcome === "blocked"
+        ? "blocked"
+        : record.terminalOutcome === "cancelled"
+          ? "cancelled"
+          : "error"
+    return {
+      id: record.workerID,
+      ...(record.sessionID ? { sessionId: record.sessionID } : {}),
+      ...(record.rootSessionID ? { rootSessionId: record.rootSessionID } : {}),
+      parentSessionId: record.parentSessionID,
+      parentMessageId: record.parentMessageID ?? "",
+      description: record.description,
+      prompt: "",
+      agent: record.agent,
+      status,
+      ...(record.startedAt ? { startedAt: new Date(record.startedAt) } : {}),
+      ...(record.terminalAt ? { completedAt: new Date(record.terminalAt) } : {}),
+      ...(record.result ? { result: record.result } : {}),
+      ...(record.terminalReason ? { error: record.terminalReason } : {}),
+      ...(record.model ? { model: record.model } : {}),
+    }
   }
 
   getTasksSnapshot(): BackgroundTaskSnapshot[] { return toBackgroundTaskSnapshots(this.tasks.values()) }
@@ -1580,6 +1712,7 @@ The fallback retry session is now created and can be inspected directly.
     existingTask.parentModel = input.parentModel
     existingTask.parentAgent = input.parentAgent
     if (input.parentTools) existingTask.parentTools = input.parentTools
+    this.beginLongProcessHold(existingTask)
     if (input.parentSessionId) {
       const pending = this.pendingByParent.get(input.parentSessionId) ?? new Set<string>()
       pending.add(existingTask.id)
@@ -1620,6 +1753,7 @@ The fallback retry session is now created and can be inspected directly.
     existingTask.completedAt = undefined
     existingTask.error = undefined
     this.updateTaskParent(existingTask, input.parentSessionId)
+    this.beginLongProcessHold(existingTask)
     existingTask.parentMessageId = input.parentMessageId
     existingTask.parentModel = input.parentModel
     existingTask.parentAgent = input.parentAgent
@@ -1842,6 +1976,8 @@ The fallback retry session is now created and can be inspected directly.
 
   private clearSessionOutputObserved(sessionID: string): void {
     this.observedOutputSessions.delete(sessionID)
+    this.terminalMessageCache.delete(sessionID)
+    this.terminalMessageCacheAt.delete(sessionID)
   }
 
   private clearSessionTodoObservation(sessionID: string): void {
@@ -2189,7 +2325,8 @@ The fallback retry session is now created and can be inspected directly.
         if (task.status === "running" || task.status === "pending") {
           void this.cancelTask(task.id, {
             source: "session.deleted",
-            reason: "Session deleted",
+            reason: "BLOCKED: worker session disappeared before a terminal result",
+            terminalStatus: "blocked",
           }).then(() => {
             if (deletedSessionIDs.has(task.parentSessionId)) {
               this.pendingNotifications.delete(task.parentSessionId)
@@ -2266,6 +2403,8 @@ The fallback retry session is now created and can be inspected directly.
       }
     }
 
+    const partialResult = await this.captureTerminalResult(task)
+    if (partialResult !== undefined) task.result = partialResult
     if (task.currentAttemptID) {
       finalizeAttempt(task, task.currentAttemptID, "interrupt", errorMessage)
     } else {
@@ -2277,6 +2416,7 @@ The fallback retry session is now created and can be inspected directly.
     if (task.rootSessionId) {
       this.unregisterRootDescendant(task.rootSessionId)
     }
+    this.persistTerminalWorkerRecord(task, "cancelled", errorMessage)
     this.taskHistory.record(task.parentSessionId, {
       id: task.id,
       sessionID: task.sessionId,
@@ -2400,6 +2540,8 @@ The fallback retry session is now created and can be inspected directly.
       }
     }
 
+    const partialResult = await this.captureTerminalResult(task)
+    if (partialResult !== undefined) task.result = partialResult
     if (task.currentAttemptID) {
       finalizeAttempt(task, task.currentAttemptID, "error", errorMsg)
     } else {
@@ -2410,6 +2552,7 @@ The fallback retry session is now created and can be inspected directly.
     if (task.rootSessionId) {
       this.unregisterRootDescendant(task.rootSessionId)
     }
+    this.persistTerminalWorkerRecord(task, "failed", errorMsg)
     this.taskHistory.record(task.parentSessionId, { id: task.id, sessionID: task.sessionId, agent: task.agent, description: task.description, status: "error", category: task.category, startedAt: task.startedAt, completedAt: task.completedAt })
     this.settleTaskEscrow(task, "failed")
 
@@ -2508,9 +2651,170 @@ The task was re-queued on a fallback model after a retryable failure.
   }
 
   markForNotification(task: BackgroundTask): void {
+    this.endLongProcessHold(task)
     const queue = this.notifications.get(task.parentSessionId) ?? []
     queue.push(task)
     this.notifications.set(task.parentSessionId, queue)
+  }
+
+  private persistWorkerRecord(task: BackgroundTask, state: WorkerRecordState, patch: WorkerRecordPatch = {}): void {
+    const now = new Date().toISOString()
+    const existing = this.workerRecordStore.get(task.id)
+    const base: WorkerRecord = existing ?? {
+      schemaVersion: 1,
+      workerID: task.id,
+      parentSessionID: task.parentSessionId,
+      agent: task.agent,
+      description: task.description,
+      state,
+      createdAt: task.queuedAt?.toISOString() ?? now,
+      updatedAt: now,
+    }
+    const next: WorkerRecord = {
+      ...base,
+      ...(task.sessionId ? { sessionID: task.sessionId } : {}),
+      ...(task.parentMessageId ? { parentMessageID: task.parentMessageId } : {}),
+      ...(task.rootSessionId ? { rootSessionID: task.rootSessionId } : {}),
+      ...(task.model
+        ? {
+            model: {
+              providerID: task.model.providerID,
+              modelID: task.model.modelID,
+              ...(task.model.variant ? { variant: task.model.variant } : {}),
+            },
+          }
+        : {}),
+      ...(task.startedAt ? { startedAt: task.startedAt.toISOString() } : {}),
+      state,
+      updatedAt: now,
+      ...(task.status === "pending" && task.queuedAt ? { dispatchedAt: task.queuedAt.toISOString() } : {}),
+      ...patch,
+    }
+    this.workerRecordStore.save(next)
+  }
+
+  private persistTerminalWorkerRecord(
+    task: BackgroundTask,
+    outcome: WorkerTerminalOutcome,
+    reason?: string,
+  ): void {
+    const terminalAt = (task.completedAt ?? new Date()).toISOString()
+    this.persistWorkerRecord(task, workerStateForStatus(outcome) ?? "failed", {
+      terminalAt,
+      terminalOutcome: outcome,
+      ...(reason !== undefined ? { terminalReason: reason } : task.error !== undefined ? { terminalReason: task.error } : {}),
+      ...(task.result !== undefined ? { result: task.result } : {}),
+      ...(task.attempts !== undefined ? { attempts: task.attempts.length } : {}),
+    })
+  }
+
+  private async captureTerminalResult(task: BackgroundTask): Promise<string | undefined> {
+    if (!task.sessionId) return task.result
+    const cachedAt = this.terminalMessageCacheAt.get(task.sessionId)
+    const cached = this.terminalMessageCache.get(task.sessionId)
+    if (cached && cachedAt !== undefined && Date.now() - cachedAt < 5_000) {
+      return extractTerminalResultText(cached) ?? task.result
+    }
+    try {
+      const response = await messagesInDirectory(this.client, {
+        path: { id: task.sessionId },
+      }, this.directory)
+      const messages = normalizeSDKResponse(response, [] as Array<{
+        info?: { role?: string }
+        parts?: Array<{ type?: string; text?: string; content?: unknown }>
+      }>, { preferResponseOnMissingData: true })
+      this.terminalMessageCache.set(task.sessionId, messages)
+      this.terminalMessageCacheAt.set(task.sessionId, Date.now())
+      return extractTerminalResultText(messages) ?? task.result
+    } catch (error) {
+      log("[background-agent] Failed to capture terminal worker result:", {
+        taskId: task.id,
+        sessionID: task.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return task.result
+    }
+  }
+
+  async notifyWorkerBlocked(input: {
+    sessionID?: string
+    parentSessionID?: string
+    reason: string
+  }): Promise<void> {
+    const task = input.sessionID ? this.findBySession(input.sessionID) : undefined
+    if (task) {
+      if (task.status !== "running" && task.status !== "pending") return
+      await this.cancelTask(task.id, {
+        source: "worker-blocked",
+        reason: `BLOCKED: ${input.reason}`,
+        terminalStatus: "blocked",
+      })
+      return
+    }
+    const parentSessionID = input.parentSessionID
+    if (!parentSessionID) return
+    if (!this.enableParentSessionNotifications) return
+    if (!(await this.verifySessionExists(parentSessionID))) return
+    const notification = `<system-reminder>
+[BACKGROUND TASK BLOCKED]
+**Worker:** \`${input.sessionID ?? "unknown"}\`
+**Reason:** ${input.reason}
+
+Recovery exhausted or the worker vanished without a terminal result. This worker will not be retried automatically. Read-only diagnostics and result retrieval remain available.
+</system-reminder>`
+    const promptContext = await this.resolveParentWakePromptContext({
+      parentSessionId: parentSessionID,
+      parentAgent: undefined,
+      parentTools: undefined,
+      id: input.sessionID ?? "worker-blocked",
+    } as BackgroundTask)
+    this.queuePendingParentWake(
+      parentSessionID,
+      notification,
+      promptContext,
+      true,
+      PENDING_PARENT_WAKE_DEBOUNCE_MS,
+      input.sessionID ? [input.sessionID] : [],
+    )
+  }
+
+  private async recoverTerminalWorkerRecords(): Promise<void> {
+    if (!this.enableParentSessionNotifications) return
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000
+    const orphanCutoff = Date.now() - 5 * 60 * 1000
+    for (const record of this.workerRecordStore.list()) {
+      if (this.tasks.has(record.workerID)) continue
+      if (!record.terminalAt) {
+        const updatedAt = Date.parse(record.updatedAt)
+        if (!Number.isFinite(updatedAt) || updatedAt > orphanCutoff) continue
+        if (record.state !== "dispatched" && record.state !== "starting" && record.state !== "running") continue
+        const terminalAt = new Date().toISOString()
+        this.workerRecordStore.update(record.workerID, {
+          state: "blocked",
+          terminalAt,
+          terminalOutcome: "blocked",
+          terminalReason: "worker vanished across plugin restart",
+          updatedAt: terminalAt,
+        })
+        const recovered = this.workerRecordStore.get(record.workerID)
+        if (!recovered || !(await this.verifySessionExists(recovered.parentSessionID))) continue
+        await this.notifyParentSession(this.taskFromWorkerRecord(recovered))
+        this.workerRecordStore.markNotificationQueued(recovered.workerID, new Date())
+        continue
+      }
+      if (record.notificationDeliveredAt !== undefined) continue
+      const terminalAt = Date.parse(record.terminalAt)
+      if (!Number.isFinite(terminalAt) || terminalAt < cutoff) {
+        this.workerRecordStore.markNotificationDelivered(record.workerID, new Date())
+        continue
+      }
+      if (!(await this.verifySessionExists(record.parentSessionID))) {
+        this.workerRecordStore.markNotificationDelivered(record.workerID, new Date())
+        continue
+      }
+      await this.notifyParentSession(this.taskFromWorkerRecord(record))
+      this.workerRecordStore.markNotificationQueued(record.workerID, new Date())
+    }
   }
 
   getPendingNotifications(sessionID: string): BackgroundTask[] {
@@ -2554,6 +2858,11 @@ The task was re-queued on a fallback model after a retryable failure.
       }, this.directory)
 
       const messages = normalizeSDKResponse(response, [] as Array<{ info?: { role?: string } }>, { preferResponseOnMissingData: true })
+      this.terminalMessageCache.set(sessionID, messages as Array<{
+        info?: { role?: string }
+        parts?: Array<{ type?: string; text?: string; content?: unknown }>
+      }>)
+      this.terminalMessageCacheAt.set(sessionID, Date.now())
 
       // Check for at least one assistant or tool message
       const hasAssistantOrToolMessage = messages.some(
@@ -2600,6 +2909,40 @@ The task was re-queued on a fallback model after a retryable failure.
       log("[background-agent] Error validating session output:", error)
       // On error, allow completion to proceed (don't block indefinitely)
       return true
+    }
+  }
+
+  private async detectTerminalAssistantTurn(sessionID: string): Promise<{ empty: boolean; error?: string }> {
+    try {
+      const response = await messagesInDirectory(this.client, {
+        path: { id: sessionID },
+      }, this.directory)
+      const messages = normalizeSDKResponse(response, [] as Array<{
+        info?: { role?: string; error?: unknown; finish?: unknown; tokens?: unknown }
+        parts?: Array<{ type?: string; text?: string; content?: unknown }>
+      }>, { preferResponseOnMissingData: true })
+      const error = getStoppedSessionError(messages)
+      const last = messages[messages.length - 1]
+      const lastHasOutput = last?.parts?.some((part) =>
+        (part.type === "text" && typeof part.text === "string" && part.text.trim().length > 0)
+        || (part.type === "reasoning" && typeof part.text === "string" && part.text.trim().length > 0)
+        || part.type === "tool"
+        || (part.type === "tool_result" && (
+          (typeof part.content === "string" && part.content.trim().length > 0)
+          || (Array.isArray(part.content) && part.content.length > 0)
+        ))
+      ) ?? false
+      const info = last?.info
+      const noProgress = info !== undefined && isEmptyNoProgressAssistantTurnInfo(info as unknown)
+      const empty = info !== undefined
+        && (noProgress || (info.role === "assistant" && info.error === undefined && !lastHasOutput))
+      return { empty, ...(error ? { error } : {}) }
+    } catch (error) {
+      log("[background-agent] Error probing terminal assistant turn:", {
+        sessionID,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return { empty: false }
     }
   }
 
@@ -2650,6 +2993,24 @@ The task was re-queued on a fallback model after a retryable failure.
   }
 
   private scheduleTaskRemoval(taskId: string, rescheduleCount = 0): void {
+    const terminalTask = this.tasks.get(taskId)
+    if (
+      terminalTask
+      && terminalTask.status !== "running"
+      && terminalTask.status !== "pending"
+      && !this.terminalNotifiedTaskIds.has(taskId)
+    ) {
+      this.terminalNotifiedTaskIds.add(taskId)
+      this.onTaskTerminal?.({
+        taskId,
+        ...(terminalTask.sessionId === undefined ? {} : { sessionId: terminalTask.sessionId }),
+        ...(terminalTask.parentSessionId === undefined ? {} : { parentSessionId: terminalTask.parentSessionId }),
+        status: terminalTask.status,
+        ...(terminalTask.error === undefined ? {} : { reason: terminalTask.error }),
+        ...(terminalTask.recoveryProbe === true ? { recoveryProbe: true } : {}),
+      })
+    }
+
     const existingTimer = this.completionTimers.get(taskId)
     if (existingTimer) {
       clearTimeout(existingTimer)
@@ -2684,10 +3045,23 @@ The task was re-queued on a fallback model after a retryable failure.
         subagentSessions.delete(task.sessionId)
         clearDelegatedChildSessionBootstrap(task.sessionId)
         SessionCategoryRegistry.remove(task.sessionId)
-        const deleteSession = this.client.session.delete?.bind(this.client.session)
-        if (typeof deleteSession === "function") {
-          await deleteSession({ path: { id: task.sessionId } }).catch((error: unknown) => {
-            log("[background-agent] Failed to delete completed subagent session:", { sessionID: task.sessionId, error: String(error) })
+        // Only a cleanly completed child is disposable. A failed, cancelled, or
+        // interrupted worker is the primary diagnostic for the failure; deleting
+        // its session erased the very record reviewers need to investigate a
+        // reclaim. Keep those session rows and rely on the task archive + audit
+        // journal for cleanup of in-memory state.
+        if (task.status === "completed") {
+          const deleteSession = this.client.session.delete?.bind(this.client.session)
+          if (typeof deleteSession === "function") {
+            await deleteSession({ path: { id: task.sessionId } }).catch((error: unknown) => {
+              log("[background-agent] Failed to delete completed subagent session:", { sessionID: task.sessionId, error: String(error) })
+            })
+          }
+        } else {
+          log("[background-agent] Retaining terminal subagent session for diagnostics:", {
+            sessionID: task.sessionId,
+            status: task.status,
+            taskId: task.id,
           })
         }
       }
@@ -2699,7 +3073,13 @@ The task was re-queued on a fallback model after a retryable failure.
 
   async cancelTask(
     taskId: string,
-    options?: { source?: string; reason?: string; abortSession?: boolean; skipNotification?: boolean }
+    options?: {
+      source?: string
+      reason?: string
+      abortSession?: boolean
+      skipNotification?: boolean
+      terminalStatus?: "cancelled" | "blocked"
+    }
   ): Promise<boolean> {
     const task = this.tasks.get(taskId)
     if (!task || (task.status !== "running" && task.status !== "pending")) {
@@ -2709,6 +3089,7 @@ The task was re-queued on a fallback model after a retryable failure.
     const source = options?.source ?? "cancel"
     const abortSession = options?.abortSession !== false
     const reason = options?.reason
+    const terminalStatus = options?.terminalStatus ?? "cancelled"
     this.cancellingTaskIds.add(taskId)
 
     if (task.status === "pending") {
@@ -2730,11 +3111,32 @@ The task was re-queued on a fallback model after a retryable failure.
     }
 
     const wasRunning = task.status === "running"
+    if (wasRunning && task.sessionId) {
+      const partialResult = await this.captureTerminalResult(task)
+      if (partialResult !== undefined) task.result = partialResult
+      this.persistTerminalWorkerRecord(
+        task,
+        terminalStatus === "blocked" ? "blocked" : "cancelled",
+        reason ?? source,
+      )
+    }
     if (wasRunning && abortSession && task.sessionId) {
       const aborted = await this.abortSessionWithLogging(task.sessionId, `task cancellation (${source})`)
       if (!aborted) {
-        this.cancellingTaskIds.delete(taskId)
-        return false
+        // A child session that no longer exists cannot be aborted, but the task
+        // must still reach a truthful terminal state. Only treat a definite
+        // missing/404 as already-stopped; an existing or unreachable session
+        // keeps the previous fail-and-leave-running behavior.
+        const sessionStillExists = await this.verifySessionExists(task.sessionId)
+        if (sessionStillExists) {
+          this.cancellingTaskIds.delete(taskId)
+          return false
+        }
+        log("[background-agent] Session already missing during cancellation; finalizing task:", {
+          taskId,
+          sessionID: task.sessionId,
+          source,
+        })
       }
 
       clearDelegatedChildSessionBootstrap(task.sessionId)
@@ -2745,14 +3147,17 @@ The task was re-queued on a fallback model after a retryable failure.
       // detachChildSession) may never fire. Release the runtime slot now so a
       // cancelled paid child cannot leak the cap-1 slot and block all later
       // delegation (including ordinary free workers).
-      await this.onSubagentSessionDeleted?.({ sessionID: task.sessionId, terminalStage: "cancelled" }).catch((error) => {
+      await this.onSubagentSessionDeleted?.({
+        sessionID: task.sessionId,
+        terminalStage: terminalStatus === "blocked" ? "failed" : "cancelled",
+      }).catch((error) => {
         log("[background-agent] onSubagentSessionDeleted on cancel failed:", { taskId: task.id, sessionID: task.sessionId, error: String(error) })
       })
     }
     if (task.currentAttemptID) {
-      finalizeAttempt(task, task.currentAttemptID, "cancelled", reason)
+      finalizeAttempt(task, task.currentAttemptID, terminalStatus, reason)
     } else {
-      task.status = "cancelled"
+      task.status = terminalStatus
       task.completedAt = new Date()
       if (reason) {
         task.error = reason
@@ -2761,7 +3166,12 @@ The task was re-queued on a fallback model after a retryable failure.
     if (wasRunning && task.rootSessionId) {
       this.unregisterRootDescendant(task.rootSessionId)
     }
-    this.taskHistory.record(task.parentSessionId, { id: task.id, sessionID: task.sessionId, agent: task.agent, description: task.description, status: "cancelled", category: task.category, startedAt: task.startedAt, completedAt: task.completedAt })
+    this.persistTerminalWorkerRecord(
+      task,
+      terminalStatus === "blocked" ? "blocked" : "cancelled",
+      reason ?? source,
+    )
+    this.taskHistory.record(task.parentSessionId, { id: task.id, sessionID: task.sessionId, agent: task.agent, description: task.description, status: terminalStatus, category: task.category, startedAt: task.startedAt, completedAt: task.completedAt })
 
     if (task.concurrencyKey) {
       this.concurrencyManager.release(task.concurrencyKey)
@@ -2789,6 +3199,7 @@ The task was re-queued on a fallback model after a retryable failure.
 
     if (options?.skipNotification) {
       this.cancellingTaskIds.delete(taskId)
+      this.endLongProcessHold(task)
       this.cleanupPendingByParent(task)
       this.scheduleTaskRemoval(task.id)
       log(`[background-agent] Task cancelled via ${source} (notification skipped):`, task.id)
@@ -2902,6 +3313,10 @@ The task was re-queued on a fallback model after a retryable failure.
       }
       this.taskHistory.record(task.parentSessionId, { id: task.id, sessionID: task.sessionId, agent: task.agent, description: task.description, status: "completed", category: task.category, startedAt: task.startedAt, completedAt: task.completedAt })
       this.settleTaskEscrow(task, "completed")
+
+      const terminalResult = await this.captureTerminalResult(task)
+      if (terminalResult !== undefined) task.result = terminalResult
+      this.persistTerminalWorkerRecord(task, "completed")
 
       if (task.rootSessionId) {
         this.unregisterRootDescendant(task.rootSessionId)
@@ -3020,7 +3435,9 @@ The task was re-queued on a fallback model after a retryable failure.
         ? "INTERRUPTED"
         : task.status === "error"
           ? "ERROR"
-          : "CANCELLED"
+          : task.status === "blocked"
+            ? "BLOCKED"
+            : "CANCELLED"
     const notification = buildBackgroundTaskNotificationText({
       task,
       duration,
@@ -3039,7 +3456,7 @@ The task was re-queued on a fallback model after a retryable failure.
           resolvedModel: parentPromptContext.model,
         })
 
-        const isTaskFailure = task.status === "error" || task.status === "cancelled" || task.status === "interrupt"
+        const isTaskFailure = task.status === "error" || task.status === "cancelled" || task.status === "interrupt" || task.status === "blocked"
         const shouldReply = allComplete || isTaskFailure
 
         const shouldDeferNotification = await this.isSessionActive(task.parentSessionId)
@@ -3051,7 +3468,9 @@ The task was re-queued on a fallback model after a retryable failure.
             parentPromptContext,
             shouldReply,
             PENDING_PARENT_WAKE_DEBOUNCE_MS,
+            [task.id],
           )
+          this.workerRecordStore.markNotificationQueued(task.id, new Date())
           log("[background-agent] Queued notification while parent session is active:", {
             taskId: task.id,
             allComplete,
@@ -3065,7 +3484,9 @@ The task was re-queued on a fallback model after a retryable failure.
             parentPromptContext,
             shouldReply,
             PENDING_PARENT_WAKE_DEBOUNCE_MS,
+            [task.id],
           )
+          this.workerRecordStore.markNotificationQueued(task.id, new Date())
           log("[background-agent] Queued notification for short-debounce flush to idle parent:", {
             taskId: task.id,
             allComplete,
@@ -3201,8 +3622,9 @@ The task was re-queued on a fallback model after a retryable failure.
     promptContext: ParentWakePromptContext,
     shouldReply: boolean,
     delayMs?: number,
+    workerIDs?: readonly string[],
   ): void {
-    this.parentWakeNotifier.queuePendingParentWake(sessionID, notification, promptContext, shouldReply, delayMs)
+    this.parentWakeNotifier.queuePendingParentWake(sessionID, notification, promptContext, shouldReply, delayMs, workerIDs)
     this.updateBackgroundTaskMarker(sessionID)
   }
 
@@ -3239,6 +3661,7 @@ The task was re-queued on a fallback model after a retryable failure.
         if (!wasPending && task.rootSessionId) {
           this.unregisterRootDescendant(task.rootSessionId)
         }
+        this.persistTerminalWorkerRecord(task, "failed", errorMessage)
         this.taskHistory.record(task.parentSessionId, { id: task.id, sessionID: task.sessionId, agent: task.agent, description: task.description, status: "error", category: task.category, startedAt: task.startedAt, completedAt: task.completedAt })
         this.settleTaskEscrow(task, "failed")
         if (task.concurrencyKey) {
@@ -3300,18 +3723,26 @@ The task was re-queued on a fallback model after a retryable failure.
     return verifySessionStillExists(this.client, sessionID, this.directory)
   }
 
-  private async failCrashedTask(task: BackgroundTask, errorMessage: string): Promise<void> {
+  private async failCrashedTask(
+    task: BackgroundTask,
+    errorMessage: string,
+    outcome: "failed" | "blocked" = "failed",
+  ): Promise<void> {
+    const partialResult = await this.captureTerminalResult(task)
+    if (partialResult !== undefined) task.result = partialResult
+    const terminalStatus = outcome === "blocked" ? "blocked" : "error"
     if (task.currentAttemptID) {
-      finalizeAttempt(task, task.currentAttemptID, "error", errorMessage)
+      finalizeAttempt(task, task.currentAttemptID, terminalStatus, errorMessage)
     } else {
-      task.status = "error"
+      task.status = terminalStatus
       task.error = errorMessage
       task.completedAt = new Date()
     }
     if (task.rootSessionId) {
       this.unregisterRootDescendant(task.rootSessionId)
     }
-    this.taskHistory.record(task.parentSessionId, { id: task.id, sessionID: task.sessionId, agent: task.agent, description: task.description, status: "error", category: task.category, startedAt: task.startedAt, completedAt: task.completedAt })
+    this.persistTerminalWorkerRecord(task, outcome, errorMessage)
+    this.taskHistory.record(task.parentSessionId, { id: task.id, sessionID: task.sessionId, agent: task.agent, description: task.description, status: terminalStatus, category: task.category, startedAt: task.startedAt, completedAt: task.completedAt })
     this.settleTaskEscrow(task, "failed")
     if (task.concurrencyKey) {
       this.concurrencyManager.release(task.concurrencyKey)
@@ -3332,11 +3763,25 @@ The task was re-queued on a fallback model after a retryable failure.
     this.cleanupPendingByParent(task)
     this.clearNotificationsForTask(task.id)
     removeTaskToastTracking(task.id)
-    this.scheduleTaskRemoval(task.id)
     if (task.sessionId) {
       clearDelegatedChildSessionBootstrap(task.sessionId)
       SessionCategoryRegistry.remove(task.sessionId)
+      await this.abortSessionWithLogging(task.sessionId, "crashed task terminal cleanup").catch((error) => {
+        log("[background-agent] Failed to abort crashed task session:", {
+          taskId: task.id,
+          sessionID: task.sessionId,
+          error: String(error),
+        })
+      })
+      await this.onSubagentSessionDeleted?.({ sessionID: task.sessionId, terminalStage: "failed" }).catch((error) => {
+        log("[background-agent] onSubagentSessionDeleted for crashed task failed:", {
+          taskId: task.id,
+          sessionID: task.sessionId,
+          error: String(error),
+        })
+      })
     }
+    this.scheduleTaskRemoval(task.id)
 
     // Update continuation marker for CLI run mode
     if (task.parentSessionId) {
@@ -3400,6 +3845,30 @@ The task was re-queued on a fallback model after a retryable failure.
           // Only skip completion when session status is actively running.
           // Unknown or terminal statuses (like "interrupted") fall through to completion.
           if (sessionStatus && isActiveSessionStatus(sessionStatus.type)) {
+            const lastProgressAt = task.progress?.lastUpdate?.getTime() ?? task.startedAt?.getTime() ?? 0
+            const quietMs = lastProgressAt > 0 ? Date.now() - lastProgressAt : 0
+            if (quietMs >= EMPTY_TURN_PROBE_AFTER_MS) {
+              const terminalTurn = await this.detectTerminalAssistantTurn(sessionID)
+              if (terminalTurn.error || terminalTurn.empty) {
+                if (quietMs >= EMPTY_TURN_TERMINAL_MS) {
+                  await this.failCrashedTask(
+                    task,
+                    terminalTurn.error
+                      ? `BLOCKED: assistant turn ended without output: ${terminalTurn.error}`
+                      : "BLOCKED: assistant turn completed with no output",
+                    "blocked",
+                  )
+                  continue
+                }
+                log("[background-agent] Active session ended on an empty/aborted assistant turn; bounded wait:", {
+                  taskId: task.id,
+                  sessionID,
+                  quietMs,
+                  empty: terminalTurn.empty,
+                  error: terminalTurn.error,
+                })
+              }
+            }
             task.consecutiveErroredIdlePolls = 0
             log("[background-agent] Session still running, relying on event-based progress:", {
               taskId: task.id,
@@ -3436,6 +3905,19 @@ The task was re-queued on a fallback model after a retryable failure.
             : "polling (session gone from status)"
           const hasValidOutput = await this.validateSessionHasOutput(sessionID)
           if (!hasValidOutput) {
+            const lastProgressAt = task.progress?.lastUpdate?.getTime() ?? task.startedAt?.getTime() ?? 0
+            const quietMs = lastProgressAt > 0 ? Date.now() - lastProgressAt : 0
+            const terminalTurn = await this.detectTerminalAssistantTurn(sessionID)
+            if ((terminalTurn.empty || terminalTurn.error) && quietMs >= EMPTY_TURN_TERMINAL_MS) {
+              await this.failCrashedTask(
+                task,
+                terminalTurn.error
+                  ? `BLOCKED: assistant turn ended without output: ${terminalTurn.error}`
+                  : "BLOCKED: assistant turn completed with no output",
+                "blocked",
+              )
+              continue
+            }
             if (sessionGoneThresholdReached) {
               const sessionExists = await this.verifySessionExists(sessionID)
               if (!sessionExists) {
@@ -3632,4 +4114,39 @@ The task was re-queued on a fallback model after a retryable failure.
 
     return current
   }
+}
+
+type TerminalResultMessage = {
+  info?: { role?: string }
+  parts?: Array<{ type?: string; text?: string; content?: unknown }>
+}
+
+function extractTerminalResultText(messages: readonly TerminalResultMessage[]): string | undefined {
+  const chunks: string[] = []
+  for (const message of messages) {
+    const role = message.info?.role
+    if (role !== "assistant" && role !== "tool") continue
+    for (const part of message.parts ?? []) {
+      if ((part.type === "text" || part.type === "reasoning") && part.text && part.text.trim().length > 0) {
+        chunks.push(part.text)
+        continue
+      }
+      if (part.type !== "tool_result") continue
+      if (typeof part.content === "string" && part.content.trim().length > 0) {
+        chunks.push(part.content)
+        continue
+      }
+      if (!Array.isArray(part.content)) continue
+      for (const block of part.content) {
+        if (!isRecord(block)) continue
+        const type = typeof block.type === "string" ? block.type : undefined
+        const text = typeof block.text === "string" ? block.text : undefined
+        if ((type === "text" || type === "reasoning") && text && text.trim().length > 0) {
+          chunks.push(text)
+        }
+      }
+    }
+  }
+  if (chunks.length === 0) return undefined
+  return chunks.join("\n\n")
 }

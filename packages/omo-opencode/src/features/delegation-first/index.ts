@@ -8,9 +8,12 @@ export {
 export {
   buildDelegationWorkerCandidates,
   estimatedCostUsdFor,
+  reselectFreeWorker,
   tierForPricing,
   type BuildWorkerCandidatesInput,
   type ModelCapabilityInfo,
+  type ReselectFreeWorkerInput,
+  type ReselectFreeWorkerResult,
   type WorkerCapabilityRequirement,
 } from "./free-worker-candidates"
 export {

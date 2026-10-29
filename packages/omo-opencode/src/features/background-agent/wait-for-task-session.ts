@@ -1,7 +1,7 @@
 import { getTimingConfig } from "../../tools/delegate-task/timing"
 import type { BackgroundTaskStatus } from "./types"
 
-type SessionWaitTerminalStatus = Extract<BackgroundTaskStatus, "error" | "cancelled" | "interrupt">
+type SessionWaitTerminalStatus = Extract<BackgroundTaskStatus, "error" | "cancelled" | "interrupt" | "blocked">
 type AbortSignalLike = { aborted: boolean }
 
 interface TaskReader {
@@ -15,7 +15,7 @@ export interface WaitForTaskSessionIDOptions {
 }
 
 function isTerminalStatus(status: BackgroundTaskStatus | undefined): status is SessionWaitTerminalStatus {
-  return status === "error" || status === "cancelled" || status === "interrupt"
+  return status === "error" || status === "cancelled" || status === "interrupt" || status === "blocked"
 }
 
 function waitForInterval(intervalMs: number): Promise<void> {

@@ -32,6 +32,16 @@ export type ChildStage =
   | "cancelled"
 
 /**
+ * What a child-session event proves:
+ * - `alive`: the session emitted something (startup echo, user prompt, heartbeat).
+ *   This is NOT a provider response and must not advance the lifecycle stage.
+ * - `provider_response`: the provider started responding (assistant message or
+ *   model stream event).
+ * - `progress`: the provider produced meaningful work (text/reasoning/tool).
+ */
+export type ChildActivitySignal = "alive" | "provider_response" | "progress"
+
+/**
  * Differentiated zero-progress failure modes. Each maps to a distinct stage /
  * timeout so a supervisor reports the specific class of stall instead of an
  * undifferentiated "agent stalled".

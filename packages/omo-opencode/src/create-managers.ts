@@ -22,20 +22,20 @@ import { createConfigHandler } from "./plugin-handlers"
 import { log } from "./shared"
 import { createGovernanceAuditWriter } from "./shared/governance-audit"
 import type { GovernanceAuditWriter } from "./shared/governance-audit"
+import { createTaskProcessOwnership, type TaskProcessOwnership } from "./features/task-process-ownership"
 import { markServerRunningInProcess } from "./shared/tmux/tmux-utils/server-health"
 import type { ModelFallbackControllerAccessor } from "./hooks/model-fallback"
 import { authorizeChildDispatch, createResourceGovernorRuntime, loadPricingCatalog, type ResourceGovernorRuntime } from "./hooks/resource-governor"
 import { PaidConsentRegistry } from "./tools/delegate-task/paid-consent"
 import { maxConcurrentPaidWorkers as paidConcurrencyLimit } from "./tools/delegate-task/paid-consent"
+import { recordRecoveryProbeTerminalFailure } from "./tools/delegate-task/recovery-probe"
 import {
   createDelegationFirstRuntime,
   type DelegationFirstRuntime,
-  type ReplayableAssignment,
-  type RelaunchOutcome,
 } from "./features/delegation-first"
 import { DEFAULT_RESOURCE_GOVERNOR_CONFIG } from "./config/schema/resource-governor"
-import type { LaunchInput } from "./features/background-agent"
-import { parseModelString } from "./shared/model-string-parser"
+import { createRecoveryRelaunchHandler } from "./features/background-agent/recovery-relaunch"
+import { getCachedPricingForDelegateTask } from "./tools/delegate-task/available-models"
 
 type CreateManagersDeps = {
   BackgroundManagerClass: typeof BackgroundManager
@@ -77,6 +77,10 @@ export type Managers = {
   delegationFirstRuntime?: DelegationFirstRuntime
   /** Stops the periodic watchdog sweep timer (if started). */
   stopWatchdogSweep?: () => void
+  /** Stops the periodic task-owned process scope sweep timer (if started). */
+  stopTaskProcessSweep?: () => void
+  /** Durable owner of disposable OS scopes launched on behalf of tasks. */
+  taskProcessOwnership: TaskProcessOwnership
   /** Live OpenGateway pricing catalog (shared by the governor and delegation-first selection). */
   pricingCatalog?: ReturnType<typeof loadPricingCatalog>
   /** Governance audit journal writer (present when delegation-first is enabled). */
@@ -130,6 +134,29 @@ export function createManagers(args: {
   const governanceAudit = delegationFirstEnabled
     ? createGovernanceAuditWriter({})
     : undefined
+  const taskProcessOwnership = createTaskProcessOwnership({
+    audit: governanceAudit ?? createGovernanceAuditWriter({}),
+    log: (message, detail) => log(message, detail),
+  })
+  void taskProcessOwnership.recover().then((recovered) => {
+    if (recovered > 0) {
+      log("[create-managers] recovered orphaned task-owned process scopes", { recovered })
+    }
+  }).catch((error) => {
+    log("[create-managers] task process ownership recovery failed", {
+      error: error instanceof Error ? error.message : String(error),
+    })
+  })
+  let stopTaskProcessSweep: (() => void) | undefined
+  if (taskProcessOwnership.enabled) {
+    const timer = setInterval(() => {
+      void taskProcessOwnership.sweep()
+    }, 15_000)
+    if (typeof timer.unref === "function") timer.unref()
+    stopTaskProcessSweep = () => {
+      clearInterval(timer)
+    }
+  }
   const paidConsentRegistry = new PaidConsentRegistry()
   const pricingCatalog = loadPricingCatalog()
   const resourceGovernorRuntime = budgetGovernorEnabled
@@ -176,6 +203,15 @@ export function createManagers(args: {
           : undefined,
         pricing: pricingCatalog,
         maxConcurrentPaidWorkers: paidConcurrencyLimit(pluginConfig.model_routing),
+        onTerminalHold: (sessionID, reason) => {
+          void taskProcessOwnership.holdTask(sessionID, reason).catch((error) => {
+            log("[create-managers] terminal HOLD process quiesce failed:", {
+              sessionID,
+              reason,
+              error: error instanceof Error ? error.message : String(error),
+            })
+          })
+        },
       })
     : undefined
 
@@ -196,6 +232,9 @@ export function createManagers(args: {
               ? `${task.model.providerID}/${task.model.modelID}`
               : null
             delegationFirstRuntime.reclaimStalled(sessionID, providerModel)
+            void taskProcessOwnership.cleanupTask(sessionID, "watchdog-reclaim").catch((error) => {
+              log("[create-managers] watchdog process cleanup failed:", { sessionID, error })
+            })
           } catch (error) {
             log("[create-managers] watchdog sweep session error:", { sessionID, error })
             governanceAudit?.write(sessionID, {
@@ -241,6 +280,10 @@ export function createManagers(args: {
     shutdown: async () => {
       tuiStateMirror?.stop()
       stopWatchdogSweep?.()
+      stopTaskProcessSweep?.()
+      await taskProcessOwnership.dispose().catch((error) => {
+        log("[create-managers] task process ownership disposal error during process shutdown:", error)
+      })
       await cleanupTeamModeRuns().catch((error) => {
         log("[create-managers] team-mode cleanup error during process shutdown:", error)
       })
@@ -305,6 +348,15 @@ export function createManagers(args: {
       })
 
       delegationFirstRuntime?.detachChildSession(event.sessionID, event.terminalStage)
+      void taskProcessOwnership.cleanupTask(
+        event.sessionID,
+        `subagent-${event.terminalStage ?? "terminal"}`,
+      ).catch((error) => {
+        log("[create-managers] subagent process cleanup failed:", {
+          sessionID: event.sessionID,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
 
       await tmuxSessionManager.onSessionDeleted(event).catch((error) => {
         log("[create-managers] onSubagentSessionDeleted callback error:", {
@@ -318,9 +370,28 @@ export function createManagers(args: {
     onSubagentRequestStarted: (sessionID: string) => {
       delegationFirstRuntime?.markRequestStarted(sessionID)
     },
+    onTaskTerminal: ({ taskId, sessionId, parentSessionId, status, recoveryProbe }) => {
+      const ownerID = sessionId ?? taskId
+      if (recoveryProbe && parentSessionId && delegationFirstRuntime) {
+        recordRecoveryProbeTerminalFailure(delegationFirstRuntime, parentSessionId, status)
+      }
+      void taskProcessOwnership.cleanupTask(ownerID, `task-${status}`).catch((error) => {
+        log("[create-managers] task process cleanup failed:", {
+          taskId,
+          sessionId,
+          status,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+    },
+    delegationFirstRuntime,
     onShutdown: async () => {
       tuiStateMirror?.stop()
       stopWatchdogSweep?.()
+      stopTaskProcessSweep?.()
+      await taskProcessOwnership.dispose().catch((error) => {
+        log("[create-managers] task process ownership disposal error during shutdown:", error)
+      })
       await cleanupTeamModeRuns().catch((error) => {
         log("[create-managers] team-mode cleanup error during shutdown:", error)
       })
@@ -360,52 +431,22 @@ export function createManagers(args: {
           source: "watchdog-reclaim",
           reason,
           skipNotification: options?.suppressNotification === true,
+          ...(options?.blocked ? { terminalStatus: "blocked" as const } : {}),
         })
       }
     },
-    relaunch: async (assignment, action, replacementPrompt): Promise<RelaunchOutcome> => {
-      const parsed = parseModelString(action.worker.model_id)
-      const replacementModel =
-        parsed && parsed.modelID
-          ? {
-              providerID: parsed.providerID,
-              modelID: parsed.modelID,
-              ...(parsed.variant ? { variant: parsed.variant } : {}),
-            }
-          : undefined
-
-      const input: LaunchInput = {
-        description: assignment.description ?? `auto-retry: ${assignment.agent}`,
-        prompt: replacementPrompt,
-        agent: assignment.agent,
-        parentSessionId: assignment.parent_session_id,
-        parentMessageId: assignment.parent_message_id,
-        parentModel: assignment.parent_model,
-        parentAgent: assignment.parent_agent,
-        parentTools: assignment.parent_tools,
-        model: replacementModel,
-        fallbackChain: assignment.fallback_chain,
-        skills: assignment.skills,
-        skillContent: assignment.skill_content,
-        category: assignment.category,
-        sessionPermission: assignment.session_permission,
-        cwd: assignment.cwd,
-        isUnstableAgent: assignment.is_unstable_agent,
-        onSessionCreated: (sessionID) => {
-          delegationFirstRuntime?.noteReplacementSession(assignment.assignment_id, sessionID)
-        },
-      }
-
-      try {
-        const task = await backgroundManager.launch(input)
-        return { kind: "launched", taskID: task.id, sessionID: task.sessionId }
-      } catch (error) {
-        return {
-          kind: "blocked",
-          reason: error instanceof Error ? error.message : String(error),
-        }
-      }
+    notifyBlocked: async (sessionID, reason, parentSessionID) => {
+      await backgroundManager.notifyWorkerBlocked({ sessionID, parentSessionID, reason })
     },
+    relaunch: createRecoveryRelaunchHandler({
+      backgroundManager,
+      pricing: () => ({ ...pricingCatalog, ...getCachedPricingForDelegateTask() }),
+      modelRouting: pluginConfig.model_routing,
+      audit: governanceAudit,
+      onSessionCreated: (assignmentID, sessionID) => {
+        delegationFirstRuntime?.noteReplacementSession(assignmentID, sessionID)
+      },
+    }),
   })
 
   if (pluginConfig.tui?.sidebar?.enabled !== false) {
@@ -438,6 +479,8 @@ export function createManagers(args: {
     resourceGovernorRuntime,
     delegationFirstRuntime,
     stopWatchdogSweep,
+    stopTaskProcessSweep,
+    taskProcessOwnership,
     pricingCatalog,
     governanceAudit,
     paidConsentRegistry,

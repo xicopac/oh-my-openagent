@@ -34,17 +34,53 @@ export function appendRecoveryProbeDirective(prompt: string, nonce: string): str
  * true only when the session is in recovery_mode, a probe is active, and the
  * result carries the probe nonce; on success the runtime moves the session to
  * recovery_verified.
+ *
+ * When the consumed result is known to come from the probe child and it does
+ * not carry the nonce, the failure is recorded so probe attempts are bounded
+ * and the recovery state can reach `halt` instead of staying open forever.
  */
 export function maybeVerifyRecoveryProbe(
   rt: DelegationFirstRuntime,
   sessionID: string,
   resultText: string,
+  options?: { probeResult?: boolean },
 ): boolean {
-  if (typeof resultText !== "string" || resultText.length === 0) return false
+  const text = typeof resultText === "string" ? resultText : ""
+  if (text.length === 0 && options?.probeResult !== true) return false
   const snapshot = rt.recoverySnapshot(sessionID)
   if (snapshot.phase !== "recovery_mode") return false
   const probe = snapshot.activeProbe
   if (!probe) return false
-  if (!resultText.includes(probe.nonce)) return false
-  return rt.markRecoveryVerified(sessionID, probe.probeID)
+  if (text.length > 0 && text.includes(probe.nonce)) {
+    return rt.markRecoveryVerified(sessionID, probe.probeID)
+  }
+  if (options?.probeResult === true) {
+    rt.recordRecoveryProbeFailure(
+      sessionID,
+      probe.probeID,
+      text.length === 0 ? "probe_result_empty" : "probe_result_missing_nonce",
+    )
+  }
+  return false
+}
+
+/**
+ * Record a probe failure when the probe child itself reaches a terminal
+ * non-completed status (error, cancelled, interrupt). A completed child is
+ * verified through its consumed result instead.
+ */
+export function recordRecoveryProbeTerminalFailure(
+  rt: DelegationFirstRuntime,
+  sessionID: string,
+  status: string,
+): boolean {
+  if (status === "completed") return false
+  const snapshot = rt.recoverySnapshot(sessionID)
+  if (snapshot.phase !== "recovery_mode" || !snapshot.activeProbe) return false
+  rt.recordRecoveryProbeFailure(
+    sessionID,
+    snapshot.activeProbe.probeID,
+    `probe_child_${status}`,
+  )
+  return true
 }

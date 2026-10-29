@@ -24,6 +24,7 @@ type ParentWakePromptDispatchInput = {
   readonly getDispatchedWake: () => PendingParentWake | undefined
   readonly hasRecordedPromptAfterDispatch: (wake: PendingParentWake) => Promise<boolean>
   readonly trackDispatchedWake: (wake: PendingParentWake, dispatchedAt: number) => void
+  readonly onWakeDispatched?: (wake: PendingParentWake) => void
   readonly requeueWake: (wake: PendingParentWake) => void
   readonly scheduleFlush: (delayMs?: number) => void
 }
@@ -65,7 +66,9 @@ export async function sendParentWakePrompt(input: ParentWakePromptDispatchInput)
         dispatchedWake.dispatchedAt = dispatchStartedAt
         if (await input.hasRecordedPromptAfterDispatch(dispatchedWake)) {
           markRetainedNoReplyAdmission(input, dispatchStartedAt)
-          input.trackDispatchedWake(createTrackedDispatchedWake(input.latestWake, input.forceNoReply), dispatchStartedAt)
+          const acceptedWake = createTrackedDispatchedWake(input.latestWake, input.forceNoReply)
+          input.trackDispatchedWake(acceptedWake, dispatchStartedAt)
+          input.onWakeDispatched?.(acceptedWake)
           log("[background-agent] Treated failed parent wake prompt as accepted after observing session history:", {
             sessionID: input.sessionID,
             error: promptResult.error,
@@ -104,7 +107,9 @@ export async function sendParentWakePrompt(input: ParentWakePromptDispatchInput)
     delete input.latestWake.allowEmptyAssistantTurnRetry
     delete input.latestWake.gateHoldExpiresAt
     markRetainedNoReplyAdmission(input, dispatchStartedAt)
-    input.trackDispatchedWake(createTrackedDispatchedWake(input.latestWake, input.forceNoReply), dispatchStartedAt)
+    const dispatchedWake = createTrackedDispatchedWake(input.latestWake, input.forceNoReply)
+    input.trackDispatchedWake(dispatchedWake, dispatchStartedAt)
+    input.onWakeDispatched?.(dispatchedWake)
   } catch (error) {
     const errorText = error instanceof Error ? `${error.name}: ${error.message}` : getErrorText(error) || String(error)
     input.requeueWake(input.latestWake)

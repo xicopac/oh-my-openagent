@@ -12,6 +12,7 @@ import { createGoalController, type GoalController } from "../hooks/goal/control
 import { createGoalTools } from "../hooks/goal/tools"
 import * as openclawRuntimeDispatch from "../openclaw/runtime-dispatch"
 import { log } from "../shared"
+import { isNonInteractive } from "../hooks/non-interactive-env"
 import { getSisyphusJuniorModelOverride } from "./tool-registry-team-tools"
 import { createNativeSkills, getPluginInputNativeSkills } from "./native-skills"
 import { createSkillContext } from "./skill-context"
@@ -57,6 +58,7 @@ export function createCoreTools(args: {
     userCategories: pluginConfig.categories,
     agentOverrides: pluginConfig.agents,
     modelRouting: pluginConfig.model_routing,
+    nonInteractive: isNonInteractive(),
     resourceGovernorRuntime: managers.resourceGovernorRuntime,
     resourceGovernorDefaultChildTokens: pluginConfig.resource_governor?.delegation.default_child_tokens,
     delegationFirstRuntime: managers.delegationFirstRuntime,

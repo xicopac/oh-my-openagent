@@ -8,15 +8,16 @@ import { getFallbackModelsForSession } from "./fallback-models"
 import { resolveFallbackBootstrapModel } from "./fallback-bootstrap-model"
 import { dispatchFallbackRetry } from "./fallback-retry-dispatcher"
 import { hasVisibleAssistantResponse } from "./visible-assistant-response"
-import { subagentSessions } from "../../features/claude-code-session-state"
 import { resolveMessageEventSessionID } from "../../shared/event-session-id"
 import { normalizeModelToCanonicalString } from "./normalize-model"
+import { createTerminalQuotaGuard } from "./terminal-quota-outcome"
 
 export { hasVisibleAssistantResponse } from "./visible-assistant-response"
 
 export function createMessageUpdateHandler(deps: HookDeps, helpers: AutoRetryHelpers) {
   const { ctx, config, pluginConfig, sessionStates, sessionLastAccess, sessionRetryInFlight, sessionAwaitingFallbackResult, sessionStatusRetryKeys } = deps
   const checkVisibleResponse = hasVisibleAssistantResponse(extractAutoRetrySignal)
+  const terminalQuota = createTerminalQuotaGuard(deps, helpers)
 
   return async (props: Record<string, unknown> | undefined) => {
     const info = props?.info as Record<string, unknown> | undefined
@@ -79,6 +80,9 @@ export function createMessageUpdateHandler(deps: HookDeps, helpers: AutoRetryHel
 
     if (sessionID && role === "assistant" && error) {
       const isContentFilterError = extractErrorName(error)?.toLowerCase().replace(/[_-]/g, "") === "contentfiltererror"
+      const terminalQuotaBegin = terminalQuota.begin(error, sessionID)
+      if (terminalQuotaBegin === "DUPLICATE") return
+      const terminalQuotaOutcome = terminalQuotaBegin
       const shouldOverrideRetry = Boolean(retrySignal && timeoutEnabled) || isContentFilterError
       let state = sessionStates.get(sessionID)
       const pendingFallbackModel = state?.pendingFallbackModel
@@ -134,6 +138,10 @@ export function createMessageUpdateHandler(deps: HookDeps, helpers: AutoRetryHel
 
       if (!isRetryableError(error, config.retry_on_errors)) {
         if (!terminalQuota402Abort) {
+          if (terminalQuotaOutcome) {
+            await terminalQuota.deliver(sessionID, "message.updated.terminal-quota")
+            return
+          }
           log(`[${HOOK_NAME}] message.updated error not retryable, skipping fallback`, {
             sessionID,
             statusCode: extractStatusCode(error, config.retry_on_errors),
@@ -155,15 +163,8 @@ export function createMessageUpdateHandler(deps: HookDeps, helpers: AutoRetryHel
       const fallbackModels = getFallbackModelsForSession(sessionID, resolvedAgent, pluginConfig)
 
       if (fallbackModels.length === 0) {
-        if (
-          subagentSessions.has(sessionID) &&
-          classifyErrorType(error) === "quota_exceeded"
-        ) {
-          log(`[${HOOK_NAME}] Aborting subagent on unrecoverable quota error (no fallback configured)`, {
-            sessionID,
-            model,
-          })
-          await helpers.abortSessionRequest(sessionID, "message.updated.subagent-quota-no-fallback")
+        if (terminalQuotaOutcome) {
+          await terminalQuota.deliverNoFallback(sessionID, model)
         }
         return
       }
@@ -210,11 +211,11 @@ export function createMessageUpdateHandler(deps: HookDeps, helpers: AutoRetryHel
         }
       }
 
-      if (classifyErrorType(error) === "quota_exceeded") {
-        await helpers.abortSessionRequest(sessionID, "message.updated.quota-fallback")
-        sessionRetryInFlight.delete(sessionID)
+      if (terminalQuotaOutcome) {
+        await terminalQuota.abortForFallback(sessionID)
       }
 
+      const attemptsBeforeDispatch = state.attemptCount
       await dispatchFallbackRetry(deps, helpers, {
         sessionID,
         state,
@@ -222,6 +223,13 @@ export function createMessageUpdateHandler(deps: HookDeps, helpers: AutoRetryHel
         resolvedAgent,
         source: "message.updated",
       })
+      if (terminalQuotaOutcome) {
+        await terminalQuota.deliverIfChainExhausted(
+          sessionID,
+          attemptsBeforeDispatch,
+          state.attemptCount,
+        )
+      }
     }
   }
 }

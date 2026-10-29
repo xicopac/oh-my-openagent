@@ -164,6 +164,30 @@ export const REASON_RECOVERY_TERMINAL = "delegation_recovery_halted"
 export const REASON_HARD_SAFETY = "hard_safety_restriction"
 export const REASON_HUMAN_AUTHORIZED = "human_explicit_authorization"
 
+const READ_ONLY_DIAGNOSTIC_TOOLS = new Set([
+  "read",
+  "grep",
+  "glob",
+  "lsp_status",
+  "lsp_diagnostics",
+  "lsp_goto_definition",
+  "lsp_find_references",
+  "lsp_symbols",
+  "session_list",
+  "session_read",
+  "session_search",
+  "session_info",
+  "background_output",
+  "background_cancel",
+  "task_list",
+  "task_get",
+  "get_goal",
+])
+
+export function isReadOnlyDiagnosticTool(tool: string | undefined): boolean {
+  return tool !== undefined && READ_ONLY_DIAGNOSTIC_TOOLS.has(tool.toLowerCase())
+}
+
 function emptySignal(): GruntSignal {
   return {
     gruntCount: 0,
@@ -397,6 +421,9 @@ export function createRootWorkerState(
         healVerifiedRecovery(rec)
       }
       if (rec.recoveryPhase === "handoff" || rec.recoveryPhase === "halt") {
+        if (isReadOnlyDiagnosticTool(tool)) {
+          return allow(rec, { opClass, selectiveVerification: true })
+        }
         return block(rec, REASON_RECOVERY_TERMINAL, opClass, hint?.target ?? hint?.command ?? null)
       }
 

@@ -56,6 +56,7 @@ export function createRuntimeFallbackHook(
     sessionAwaitingFallbackResult: new Set(),
     sessionFallbackTimeouts: new Map(),
     sessionStatusRetryKeys: new Map(),
+    terminalQuotaSessions: new Set(),
     internallyAbortedSessions: new Set(),
   }
 
@@ -112,6 +113,7 @@ export function createRuntimeFallbackHook(
     deps.sessionAwaitingFallbackResult.clear()
     deps.sessionFallbackTimeouts.clear()
     deps.sessionStatusRetryKeys.clear()
+    deps.terminalQuotaSessions?.clear()
     deps.internallyAbortedSessions.clear()
   }
 

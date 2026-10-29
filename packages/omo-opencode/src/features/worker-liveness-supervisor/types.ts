@@ -138,4 +138,5 @@ export type SupervisorDeps = {
   dispatchRetry?: (req: RetryRequest) => boolean | void | Promise<boolean | void>
   cancel?: () => void
   onEvent?: (event: SupervisorEvent) => void
+  onStallDetected?: (id: string, kind: FailureKind) => void
 }

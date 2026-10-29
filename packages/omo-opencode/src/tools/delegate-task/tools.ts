@@ -36,10 +36,19 @@ import { authorizeChildDispatch, blockMessage, lookupPricing, resolvedModelKey, 
 import { buildDelegationWorkerCandidates, type ModelCapabilityInfo } from "../../features/delegation-first"
 import { refineAssignment } from "../../features/delegation-ladder"
 import { judgeSyncAdequacy } from "./sync-adequacy"
+import { reselectFreeFirstModel } from "./free-first-dispatch"
 import type { PricingCatalog } from "../../hooks/resource-governor/pricing"
-import { appendRecoveryProbeDirective, maybeVerifyRecoveryProbe } from "./recovery-probe"
+import {
+  appendRecoveryProbeDirective,
+  maybeVerifyRecoveryProbe,
+  recordRecoveryProbeTerminalFailure,
+} from "./recovery-probe"
 
-export { appendRecoveryProbeDirective, maybeVerifyRecoveryProbe }
+export {
+  appendRecoveryProbeDirective,
+  maybeVerifyRecoveryProbe,
+  recordRecoveryProbeTerminalFailure,
+}
 
 /**
  * Effective pricing used for paid/unknown classification of a resolved child.
@@ -210,6 +219,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
       let isUnstableAgent = false
       let fallbackChain: import("../../shared/model-requirements").FallbackEntry[] | undefined
       let maxPromptTokens: number | undefined
+      let freeCandidatesExhausted = false
 
       const applyModelTier = async (): Promise<void> => {
         const tier = delegateTaskArgs.model_tier
@@ -307,6 +317,28 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         })
       }
 
+      const applyFreeFirstReselection = async (): Promise<void> => {
+        const selection = await reselectFreeFirstModel({
+          options: modelOptions,
+          args: delegateTaskArgs,
+          agentToUse,
+          categoryModel,
+          parentModel: parentContext.model,
+          modelInfoSource: modelInfo?.source,
+        })
+        freeCandidatesExhausted = selection.freeCandidatesExhausted
+        if (!selection.reselected) return
+        categoryModel = selection.categoryModel
+        actualModel = selection.modelID ?? actualModel
+        if (modelInfo) {
+          modelInfo = {
+            model: selection.modelID ?? modelInfo.model,
+            type: "category-default",
+            source: "category-default",
+          }
+        }
+      }
+
       if (delegateTaskArgs.category) {
         const resolution = await resolveCategoryExecution(delegateTaskArgs, modelOptions, inheritedModel, systemDefaultModel)
         if (resolution.error) {
@@ -321,6 +353,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         fallbackChain = resolution.fallbackChain
         maxPromptTokens = resolution.maxPromptTokens
         await applyModelTier()
+        await applyFreeFirstReselection()
 
         const unstablePaidGate = await gatePaidChildLaunch({
           options,
@@ -333,6 +366,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
           taskID,
           task: delegateTaskArgs.prompt,
           reason: "unstable agent forced to background",
+          freeCandidatesExhausted,
           pricingCatalog: await resolveEffectivePricing(options),
         })
         if (!unstablePaidGate.ok) {
@@ -379,6 +413,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         categoryModel = resolution.categoryModel
         fallbackChain = resolution.fallbackChain
         await applyModelTier()
+        await applyFreeFirstReselection()
       }
 
       const systemContent = buildSystemContent({
@@ -414,6 +449,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         isRootSession,
         taskID,
         task: delegateTaskArgs.prompt,
+        freeCandidatesExhausted,
         pricingCatalog: effectivePricing,
       })
       if (!paidGate.ok) {
@@ -479,9 +515,12 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
             fallbackChain,
             isRootSession,
             taskID,
+            freeCandidatesExhausted,
           })
           if (activeProbe) {
-            maybeVerifyRecoveryProbe(options.delegationFirstRuntime, ctx.sessionID, result)
+            maybeVerifyRecoveryProbe(options.delegationFirstRuntime, ctx.sessionID, result, {
+              probeResult: true,
+            })
           }
           return result
         } finally {
@@ -610,8 +649,8 @@ async function gatePaidChildLaunch(input: {
   const resolvedModelKeyValue = input.categoryModel?.modelID
     ? resolvedModelKey(input.categoryModel.providerID, input.categoryModel.modelID)
     : null
-  if (!resolvedModelKeyValue) return { ok: true, nonce: null }
   const pricing = input.pricingCatalog ?? input.options.pricingCatalog
+  if (!resolvedModelKeyValue) return { ok: true, nonce: null }
   if (classifyPaidStatus(resolvedModelKeyValue, pricing) === "free") {
     return { ok: true, nonce: null }
   }
@@ -623,7 +662,9 @@ async function gatePaidChildLaunch(input: {
     }
   }
   const ask = (input.ctx as ToolContextWithMetadata).ask
-  const provider = createOpenCodePermissionConsentProvider(ask)
+  const provider = createOpenCodePermissionConsentProvider(ask, {
+    nonInteractive: input.modelOptions.nonInteractive === true,
+  })
   const verdict = await enforcePaidWorkerLaunch({
     resolvedModelKey: resolvedModelKeyValue,
     pricing,
@@ -690,10 +731,11 @@ type DelegationFirstSyncParams = {
   fallbackChain?: import("../../shared/model-requirements").FallbackEntry[]
   isRootSession: boolean
   taskID: string
+  freeCandidatesExhausted: boolean
 }
 
 async function runDelegationFirstSync(params: DelegationFirstSyncParams): Promise<string> {
-  const { options, ctx, args, parentContext, agentToUse, categoryModel, systemContent, modelInfo, fallbackChain } = params
+  const { options, ctx, args, parentContext, agentToUse, categoryModel, systemContent, modelInfo, fallbackChain, freeCandidatesExhausted } = params
   const ladder = options.delegationFirstRuntime
 
   let available = new Set<string>()
@@ -774,6 +816,7 @@ async function runDelegationFirstSync(params: DelegationFirstSyncParams): Promis
       taskID: params.taskID,
       task: currentPrompt,
       reason: "delegation ladder escalated to a stronger/paid worker",
+      freeCandidatesExhausted: params.freeCandidatesExhausted,
       pricingCatalog: pricing,
     })
     if (!attemptGate.ok) return attemptGate.message

@@ -110,12 +110,14 @@ export function createPluginInterface(args: {
       hooks,
       backgroundManager: managers.backgroundManager,
       delegationFirstRuntime: managers.delegationFirstRuntime,
+      taskProcessOwnership: managers.taskProcessOwnership,
     }),
 
     "tool.execute.after": createToolExecuteAfterHandler({
       ctx,
       hooks,
       delegationFirstRuntime: managers.delegationFirstRuntime,
+      taskProcessOwnership: managers.taskProcessOwnership,
     }),
   }
 }

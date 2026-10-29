@@ -70,6 +70,24 @@ export const STALL_RECOVERY_AUDIT_EVENTS = [
 export type StallRecoveryAuditEvent = (typeof STALL_RECOVERY_AUDIT_EVENTS)[number]
 
 /**
+ * Task-owned process scope lifecycle. Recorded when a disposable OS scope (an
+ * ai-job systemd unit or a detached process group) is registered, observed
+ * finished, cleaned, recovered after an owner crash, or quiesced on HOLD.
+ * Metadata only: scope identifiers, signals, pids, counters, and reasons.
+ */
+export const PROCESS_OWNERSHIP_AUDIT_EVENTS = [
+  "task_process_registered",
+  "task_process_scope_finished",
+  "task_process_cleanup_started",
+  "task_process_cleanup_completed",
+  "task_process_cleanup_failed",
+  "task_process_orphan_recovered",
+  "task_process_quiesced_on_hold",
+] as const
+
+export type ProcessOwnershipAuditEvent = (typeof PROCESS_OWNERSHIP_AUDIT_EVENTS)[number]
+
+/**
  * Hard worker-first enforcement events. These record the per-root-session state
  * machine transitions: when a non-trivial task requires a worker, when broad root
  * work is blocked, when a real child launch satisfies the requirement, when a

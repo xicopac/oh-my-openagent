@@ -6,10 +6,12 @@ import { isTrackedBtwSideSession } from "../features/btw-side"
 import { getMainSessionID, subagentSessions } from "../features/claude-code-session-state"
 import {
   AI_JOB_BIN,
+  buildAiJobCommand,
   classifyResourceCommand,
   decideHeavyCommandRouting,
   isInsideControlSlice,
 } from "../features/heavy-command-routing"
+import type { TaskProcessOwnership } from "../features/task-process-ownership"
 import { log, replaceToolArgs } from "../shared"
 import { resolveSessionAgent } from "./session-agent-resolver"
 import { stopContinuation } from "./stop-continuation"
@@ -105,11 +107,12 @@ export function createToolExecuteBeforeHandler(args: {
   hooks: CreatedHooks
   backgroundManager?: Pick<BackgroundManager, "hasActiveChildTasks" | "hasPendingParentWake">
   delegationFirstRuntime?: DelegationFirstRuntime
+  taskProcessOwnership?: TaskProcessOwnership
 }): (
   input: { tool: string; sessionID: string; callID: string },
   output: { args: Record<string, unknown> },
 ) => Promise<void> {
-  const { ctx, hooks, backgroundManager, delegationFirstRuntime } = args
+  const { ctx, hooks, backgroundManager, delegationFirstRuntime, taskProcessOwnership } = args
 
   return async (input, output): Promise<void> => {
     // Strip mcp_ prefix from tool names — the model may emit mcp_background_output
@@ -193,14 +196,31 @@ export function createToolExecuteBeforeHandler(args: {
         throw new Error(routing.reason)
       }
       if (routing.action === "rewrite") {
+        // Ownership is registered BEFORE the rewrite is handed to opencode: if
+        // the scope cannot be recorded, the heavy command must not run untracked.
+        const owned = taskProcessOwnership?.registerAiJob({
+          taskID: input.sessionID,
+          callID: input.callID,
+          jobType: routing.type,
+          slice: routing.slice,
+          timeoutSec: routing.timeoutSec,
+          command,
+        })
         // In-place only: opencode executes from the closure `args`, ignoring a
         // reassigned output.args (so replaceToolArgs would lose the rewrite).
-        output.args.command = routing.command
+        output.args.command = owned
+          ? buildAiJobCommand(routing.kind, command, routing.timeoutSec, {
+            aiJobBin: AI_JOB_BIN,
+            ownership: owned.binding,
+          })
+          : routing.command
         log("[heavy-command-routing] routed heavy command", {
           class: routing.kind,
           type: routing.type,
           slice: routing.slice,
           timeoutSec: routing.timeoutSec,
+          unit: owned?.record.scope.kind === "ai-job" ? owned.record.scope.unit : undefined,
+          owned: owned !== undefined,
           sessionID: input.sessionID,
           callID: input.callID,
         })
@@ -308,6 +328,10 @@ export function createToolExecuteBeforeHandler(args: {
           })
         }
       }
+    }
+
+    if (normalizedToolName === "bash" || normalizedToolName === "interactive_bash") {
+      delegationFirstRuntime?.watchdogProcessStart(input.sessionID)
     }
   }
 }

@@ -9,6 +9,7 @@ export type BackgroundTaskStatus =
   | "error"
   | "cancelled"
   | "interrupt"
+  | "blocked"
 
 export interface ToolCallWindow {
   lastSignature: string
@@ -105,6 +106,8 @@ export interface BackgroundTask {
   consecutiveMissedPolls?: number
   /** Number of consecutive idle polls where the session still ended on an errored assistant turn */
   consecutiveErroredIdlePolls?: number
+  /** Marks this task as a delegation-first recovery probe (machine-consumed by the control plane). */
+  recoveryProbe?: boolean
 }
 
 export interface BackgroundTaskSnapshot {

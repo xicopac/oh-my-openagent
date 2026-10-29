@@ -47,6 +47,7 @@ export class ParentWakePendingQueue {
     notification: string,
     promptContext: ParentWakePromptContext,
     shouldReply: boolean,
+    workerIDs?: readonly string[],
   ): void {
     const now = Date.now()
     const resolvedPromptContext = resolveParentWakePromptContext(promptContext)
@@ -59,6 +60,7 @@ export class ParentWakePendingQueue {
       pendingWake.notifications = mergedNotifications
       pendingWake.promptContext = resolvedPromptContext
       pendingWake.shouldReply = pendingWake.shouldReply || shouldReply
+      pendingWake.workerIDs = mergeWorkerIDs(pendingWake.workerIDs, workerIDs)
       if (notificationsChanged) {
         delete pendingWake.noReplyAdmittedAt
         delete pendingWake.noAssistantOutputRetryCount
@@ -70,6 +72,7 @@ export class ParentWakePendingQueue {
       promptContext: resolvedPromptContext,
       notifications: [notification],
       shouldReply,
+      ...(workerIDs && workerIDs.length > 0 ? { workerIDs: [...workerIDs] } : {}),
       queuedAt: now,
     })
   }
@@ -86,6 +89,7 @@ export class ParentWakePendingQueue {
         [...latestWake.notifications],
       )
       pendingWake.shouldReply = pendingWake.shouldReply || latestWake.shouldReply
+      pendingWake.workerIDs = mergeWorkerIDs(pendingWake.workerIDs, latestWake.workerIDs)
       pendingWake.promptContext = latestWake.promptContext
       pendingWake.noReplyAdmittedAt ??= latestWake.noReplyAdmittedAt
       pendingWake.toolCallDeferralStartedAt ??= latestWake.toolCallDeferralStartedAt
@@ -140,4 +144,14 @@ export class ParentWakePendingQueue {
     this.pendingParentWakeTimers.clear()
     this.pendingParentWakes.clear()
   }
+}
+
+function mergeWorkerIDs(
+  current: readonly string[] | undefined,
+  next: readonly string[] | undefined,
+): string[] | undefined {
+  if ((!current || current.length === 0) && (!next || next.length === 0)) return undefined
+  const merged = new Set(current ?? [])
+  for (const id of next ?? []) merged.add(id)
+  return [...merged]
 }

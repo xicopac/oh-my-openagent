@@ -1,7 +1,7 @@
 import type { DelegatedModelConfig } from "../../shared/model-resolution-types"
 import type { BackgroundTask, BackgroundTaskAttempt, BackgroundTaskStatus } from "./types"
 
-type TerminalAttemptStatus = Extract<BackgroundTaskStatus, "completed" | "error" | "cancelled" | "interrupt">
+type TerminalAttemptStatus = Extract<BackgroundTaskStatus, "completed" | "error" | "cancelled" | "interrupt" | "blocked">
 
 function toAttemptModel(model: DelegatedModelConfig | undefined): Pick<BackgroundTaskAttempt, "providerId" | "modelId" | "variant"> {
   return {
@@ -33,7 +33,7 @@ function getAttempt(task: BackgroundTask, attemptID: string): BackgroundTaskAtte
 }
 
 function isTerminalStatus(status: BackgroundTaskStatus): status is TerminalAttemptStatus {
-  return status === "completed" || status === "error" || status === "cancelled" || status === "interrupt"
+  return status === "completed" || status === "error" || status === "cancelled" || status === "interrupt" || status === "blocked"
 }
 
 export function getCurrentAttempt(task: BackgroundTask): BackgroundTaskAttempt | undefined {

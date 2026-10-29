@@ -50,7 +50,7 @@ function continueSessionSetup(args: {
       if (!updated) {
         return
       }
-      if (updated.status === "error" || updated.status === "cancelled" || updated.status === "interrupt") {
+      if (updated.status === "error" || updated.status === "cancelled" || updated.status === "interrupt" || updated.status === "blocked") {
         return
       }
 
@@ -83,7 +83,7 @@ async function waitForBackgroundSessionStart(args: {
 
   while (!sessionId && Date.now() - waitStart < args.timing.WAIT_FOR_SESSION_TIMEOUT_MS) {
     const updated = args.manager.getTask(args.taskId)
-    if (updated?.status === "error" || updated?.status === "cancelled" || updated?.status === "interrupt") {
+    if (updated?.status === "error" || updated?.status === "cancelled" || updated?.status === "interrupt" || updated?.status === "blocked") {
       return undefined
     }
 
@@ -169,7 +169,7 @@ export async function executeBackgroundTask(
     const updatedTask = typeof manager.getTask === "function"
       ? manager.getTask(task.id)
       : undefined
-    if (!sessionId && (updatedTask?.status === "error" || updatedTask?.status === "cancelled" || updatedTask?.status === "interrupt")) {
+    if (!sessionId && (updatedTask?.status === "error" || updatedTask?.status === "cancelled" || updatedTask?.status === "interrupt" || updatedTask?.status === "blocked")) {
       // COST-SAFETY: a paid slot was reserved before launch; a launch that
       // never produced a session must release it or the cap-1 slot leaks and
       // blocks all future delegation (ordinary free workers too).

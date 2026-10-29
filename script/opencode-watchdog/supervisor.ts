@@ -18,7 +18,14 @@ export interface SupervisorFlags {
   dryRun: boolean;
   interval: number;
   killAfter: number | null;
+  /** Explicit target pid. Required for destructive actions (see --kill-after). */
+  pid?: number | null;
   help: boolean;
+}
+
+export interface OpencodeCandidate {
+  pid: number;
+  cwd: string;
 }
 
 export interface ProcStat {
@@ -149,6 +156,7 @@ export function parseFlags(args: string[]): SupervisorFlags {
     dryRun: false,
     interval: DEFAULT_INTERVAL,
     killAfter: null,
+    pid: null,
     help: false,
   };
 
@@ -183,6 +191,17 @@ export function parseFlags(args: string[]): SupervisorFlags {
           throw new Error("--kill-after requires a value");
         }
         break;
+      case "--pid":
+        if (i + 1 < args.length) {
+          const val = parseInt(args[++i], 10);
+          if (isNaN(val) || val <= 0) {
+            throw new Error(`Invalid --pid value: ${args[i]}`);
+          }
+          flags.pid = val;
+        } else {
+          throw new Error("--pid requires a value");
+        }
+        break;
       case "--help":
       case "-h":
         flags.help = true;
@@ -211,6 +230,9 @@ Options:
   --interval <sec>    Sweep interval in seconds (default: 30)
   --kill-after <sec>  DANGEROUS: Send SIGKILL after process stays in D state for N seconds.
                       DEFAULT OFF. Use with extreme caution - can cause data loss.
+                      Requires an explicit --pid; never auto-targets a discovered host.
+  --pid <pid>         Explicit opencode process to watch. Required with --kill-after.
+                      Its /proc/<pid>/cmdline must match the opencode matcher.
   --help, -h          Show this help
 
 Environment:
@@ -384,22 +406,29 @@ export function isOpencodeCmdline(cmdline: string): boolean {
 }
 
 /**
- * Find opencode process by scanning /proc.
- * Returns PID if found, null otherwise.
+ * Collect every opencode process visible in /proc, with its working directory.
  */
-export function findOpencodePidSync(): number | null {
+export function findOpencodeCandidatesSync(): OpencodeCandidate[] {
+  const candidates: OpencodeCandidate[] = [];
   try {
-    const entries = require("node:fs").readdirSync("/proc");
+    const fs = require("node:fs");
+    const entries = fs.readdirSync("/proc");
     for (const entry of entries) {
       const pid = parseInt(entry, 10);
       if (isNaN(pid)) continue;
 
       try {
         const cmdlinePath = `/proc/${pid}/cmdline`;
-        const cmdline = require("node:fs").readFileSync(cmdlinePath, "utf-8");
-        if (isOpencodeCmdline(cmdline)) {
-          return pid;
+        const cmdline = fs.readFileSync(cmdlinePath, "utf-8");
+        if (!isOpencodeCmdline(cmdline)) continue;
+
+        let cwd = "unknown";
+        try {
+          cwd = fs.readlinkSync(`/proc/${pid}/cwd`);
+        } catch {
+          // Process may have exited between scan steps; keep the candidate with an unknown cwd.
         }
+        candidates.push({ pid, cwd });
       } catch {
         // Process may have exited, ignore
       }
@@ -407,7 +436,50 @@ export function findOpencodePidSync(): number | null {
   } catch {
     // /proc not accessible
   }
-  return null;
+  return candidates;
+}
+
+/**
+ * Find THE opencode process by scanning /proc.
+ *
+ * Ownership rule: this supervisor may act on an auto-detected host only when
+ * exactly one opencode process exists. Several hosts can run concurrently (one
+ * per live session), so returning the first match could signal another
+ * session's process. With more than one candidate we refuse and list them; the
+ * operator must disambiguate with --pid.
+ *
+ * Returns PID if exactly one is found, null if none.
+ */
+export function findOpencodePidSync(): number | null {
+  const candidates = findOpencodeCandidatesSync();
+  if (candidates.length === 0) return null;
+  if (candidates.length > 1) {
+    const list = candidates.map((candidate) => `pid=${candidate.pid} cwd=${candidate.cwd}`).join("; ");
+    throw new Error(
+      `Multiple opencode processes found (${list}); refusing to guess which session this watchdog owns. `
+      + "Re-run with an explicit --pid <pid>.",
+    );
+  }
+  return candidates[0].pid;
+}
+
+/**
+ * Validate an explicitly supplied pid against the same opencode cmdline matcher.
+ * Guards against a stale/reused pid or a typo hitting an unrelated process.
+ */
+export function resolveExplicitOpencodePid(pid: number): number {
+  let cmdline: string;
+  try {
+    cmdline = require("node:fs").readFileSync(`/proc/${pid}/cmdline`, "utf-8");
+  } catch {
+    throw new Error(`--pid ${pid} is not readable; cannot verify it is an opencode process.`);
+  }
+  if (!isOpencodeCmdline(cmdline)) {
+    throw new Error(
+      `--pid ${pid} is not an opencode process (cmdline must contain "${OPENCODE_CMDLINE_MATCH}"); refusing to target it.`,
+    );
+  }
+  return pid;
 }
 
 /**
@@ -566,6 +638,15 @@ async function main(): Promise<number> {
     return 0;
   }
 
+  // Ownership rule: SIGKILL is destructive and cannot distinguish sessions, so
+  // arming it requires an explicit target instead of the /proc discovery path.
+  if (flags.killAfter !== null && flags.pid == null) {
+    throw new Error(
+      "--kill-after arms SIGKILL and requires an explicit --pid <pid>; "
+      + "refusing to auto-target a discovered opencode process (it may belong to another session).",
+    );
+  }
+
   ensureWatchdogDir();
 
   // Log startup
@@ -582,7 +663,11 @@ async function main(): Promise<number> {
 
   try {
     while (true) {
-      const pid = findOpencodePidSync();
+      // Explicit --pid wins (and is re-validated each sweep); otherwise discovery
+      // refuses when more than one opencode host is alive.
+      const pid = flags.pid != null
+        ? resolveExplicitOpencodePid(flags.pid)
+        : findOpencodePidSync();
       if (pid !== null) {
         const stat = readProcStatSync(pid);
         if (stat !== null) {
