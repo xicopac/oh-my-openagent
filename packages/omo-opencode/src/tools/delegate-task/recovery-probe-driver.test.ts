@@ -1,6 +1,11 @@
 import { describe, test, expect } from "bun:test"
 import { createDelegationFirstRuntime } from "../../features/delegation-first/runtime"
-import { appendRecoveryProbeDirective, createDelegateTask, maybeVerifyRecoveryProbe } from "./tools"
+import {
+  appendRecoveryProbeDirective,
+  createDelegateTask,
+  maybeVerifyRecoveryProbe,
+  recordRecoveryProbeTerminalFailure,
+} from "./tools"
 import { executeBackgroundTask } from "./background-task"
 import type { GovernanceAuditWriter } from "../../shared/governance-audit"
 import type { LaunchInput } from "../../features/background-agent/types"
@@ -123,14 +128,14 @@ describe("recovery probe driver", () => {
     rt.preGruntCheck(sessionID, "task")
     const before = rt.recoverySnapshot(sessionID)
     const nonce = before.activeProbe!.nonce
-    const probeID = before.activeProbe!.probeID
     // when: helper sees result containing nonce
     const resultText = `worker completed successfully; nonce=${nonce}; deliverable at src/foo.ts:10`
     const verified = maybeVerifyRecoveryProbe(rt, sessionID, resultText)
     // then: helper returns true and runtime moves to verified
     expect(verified).toBe(true)
     expect(rt.recoverySnapshot(sessionID).phase).toBe("recovery_verified")
-    expect(rt.recoverySnapshot(sessionID).activeProbe?.probeID).toBe(probeID)
+    // verification clears the active probe latch
+    expect(rt.recoverySnapshot(sessionID).activeProbe).toBeNull()
 
     rt.dispose()
   })
@@ -148,6 +153,87 @@ describe("recovery probe driver", () => {
     const verified = maybeVerifyRecoveryProbe(rt, sessionID, "worker completed but no nonce here")
     // then: not verified, stays in recovery_mode
     expect(verified).toBe(false)
+    expect(rt.recoverySnapshot(sessionID).phase).toBe("recovery_mode")
+
+    rt.dispose()
+  })
+
+  test("helper records probe failures and reaches halt after the configured attempts", () => {
+    // given: recovery_mode with an active probe
+    const audit = fakeAudit()
+    const rt = createDelegationFirstRuntime(audit)
+    const sessionID = "ses-helper-probe-failure"
+    for (const ev of distinctFailures(sessionID)) {
+      rt.recordDelegationFailure(sessionID, ev)
+    }
+    rt.preGruntCheck(sessionID, "task")
+    const firstProbe = rt.recoverySnapshot(sessionID).activeProbe!
+    // when: the probe result is consumed without the nonce
+    const firstVerified = maybeVerifyRecoveryProbe(rt, sessionID, "probe finished but no token", {
+      probeResult: true,
+    })
+    // then: the failure is counted and a new probe may be started
+    expect(firstVerified).toBe(false)
+    expect(rt.recoverySnapshot(sessionID).phase).toBe("recovery_mode")
+    expect(rt.recoverySnapshot(sessionID).verificationAttempts).toBe(1)
+    expect(rt.recoverySnapshot(sessionID).activeProbe).toBeNull()
+    expect(rt.recoverySnapshot(sessionID).failureReason).toBe("probe_result_missing_nonce")
+
+    rt.preGruntCheck(sessionID, "task")
+    expect(rt.recoverySnapshot(sessionID).activeProbe).not.toBeNull()
+    expect(rt.recoverySnapshot(sessionID).activeProbe?.nonce).not.toBe(firstProbe.nonce)
+    // when: the second probe result is also missing the nonce
+    const secondVerified = maybeVerifyRecoveryProbe(rt, sessionID, "", { probeResult: true })
+    // then: the bounded attempt budget is exhausted and the state halts
+    expect(secondVerified).toBe(false)
+    expect(rt.recoverySnapshot(sessionID).verificationAttempts).toBe(2)
+    expect(rt.recoverySnapshot(sessionID).phase).toBe("halt")
+
+    rt.dispose()
+  })
+
+  test("helper ignores unrelated child results while a probe is active", () => {
+    // given: recovery_mode with an active probe
+    const audit = fakeAudit()
+    const rt = createDelegationFirstRuntime(audit)
+    const sessionID = "ses-helper-unrelated-result"
+    for (const ev of distinctFailures(sessionID)) {
+      rt.recordDelegationFailure(sessionID, ev)
+    }
+    rt.preGruntCheck(sessionID, "task")
+    const probeID = rt.recoverySnapshot(sessionID).activeProbe!.probeID
+    // when: an unrelated child result is consumed
+    const verified = maybeVerifyRecoveryProbe(rt, sessionID, "unrelated worker output")
+    // then: no probe failure is recorded and the probe stays active
+    expect(verified).toBe(false)
+    expect(rt.recoverySnapshot(sessionID).verificationAttempts).toBe(0)
+    expect(rt.recoverySnapshot(sessionID).activeProbe?.probeID).toBe(probeID)
+
+    rt.dispose()
+  })
+
+  test("terminal failure of the probe child is counted, completed is not", () => {
+    // given: recovery_mode with an active probe
+    const audit = fakeAudit()
+    const rt = createDelegationFirstRuntime(audit)
+    const sessionID = "ses-helper-probe-terminal-failure"
+    for (const ev of distinctFailures(sessionID)) {
+      rt.recordDelegationFailure(sessionID, ev)
+    }
+    rt.preGruntCheck(sessionID, "task")
+    // when: the probe child completes normally
+    const completed = recordRecoveryProbeTerminalFailure(rt, sessionID, "completed")
+    // then: completion is not a failure and the probe stays active
+    expect(completed).toBe(false)
+    expect(rt.recoverySnapshot(sessionID).verificationAttempts).toBe(0)
+    expect(rt.recoverySnapshot(sessionID).activeProbe).not.toBeNull()
+    // when: the probe child is cancelled before returning a result
+    const cancelled = recordRecoveryProbeTerminalFailure(rt, sessionID, "cancelled")
+    // then: the failure is counted and the probe latch is cleared
+    expect(cancelled).toBe(true)
+    expect(rt.recoverySnapshot(sessionID).verificationAttempts).toBe(1)
+    expect(rt.recoverySnapshot(sessionID).failureReason).toBe("probe_child_cancelled")
+    expect(rt.recoverySnapshot(sessionID).activeProbe).toBeNull()
     expect(rt.recoverySnapshot(sessionID).phase).toBe("recovery_mode")
 
     rt.dispose()
@@ -362,7 +448,6 @@ describe("recovery probe driver", () => {
     expect(snap.activeProbe).not.toBeNull()
     expect(snap.phase).toBe("recovery_mode")
     const nonce = snap.activeProbe!.nonce
-    const probeID = snap.activeProbe!.probeID
     // when: prompt is built with nonce directive and child echoes the token
     const promptWithNonce = appendRecoveryProbeDirective("do recovery probe work", nonce)
     expect(promptWithNonce).toContain(`RECOVERY_PROBE_ECHO:${nonce}`)
@@ -371,7 +456,7 @@ describe("recovery probe driver", () => {
     // then: verification succeeds and moves to recovery_verified
     expect(verified).toBe(true)
     expect(rt.recoverySnapshot(sessionID).phase).toBe("recovery_verified")
-    expect(rt.recoverySnapshot(sessionID).activeProbe?.probeID).toBe(probeID)
+    expect(rt.recoverySnapshot(sessionID).activeProbe).toBeNull()
     expect(rt.rootPhase(sessionID)).toBe("recovery_verified")
     rt.dispose()
   })

@@ -108,12 +108,13 @@ describe("createWatchdog", () => {
       onEvent: (_sessionID, event) => events.push(event),
     })
     wd.register("s1", "w1")
+    wd.markRequestStarted("s1")
     // when
-    wd.onActivity("s1")
+    wd.onActivity("s1", "progress")
     const first = wd.check("s1")
-    wd.onActivity("s1")
+    wd.onActivity("s1", "progress")
     const second = wd.check("s1")
-    wd.onActivity("s1")
+    wd.onActivity("s1", "progress")
     const third = wd.check("s1")
     // then
     expect(first.health).toBe("HEALTHY")
@@ -121,6 +122,7 @@ describe("createWatchdog", () => {
     expect(third.health).toBe("HEALTHY")
     expect(events).toEqual([
       "child_session_created",
+      "child_model_request_started",
       "child_first_provider_response",
       "watchdog_progress",
       "child_first_progress",
@@ -131,13 +133,89 @@ describe("createWatchdog", () => {
     // given
     const wd = createWatchdog()
     wd.register("s1", "w1")
-    wd.onActivity("s1")
+    wd.markRequestStarted("s1")
+    wd.onActivity("s1", "progress")
     // when
     const result = wd.check("s1")
     // then
     expect(result.health).toBe("HEALTHY")
     expect(result.reason).toBe("advanced")
     expect(result.advanced).toBe(true)
+  })
+
+  test("generic activity keeps the child at request_started instead of faking a provider response", () => {
+    // given
+    const events: WatchdogEventName[] = []
+    let now = 1_000_000
+    const wd = createWatchdog({}, {
+      now: () => now,
+      onEvent: (_sessionID, event) => events.push(event),
+    })
+    wd.register("s1", "w1")
+    wd.markRequestStarted("s1")
+    // when: startup/user echoes arrive with no provider output
+    wd.onActivity("s1")
+    wd.onActivity("s1")
+    const result = wd.check("s1")
+    // then: the child is still waiting for the provider, not reported responsive
+    expect(result.stage).toBe("request_started")
+    expect(result.stallMode).toBe("PROVIDER_RESPONSE_STALL")
+    expect(wd.snapshot("s1")?.firstResponseAtMs).toBe(0)
+    expect(events).not.toContain("child_first_provider_response")
+    expect(events).not.toContain("child_first_progress")
+  })
+
+  test("a genuine provider response advances first_response and later work becomes first_progress", () => {
+    // given
+    const events: WatchdogEventName[] = []
+    let now = 1_000_000
+    const wd = createWatchdog({}, {
+      now: () => now,
+      onEvent: (_sessionID, event) => events.push(event),
+    })
+    wd.register("s1", "w1")
+    wd.markRequestStarted("s1")
+    // when: assistant output arrives, then meaningful tool/text progress
+    wd.onActivity("s1", "provider_response")
+    now += 1
+    wd.onActivity("s1", "progress")
+    now += 1
+    wd.onActivity("s1", "progress")
+    // then
+    const snapshot = wd.snapshot("s1")
+    expect(snapshot?.stage).toBe("first_response")
+    expect(snapshot?.firstResponseAtMs).toBe(1_000_000)
+    expect(snapshot?.progressCounter).toBe(2)
+    expect(events.filter((event) => event === "child_first_provider_response")).toHaveLength(1)
+    expect(events.filter((event) => event === "child_first_progress")).toHaveLength(1)
+  })
+
+  test("watchdog_progress reports the previous check's counter, not the current one", () => {
+    // given: three children have the same progress but are swept through different entry points
+    const details: Array<Record<string, unknown>> = []
+    const now = 1_000_000
+    const wd = createWatchdog({}, {
+      now: () => now,
+      onEvent: (_sessionID, event, detail) => {
+        if (event === "watchdog_progress") details.push(detail ?? {})
+      },
+    })
+    for (const sessionID of ["s1", "s2", "s3"]) {
+      wd.register(sessionID, sessionID)
+      wd.markRequestStarted(sessionID)
+      wd.onActivity(sessionID, "provider_response")
+      wd.onActivity(sessionID, "progress")
+      wd.onActivity(sessionID, "progress")
+    }
+    // when: the periodic sweep and the single-session check both emit a heartbeat
+    wd.checkAll()
+    wd.check("s3")
+    // then
+    expect(details).toHaveLength(3)
+    for (const detail of details) {
+      expect(detail.progress_counter).toBe(2)
+      expect(detail.previous_progress_counter).toBe(0)
+    }
   })
 
   test("emits milestone + stall + recovery events across a stall and recovery", () => {
@@ -149,16 +227,18 @@ describe("createWatchdog", () => {
       onEvent: (_sessionID, event) => events.push(event),
     })
     wd.register("s1", "w1")
-    wd.onActivity("s1")
+    wd.markRequestStarted("s1")
+    wd.onActivity("s1", "progress")
     wd.check("s1")
     // when: time passes with no activity
     now += 200_000
     wd.check("s1")
     // then: activity resumes
-    wd.onActivity("s1")
+    wd.onActivity("s1", "progress")
     wd.check("s1")
     expect(events).toEqual([
       "child_session_created",
+      "child_model_request_started",
       "child_first_provider_response",
       "watchdog_progress",
       "watchdog_stall_suspected",
@@ -176,8 +256,9 @@ describe("createWatchdog", () => {
       onEvent: (_sessionID, event) => events.push(event),
     })
     wd.register("s1", "w1")
-    wd.onActivity("s1")
-    wd.onActivity("s1")
+    wd.markRequestStarted("s1")
+    wd.onActivity("s1", "progress")
+    wd.onActivity("s1", "progress")
     wd.check("s1")
     const before = wd.snapshot("s1")
     const createdBefore = events.filter((e) => e === "child_session_created").length

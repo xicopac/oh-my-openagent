@@ -178,6 +178,29 @@ describe("decideHeavyCommandRouting", () => {
     expect(timeoutSec).toBe(60)
   })
 
+  test("an ownership binding passes the six-hex unit suffix to ai-job --name", () => {
+    // given
+    const unitName = "ai-build-ab12cd.service"
+    const commandPrefix = "export OMO_TASK_OWNER='marker'; "
+
+    // when
+    const result = buildAiJobCommand("build", "bun run build", 60, {
+      ownership: { unitName, commandPrefix },
+    })
+
+    // then
+    expect(result).toContain("--name ab12cd --")
+    expect(result).not.toContain("--name ai-build")
+    expect(result).toContain("OMO_TASK_OWNER")
+    expect(result).toContain("bun run build")
+  })
+
+  test("an invalid ownership unit name is rejected before execution", () => {
+    expect(() => buildAiJobCommand("build", "bun run build", 60, {
+      ownership: { unitName: "ai-build-nothex.service", commandPrefix: "" },
+    })).toThrow("invalid ai-job unit name")
+  })
+
   test("buildAiJobCommand includes the diagnostic and requested binary", () => {
     // given
     const command = "bun run build"

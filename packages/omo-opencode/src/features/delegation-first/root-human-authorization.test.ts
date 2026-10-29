@@ -211,12 +211,14 @@ describe("human explicit authorization", () => {
       r.rt.markRecoveryHalted(halted)
       expect(r.rt.rootPhase(halted)).toBe("halt")
       grantPathAuth(r.rt, halted, "/tmp/project/.omo/handoffs")
-      const decision = r.rt.preGruntCheck(halted, "read", {
+      const diagnostic = r.rt.preGruntCheck(halted, "read", {
         target: "/tmp/project/.omo/handoffs/file.md",
         humanAuthorization: { scope: "/tmp/project/.omo/handoffs/file.md", reason: "human" },
       } as unknown as Record<string, unknown> as never)
-      expect(decision.block).toBe(true)
-      expect(decision.reason).toBe("delegation_recovery_halted")
+      expect(diagnostic.block).toBe(false)
+      const dispatch = r.rt.preGruntCheck(halted, "task", { target: "delegate" })
+      expect(dispatch.block).toBe(true)
+      expect(dispatch.reason).toBe("delegation_recovery_halted")
     } finally {
       cleanup(r)
     }

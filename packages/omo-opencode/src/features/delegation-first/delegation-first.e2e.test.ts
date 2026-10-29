@@ -94,7 +94,7 @@ describe("delegation-first mocked E2E (deterministic, no paid call)", () => {
       rt.attachChildSession(parent, workerSession)
 
       // the watchdog polls progress counters only (no output, no transcript).
-      rt.watchdogActivity(workerSession)
+      rt.watchdogActivity(workerSession, "progress")
       expect(rt.checkWatchdog(workerSession, 10_000).health).toBe("HEALTHY")
 
       // the first result is incomplete -> refine the assignment, not root takeover, not paid.
@@ -187,7 +187,7 @@ describe("delegation-first mocked E2E (deterministic, no paid call)", () => {
       rt.attachChildSession("parent", "child-a")
       rt.attachChildSession("parent", "child-b")
 
-      rt.watchdogActivity("child-a")
+      rt.watchdogActivity("child-a", "progress")
 
       const results = rt.checkAllWatchdogs(10_000)
       expect(results.length).toBe(2)

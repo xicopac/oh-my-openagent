@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test"
 
 import type { PricingCatalog } from "../../hooks/resource-governor/pricing"
-import { buildDelegationWorkerCandidates } from "./free-worker-candidates"
+import { buildDelegationWorkerCandidates, reselectFreeWorker } from "./free-worker-candidates"
 
 function catalog(entries: Record<string, { input: number; output: number }>): PricingCatalog {
   return Object.fromEntries(
@@ -123,5 +123,157 @@ describe("buildDelegationWorkerCandidates", () => {
       expect(candidates.some((candidate) => candidate.model_id === "provider/cheap")).toBe(true)
       expect(candidates.some((candidate) => candidate.model_id === "provider/main-paid")).toBe(true)
     })
+  })
+})
+
+describe("reselectFreeWorker", () => {
+  const pricing = catalog({
+    "provider/free-a": { input: 0, output: 0 },
+    "provider/free-b": { input: 0, output: 0 },
+    "provider/cheap": { input: 0.8, output: 2 },
+    "provider/paid": { input: 4, output: 16 },
+  })
+
+  test("#given a paid resolved model and available $0 candidates #when reselectFreeWorker runs #then it selects an available $0 candidate", () => {
+    // given
+    const available = new Set(["provider/free-a", "provider/free-b", "provider/paid"])
+
+    // when
+    const result = reselectFreeWorker({
+      pricing,
+      available,
+      resolvedModelID: "provider/paid",
+    })
+
+    // then
+    expect(result.reselected).toBe(true)
+    expect(result.modelID).toBe("provider/free-a")
+    expect(result.candidates.every((candidate) => candidate.free)).toBe(true)
+    expect(result.freeCandidatesExhausted).toBe(false)
+  })
+
+  test("#given the resolved model is already an available $0 candidate #when reselectFreeWorker runs #then it keeps the resolved model", () => {
+    // given
+    const available = new Set(["provider/paid", "provider/free-a", "provider/free-b"])
+
+    // when
+    const result = reselectFreeWorker({
+      pricing,
+      available,
+      resolvedModelID: "provider/free-b",
+    })
+
+    // then
+    expect(result.reselected).toBe(false)
+    expect(result.modelID).toBe("provider/free-b")
+    expect(result.freeCandidatesExhausted).toBe(false)
+  })
+
+  test("#given the resolved $0 model is unavailable #when reselectFreeWorker runs #then it selects another available $0 candidate", () => {
+    // given
+    const available = new Set(["provider/free-b", "provider/paid"])
+
+    // when
+    const result = reselectFreeWorker({
+      pricing,
+      available,
+      resolvedModelID: "provider/free-a",
+    })
+
+    // then
+    expect(result.reselected).toBe(true)
+    expect(result.modelID).toBe("provider/free-b")
+  })
+
+  test("#given no $0 candidate is available #when reselectFreeWorker runs #then it keeps the resolved model and reports exhaustion", () => {
+    // given
+    const available = new Set(["provider/cheap", "provider/paid"])
+
+    // when
+    const result = reselectFreeWorker({
+      pricing,
+      available,
+      resolvedModelID: "provider/paid",
+    })
+
+    // then
+    expect(result.reselected).toBe(false)
+    expect(result.modelID).toBe("provider/paid")
+    expect(result.freeCandidatesExhausted).toBe(true)
+  })
+
+  test("#given an empty live model pool #when reselectFreeWorker runs #then it does not claim free exhaustion", () => {
+    // given
+    const available = new Set<string>()
+
+    // when
+    const result = reselectFreeWorker({
+      pricing,
+      available,
+      resolvedModelID: "provider/paid",
+    })
+
+    // then
+    expect(result.reselected).toBe(false)
+    expect(result.modelID).toBe("provider/paid")
+    expect(result.freeCandidatesExhausted).toBe(false)
+  })
+
+  test("#given an explicit caller model pin #when reselectFreeWorker runs #then it never replaces the resolved model", () => {
+    // given
+    const available = new Set(["provider/free-a", "provider/paid"])
+
+    // when
+    const result = reselectFreeWorker({
+      pricing,
+      available,
+      resolvedModelID: "provider/paid",
+      pinned: true,
+    })
+
+    // then
+    expect(result.reselected).toBe(false)
+    expect(result.modelID).toBe("provider/paid")
+    expect(result.freeCandidatesExhausted).toBe(false)
+  })
+
+  test("#given a required capability no $0 candidate meets #when reselectFreeWorker runs #then it keeps the resolved model and reports exhaustion", () => {
+    // given
+    const available = new Set(["provider/free-a", "provider/free-b", "provider/paid"])
+    const modelInfo = new Map([
+      ["provider/free-a", { capabilities: { vision: false, tool_call: true, reasoning: "low", context_window: 128000 } }],
+      ["provider/free-b", { capabilities: { vision: false, tool_call: true, reasoning: "low", context_window: 128000 } }],
+      ["provider/paid", { capabilities: { vision: true, tool_call: true, reasoning: "high", context_window: 200000 } }],
+    ])
+
+    // when
+    const result = reselectFreeWorker({
+      pricing,
+      available,
+      resolvedModelID: "provider/paid",
+      modelInfo,
+      required: { vision: true },
+    })
+
+    // then
+    expect(result.reselected).toBe(false)
+    expect(result.modelID).toBe("provider/paid")
+    expect(result.freeCandidatesExhausted).toBe(true)
+  })
+
+  test("#given resolved model is free but not in the available pool #when reselectFreeWorker runs #then it selects an available $0 candidate", () => {
+    // given
+    const available = new Set(["provider/free-b", "provider/paid"])
+
+    // when
+    const result = reselectFreeWorker({
+      pricing,
+      available,
+      resolvedModelID: "provider/free-a",
+    })
+
+    // then
+    expect(result.reselected).toBe(true)
+    expect(result.modelID).toBe("provider/free-b")
   })
 })

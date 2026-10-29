@@ -126,7 +126,7 @@ describe("watchdog-controlled delegation recovery state", () => {
     expect(state.recoverySnapshot("root")).toMatchObject({ verified: true, phase: "recovery_verified" })
   })
 
-  test("handoff and halt remain genuine terminal blocks", () => {
+  test("handoff and halt block dispatch but permit read-only diagnostics", () => {
     const state = createRootWorkerState({ recoveryEvidenceThreshold: 1 })
     state.recordDelegationFailure("root", failure("bg-1"))
     state.beginRecoveryProbe("root", "probe-1", "nonce-1")
@@ -142,6 +142,12 @@ describe("watchdog-controlled delegation recovery state", () => {
     state.markRecoveryHalted("root")
     expect(state.phase("root")).toBe("halt")
     expect(state.decide("root", "read", { target: "src/app.ts" })).toMatchObject({
+      block: false,
+    })
+    expect(state.decide("root", "background_output", {})).toMatchObject({
+      block: false,
+    })
+    expect(state.decide("root", "task", { target: "delegate" })).toMatchObject({
       block: true,
       reason: "delegation_recovery_halted",
     })

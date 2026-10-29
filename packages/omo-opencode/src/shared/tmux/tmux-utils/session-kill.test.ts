@@ -64,8 +64,8 @@ describe("killTmuxSessionIfExists", () => {
 		// then
 		expect(result).toBe(true)
 		expect(runTmuxCommandMock.mock.calls).toEqual([
-			["tmux", ["has-session", "-t", "omo-agents"]],
-			["tmux", ["kill-session", "-t", "omo-agents"]],
+			["tmux", ["has-session", "-t", "=omo-agents"]],
+			["tmux", ["kill-session", "-t", "=omo-agents"]],
 		])
 	})
 
@@ -79,7 +79,7 @@ describe("killTmuxSessionIfExists", () => {
 
 		// then
 		expect(result).toBe(false)
-		expect(runTmuxCommandMock.mock.calls).toEqual([["tmux", ["has-session", "-t", "omo-agents"]]])
+		expect(runTmuxCommandMock.mock.calls).toEqual([["tmux", ["has-session", "-t", "=omo-agents"]]])
 	})
 
 	it("#given not inside tmux #when killTmuxSessionIfExists called #then returns false without runner calls", async () => {

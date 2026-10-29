@@ -190,8 +190,8 @@ describe("delegation-first child liveness", () => {
     rt.recordModelUnavailable("child1", "a/free-a", "Model is disabled")
     expect(rt.unavailableModels()).toContain("a/free-a")
     // when: the child shows activity twice
-    rt.watchdogActivity("child1")
-    rt.watchdogActivity("child1")
+    rt.watchdogActivity("child1", "progress")
+    rt.watchdogActivity("child1", "progress")
     // then: the quarantine is cleared and recovery audited exactly once
     expect(rt.unavailableModels()).not.toContain("a/free-a")
     const recovered = events.filter((e) => String(e.fields.event) === "worker_model_recovered")

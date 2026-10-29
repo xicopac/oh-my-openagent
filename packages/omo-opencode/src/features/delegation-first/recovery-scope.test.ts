@@ -51,7 +51,7 @@ describe("delegation recovery scope", () => {
   test("does not permit broad process mutation without an orchestration identity", () => {
     expect(evaluateRecoveryScope("bash", { command: "kill -9 1234" }).allowed).toBe(false)
     expect(evaluateRecoveryScope("bash", { command: "pkill -9 node" }).allowed).toBe(false)
-    expect(evaluateRecoveryScope("bash", { command: "pkill -TERM -f oh-my-opencode" }).allowed).toBe(true)
+    expect(evaluateRecoveryScope("bash", { command: "pkill -TERM -f oh-my-opencode" }).allowed).toBe(false)
   })
 
   test("allows bare recovery-scope directories without a trailing slash", () => {

@@ -328,7 +328,7 @@ function stubNotifyParentSession(manager: BackgroundManager): void {
 }
 
 async function flushBackgroundNotifications(): Promise<void> {
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 48; i++) {
     await Promise.resolve()
   }
 }
@@ -1874,6 +1874,50 @@ interface CurrentMessage {
   agent?: string
   model?: { providerID?: string; modelID?: string }
 }
+
+describe("LaunchInput.recoveryProbe", () => {
+  test("persists recoveryProbe on the launched task", async () => {
+    // given
+    const client = {
+      session: {
+        get: async () => ({ data: { directory: tmpdir() } }),
+        create: async () => ({ data: { id: "ses_recovery_probe" } }),
+        promptAsync: async () => ({}),
+        abort: async () => ({}),
+      },
+    }
+    const manager = new BackgroundManager({ pluginContext: createPluginInput(client) })
+    stubNotifyParentSession(manager)
+    ;(cast<{
+      reserveSubagentSpawn: () => Promise<{
+        spawnContext: { rootSessionID: string; parentDepth: number; childDepth: number }
+        descendantCount: number
+        commit: () => number
+        rollback: () => void
+      }>
+    }>(manager)).reserveSubagentSpawn = async () => ({
+      spawnContext: { rootSessionID: "parent-session", parentDepth: 0, childDepth: 1 },
+      descendantCount: 1,
+      commit: () => 1,
+      rollback: () => {},
+    })
+
+    // when
+    const task = await manager.launch({
+      description: "recovery probe",
+      prompt: "probe the delegation lane",
+      agent: "explore",
+      parentSessionId: "parent-session",
+      parentMessageId: "parent-message",
+      recoveryProbe: true,
+    })
+
+    // then
+    expect(task.recoveryProbe).toBe(true)
+    expect(getTaskMap(manager).get(task.id)?.recoveryProbe).toBe(true)
+    await manager.shutdown()
+  })
+})
 
 describe("BackgroundManager.notifyParentSession - dynamic message lookup", () => {
   test("should skip compaction agent and use nearest non-compaction message", async () => {
@@ -5834,9 +5878,9 @@ describe("BackgroundManager.handleEvent - session.deleted cascade", () => {
     expect(taskMap.has(siblingTask.id)).toBe(true)
     expect(taskMap.has(grandchildTask.id)).toBe(true)
     expect(taskMap.has(unrelatedTask.id)).toBe(true)
-    expect(childTask.status).toBe("cancelled")
-    expect(siblingTask.status).toBe("cancelled")
-    expect(grandchildTask.status).toBe("cancelled")
+    expect(childTask.status).toBe("blocked")
+    expect(siblingTask.status).toBe("blocked")
+    expect(grandchildTask.status).toBe("blocked")
     expect(pendingByParent.get(parentSessionID)).toBeUndefined()
     expect(pendingByParent.get("session-child")).toBeUndefined()
     expect(getCompletionTimers(manager).has(childTask.id)).toBe(true)
@@ -7628,6 +7672,8 @@ describe("BackgroundManager.handleEvent - early session.idle deferral", () => {
 
       await tryCompleteTaskForTest(manager, task)
       expect(task.status).toBe("completed")
+      const terminalCaptureCalls = messagesCallCount
+      expect(terminalCaptureCalls).toBe(1)
 
       // Advance time so deferred callback (if any) sees elapsed >= MIN_IDLE_TIME_MS
       Date.now = () => baseNow + (MIN_IDLE_TIME_MS + 10)
@@ -7635,7 +7681,7 @@ describe("BackgroundManager.handleEvent - early session.idle deferral", () => {
       //#then - deferred callback should be a no-op
       await new Promise((resolve) => setTimeout(resolve, remainingMs + 80))
       expect(task.status).toBe("completed")
-      expect(messagesCallCount).toBe(0)
+      expect(messagesCallCount).toBe(terminalCaptureCalls)
     } finally {
       Date.now = realDateNow
       manager.shutdown()
@@ -7939,10 +7985,10 @@ describe("BackgroundManager.handleEvent - non-tool event lastUpdate", () => {
     //#when - session.idle fires after output event was already observed
     manager.handleEvent({ type: "session.idle", properties: { sessionID } })
 
-    //#then - task completes without refetching session.messages
+    //#then - task completes with one terminal-result capture and no idle-path refetch
     await waitUntil(() => task.status === "completed", 600)
     expect(task.status).toBe("completed")
-    expect(messagesCallCount).toBe(0)
+    expect(messagesCallCount).toBe(1)
     expect(todoCallCount).toBe(1)
 
     manager.shutdown()

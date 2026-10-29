@@ -63,8 +63,8 @@ describe("killTmuxSessionIfExists runner integration", () => {
 		// then
 		expect(result).toBe(true)
 		expect(runTmuxCommandMock.mock.calls).toEqual([
-			["sh", ["has-session", "-t", "omo-agents"]],
-			["sh", ["kill-session", "-t", "omo-agents"]],
+			["sh", ["has-session", "-t", "=omo-agents"]],
+			["sh", ["kill-session", "-t", "=omo-agents"]],
 		])
 	})
 

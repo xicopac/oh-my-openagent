@@ -98,6 +98,38 @@ describe("root latch clear", () => {
   })
 })
 
+describe("watchdog telemetry attribution", () => {
+  test("a child milestone names the child as worker and the root as parent", () => {
+    // given: a root with one attached child and a captured governance journal
+    const { writer, events } = captureAudit()
+    const rt = makeRuntime(writer)
+    rt.attachChildSession("root", "child1")
+    rt.markRequestStarted("child1")
+
+    // when: the provider responds and the child produces meaningful progress
+    rt.watchdogActivity("child1", "provider_response")
+    rt.watchdogActivity("child1", "progress")
+    rt.watchdogActivity("child1", "progress")
+    const checked = rt.checkWatchdog("child1", Date.now() + 1)
+
+    // then: every milestone is filed under the child session and identifies the
+    // child as the worker, never the root (the root is the parent session)
+    expect(checked.health).toBe("HEALTHY")
+    const milestones = [
+      eventNames(events, "child_session_created")[0],
+      eventNames(events, "child_first_provider_response")[0],
+      eventNames(events, "child_first_progress")[0],
+      eventNames(events, "watchdog_progress")[0],
+    ]
+    for (const milestone of milestones) {
+      expect(milestone?.sessionID).toBe("child1")
+      expect(milestone?.fields.worker_id).toBe("child1")
+      expect(milestone?.fields.parent_session_id).toBe("root")
+    }
+    rt.dispose()
+  })
+})
+
 describe("terminal notification + single-cancel coordination", () => {
   test("terminal BLOCKED is surfaced to the parent exactly once (no repeated wakes)", () => {
     const { writer, events } = captureAudit()

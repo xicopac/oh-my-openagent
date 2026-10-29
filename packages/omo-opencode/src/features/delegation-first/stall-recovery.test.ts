@@ -30,8 +30,8 @@ describe("delegation-first child stall lifecycle and recovery", () => {
     rt.beginDelegation("job1", "parent", "prompt", DUMMY_WORKERS)
     rt.attachChildSession("parent", "child1")
     rt.markRequestStarted("child1")
-    rt.watchdogActivity("child1")
-    rt.watchdogActivity("child1")
+    rt.watchdogActivity("child1", "progress")
+    rt.watchdogActivity("child1", "progress")
     rt.watchdogTerminal("child1")
     // then
     const names = eventNames(events, "child1")
@@ -112,7 +112,7 @@ describe("delegation-first child stall lifecycle and recovery", () => {
     rt.beginDelegation("job1", "parent", "SECRET PROMPT", DUMMY_WORKERS)
     rt.attachChildSession("parent", "child1")
     rt.markRequestStarted("child1")
-    rt.watchdogActivity("child1")
+    rt.watchdogActivity("child1", "progress")
     // when
     const serialized = JSON.stringify(events)
     // then
@@ -148,7 +148,7 @@ describe("delegation-first child stall lifecycle and recovery", () => {
     const t0 = Date.now()
     rt.attachChildSession("parent", "child1")
     rt.markRequestStarted("child1")
-    rt.watchdogActivity("child1")
+    rt.watchdogActivity("child1", "progress")
     rt.watchdogTerminal("child1")
 
     // when: a sweep runs hours after completion

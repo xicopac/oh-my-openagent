@@ -139,6 +139,32 @@ describe("BackgroundManager.cancelTask cleanup", () => {
     expect(getPendingByParent(manager).get(task.parentSessionId)).toEqual(new Set([task.id]))
   })
 
+  test("#given a running task whose session is already missing #when cancelTask runs #then the task is finalized truthfully", async () => {
+    // given
+    const manager = createBackgroundManager(undefined, async () => ({ error: { status: 404, message: "not found" } }))
+    const client = Reflect.get(manager, "client") as PluginInput["client"]
+    Reflect.set(client.session, "get", async () => ({ error: { status: 404, message: "not found" } }))
+    const task = createMockTask({
+      id: "task-session-missing",
+      parentSessionId: "parent-session-missing",
+      sessionId: "session-missing",
+    })
+    getTaskMap(manager).set(task.id, task)
+    getPendingByParent(manager).set(task.parentSessionId, new Set([task.id]))
+
+    // when
+    const cancelled = await manager.cancelTask(task.id, {
+      skipNotification: true,
+      source: "test",
+    })
+
+    // then
+    expect(cancelled).toBe(true)
+    expect(task.status).toBe("cancelled")
+    expect(task.completedAt).toBeInstanceOf(Date)
+    expect(getCompletionTimers(manager).has(task.id)).toBe(true)
+  })
+
   test("#given a running task #when cancelTask called with skipNotification=false #then task is also eventually removed", async () => {
     // given
     const manager = createBackgroundManager()

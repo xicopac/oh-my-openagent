@@ -186,10 +186,10 @@ describe("queued resume review regressions", () => {
     internals.concurrencyManager.release("explore")
     await settleAdmission()
     // then
-    expect(task.status).toBe("cancelled")
+    expect(task.status).toBe("blocked")
     expect(promptAsync).not.toHaveBeenCalled()
     expect(internals.pendingByParent.has("new-parent")).toBe(false)
-    expect(manager.taskHistory.getByParentSession("new-parent").map(entry => entry.status)).toEqual(["cancelled"])
+    expect(manager.taskHistory.getByParentSession("new-parent").map(entry => entry.status)).toEqual(["blocked"])
     expect(readContinuationMarker(directory, "new-parent")?.sources["background-task"]?.state).toBe("idle")
   })
 

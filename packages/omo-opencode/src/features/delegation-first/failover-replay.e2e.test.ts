@@ -196,7 +196,7 @@ describe("automatic child failover real-path E2E (deterministic, no paid call)",
     const replacementSession = gov.launches[0].sessionID
     rt.noteReplacementSession("jobA", replacementSession)
     rt.attachChildSession("root", replacementSession)
-    rt.watchdogActivity(replacementSession)
+    rt.watchdogActivity(replacementSession, "progress")
     rt.watchdogTerminal(replacementSession)
     rt.detachChildSession(replacementSession)
 
