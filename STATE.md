@@ -1,7 +1,7 @@
 # OMO Stabilization State
 
 Last updated: 2026-10-30 Europe/Madrid
-Status: Milestone 1 and Slice A implementation/QA committed; PR delivery remains; no production changes.
+Status: Milestone 1 and Slice A implementation/QA committed and pushed; PR base reconciliation is blocked; no production changes.
 
 ## Repository state
 
@@ -11,6 +11,7 @@ Status: Milestone 1 and Slice A implementation/QA committed; PR delivery remains
 - Existing guard candidate: `/srv/dev/omo-guard-consistency-rc` at `af1b246ee`; preserved and not edited.
 - Existing evidence and historical worktrees: preserved; none deleted.
 - Goal registered: stabilize OMO through architecture, core reliability, real runtime proof, and reproducible release safeguards; stop before deployment.
+- Remote task branch: `origin/fix/stabilize-omo-core`; tracks this checkpoint branch and was pushed without changing `origin/dev` or the production checkout.
 
 ## Confirmed findings
 
@@ -55,14 +56,13 @@ After the leading-traversal fix, the candidate bundle was rebuilt at SHA-256 `04
 
 ## Next checkpoint
 
-1. Confirm the five-commit branch is clean and the evidence tree remains ignored.
-2. Resolve the fork/canonical base relationship, then push a task branch and open a reviewer-readable PR without altering production.
-3. Resolve CI/review findings with fresh scoped QA if any behavior changes.
-4. Reconcile the canonical release merge target without updating the production checkout, then continue to Slice B.
+1. Obtain the human merge-base choice: either review/synchronize the 6,429 commits from local `dev` into fork `dev` first, or authorize a temporary stacked PR against a pushed `release/canonical-20261029` branch.
+2. Open the resulting reviewer-readable PR and resolve CI/review findings with fresh scoped QA if any behavior changes.
+3. Merge with a merge commit without updating the production checkout, then continue to Slice B.
 
 ## Honest remaining gaps
 
 - Slice A does not address worker result durability, restart replay, competing watchdog ownership, or unified dispatch authorization; those remain explicitly incomplete.
 - No PR exists for this work.
-- The remote fork's `dev` branch is far behind the local canonical history. PR base/merge handling must preserve the canonical line without modifying the production checkout; this requires explicit reconciliation before push/merge.
+- The fork task branch is safely pushed, but no PR exists. `origin/dev` is an ancestor of local `dev`, with no divergence, and is 6,429 commits behind it; canonical is then two commits ahead of local `dev`, and this slice adds five more. A direct PR to `dev` would contain 6,436 commits and is not reviewer-readable. Advancing or synchronizing the fork's default branch at that scale is a material repository action and requires human direction.
 - Milestones 2–4 remain incomplete.

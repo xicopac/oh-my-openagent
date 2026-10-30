@@ -40,9 +40,10 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 - [x] Write reviewer-readable evidence summary and SHA-256 lines under `.omo/evidence/20261030-stabilize-guard/`.
 - [x] Update `PLAN.md`, `STATE.md`, and `TODO.md` with observed behavior and remaining risks.
 - [x] Commit documentation/plan, tests, and implementation in five atomic commits according to repository commit-count policy.
-- [ ] Push a branch and open a reviewer-readable PR without altering production.
+- [x] Push `fix/stabilize-omo-core` to the fork without altering production.
+- [!] Open a reviewer-readable PR: blocked on fork-history reconciliation because `origin/dev` is 6,429 commits behind the local production `dev`, and a direct PR would misleadingly contain 6,436 commits.
 - [ ] Resolve CI and review findings with fresh QA for behavior-changing fixes.
-- [ ] Reconcile the required merge target with the canonical release line without updating the production checkout; do not deploy.
+- [!] Reconcile the required merge target with the canonical release line without updating the production checkout; requires a human choice between first reviewing the 6,429-commit fork sync or allowing a temporary stacked PR against `release/canonical-20261029`. Do not deploy.
 
 ## Slice B — durable terminal result/outbox
 
