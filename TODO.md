@@ -41,9 +41,13 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 - [x] Update `PLAN.md`, `STATE.md`, and `TODO.md` with observed behavior and remaining risks.
 - [x] Commit documentation/plan, tests, and implementation in five atomic commits according to repository commit-count policy.
 - [x] Push `fix/stabilize-omo-core` to the fork without altering production.
-- [!] Open a reviewer-readable PR: blocked on fork-history reconciliation because `origin/dev` is 6,429 commits behind the local production `dev`, and a direct PR would misleadingly contain 6,436 commits.
+- [>] Push the canonical base and open a reviewer-readable stacked PR against `release/canonical-20261029`; first prove the merge base is exactly `4d1961c7e` and the diff contains only Slice A stabilization files.
 - [ ] Resolve CI and review findings with fresh QA for behavior-changing fixes.
-- [!] Reconcile the required merge target with the canonical release line without updating the production checkout; requires a human choice between first reviewing the 6,429-commit fork sync or allowing a temporary stacked PR against `release/canonical-20261029`. Do not deploy.
+- [>] Merge the stacked PR into `release/canonical-20261029` with a merge commit after its active gates pass. Do not update `dev` or deploy.
+
+## Separate housekeeping — fork Git history
+
+- [ ] Reconcile the fork's `dev` history in a dedicated future task. `origin/dev` is 6,429 commits behind local production `dev`; do not force-push, rewrite, synchronize, or mutate the production checkout as part of stabilization.
 
 ## Slice B — durable terminal result/outbox
 

@@ -171,6 +171,10 @@ Verification:
 - Evidence stays untracked. PR bodies include sanitized decisive excerpts and SHA-256 lines.
 - Each slice is the smallest independently reviewable PR. Production deployment is explicitly out of scope.
 
+## Separate housekeeping task
+
+The fork's remote `dev` is an ancestor of the local production `dev` but is 6,429 commits behind it. This divergence is not part of worker stabilization and must not be repaired implicitly by a feature PR, force-push, production checkout mutation, or history rewrite. Track fork-history reconciliation separately, with its own review and explicit human authorization. Stabilization PRs may stack on the pushed `release/canonical-20261029` base after proving their merge base and diff contain only the intended slice.
+
 ## Milestone exit criteria
 
 Milestone 1 exits when the architecture document, source trace, demonstrated root causes, and ordered PR slices are durable and reviewed.

@@ -1,7 +1,7 @@
 # OMO Stabilization State
 
 Last updated: 2026-10-30 Europe/Madrid
-Status: Milestone 1 and Slice A implementation/QA committed and pushed; PR base reconciliation is blocked; no production changes.
+Status: Milestone 1 and Slice A implementation/QA committed and pushed; stacked canonical-base PR authorized and pending; no production changes.
 
 ## Repository state
 
@@ -56,13 +56,13 @@ After the leading-traversal fix, the candidate bundle was rebuilt at SHA-256 `04
 
 ## Next checkpoint
 
-1. Obtain the human merge-base choice: either review/synchronize the 6,429 commits from local `dev` into fork `dev` first, or authorize a temporary stacked PR against a pushed `release/canonical-20261029` branch.
-2. Open the resulting reviewer-readable PR and resolve CI/review findings with fresh scoped QA if any behavior changes.
-3. Merge with a merge commit without updating the production checkout, then continue to Slice B.
+1. Push `release/canonical-20261029` without rewriting any existing ref, prove the stacked merge base is `4d1961c7e`, and verify the diff contains only Slice A files.
+2. Open the stacked PR and resolve CI/review findings with fresh scoped QA if any behavior changes.
+3. Merge with a merge commit into the canonical release branch without updating `dev` or the production checkout, then continue to Slice B.
 
 ## Honest remaining gaps
 
 - Slice A does not address worker result durability, restart replay, competing watchdog ownership, or unified dispatch authorization; those remain explicitly incomplete.
 - No PR exists for this work.
-- The fork task branch is safely pushed, but no PR exists. `origin/dev` is an ancestor of local `dev`, with no divergence, and is 6,429 commits behind it; canonical is then two commits ahead of local `dev`, and this slice adds five more. A direct PR to `dev` would contain 6,436 commits and is not reviewer-readable. Advancing or synchronizing the fork's default branch at that scale is a material repository action and requires human direction.
+- The fork task branch is safely pushed, but no PR exists yet. `origin/dev` is an ancestor of local `dev`, with no divergence, and is 6,429 commits behind it. This is now a separate housekeeping task. The user authorized a stacked PR against `release/canonical-20261029` only after exact merge-base and diff verification; `dev` and production history must remain untouched.
 - Milestones 2–4 remain incomplete.
