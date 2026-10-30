@@ -52,6 +52,8 @@ describe("classifyOperation boundary classes", () => {
     expect(classifyOperation("mcp_foo", {})).toBe("broad")
     expect(classifyOperation("mcp_task", {})).toBe("delegation")
     expect(classifyOperation("mcp__task", {})).toBe("delegation")
+    expect(classifyOperation("mcp_background_output", {})).toBe("control")
+    expect(classifyOperation("mcp_apply_patch", {})).toBe("implementation")
   })
 
   test("session_list/session_info/look_at remain non-blocking control tools", () => {

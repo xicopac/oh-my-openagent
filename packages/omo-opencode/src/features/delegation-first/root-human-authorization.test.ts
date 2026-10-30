@@ -234,7 +234,9 @@ describe("human explicit authorization", () => {
       r.rt.preGruntCheck(sid, "read", { target: "b.ts" })
       r.rt.preGruntCheck(sid, "read", { target: "c.ts" })
       r.rt.preGruntCheck(sid, "read", { target: "d.ts" })
-      const blocked = r.rt.preGruntCheck(sid, "read", { target: "e.ts" })
+      const boundedDiagnostic = r.rt.preGruntCheck(sid, "read", { target: "e.ts" })
+      expect(boundedDiagnostic.block).toBe(false)
+      const blocked = r.rt.preGruntCheck(sid, "read", { target: "f.ts" })
       expect(blocked.block).toBe(true)
       grantPathAuth(r.rt, sid, "/tmp/specific")
       const humanDecision = r.rt.preGruntCheck(sid, "read", {

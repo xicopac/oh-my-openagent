@@ -7,6 +7,7 @@
 
 import {
   classifyOperation,
+  classifyShellCommand,
   moduleRoot,
   type GruntSignal,
   type GruntToolHint,
@@ -82,6 +83,7 @@ export type DelegationFailureTransition = {
 export type RootWorkerStateConfig = {
   bootstrapNarrowBudget: number
   bootstrapImplementationBudget: number
+  workerRequiredDiagnosticBudget: number
   recoveryEvidenceThreshold: number
   maxRecoveryVerificationAttempts: number
 }
@@ -89,6 +91,7 @@ export type RootWorkerStateConfig = {
 export const DEFAULT_ROOT_WORKER_STATE_CONFIG: RootWorkerStateConfig = {
   bootstrapNarrowBudget: 3,
   bootstrapImplementationBudget: 1,
+  workerRequiredDiagnosticBudget: 1,
   recoveryEvidenceThreshold: 2,
   maxRecoveryVerificationAttempts: 2,
 }
@@ -114,6 +117,7 @@ type SessionRecord = {
   recoveryPhase: DelegationRecoveryPhase
   narrowOps: number
   implOps: number
+  workerRequiredDiagnosticOps: number
   targets: Set<string>
   modules: Set<string>
   evidenceAnchors: Set<string>
@@ -215,6 +219,7 @@ export function createRootWorkerState(
         recoveryPhase: "normal",
         narrowOps: 0,
         implOps: 0,
+        workerRequiredDiagnosticOps: 0,
         targets: new Set(),
         modules: new Set(),
         evidenceAnchors: new Set(),
@@ -292,6 +297,23 @@ export function createRootWorkerState(
     if (root) rec.modules.add(root)
   }
 
+  function enterWorkerRequired(rec: SessionRecord): void {
+    if (rec.workPhase !== "worker_required") rec.workerRequiredDiagnosticOps = 0
+    rec.workPhase = "worker_required"
+  }
+
+  function isBoundedWorkerRequiredDiagnostic(
+    tool: string | undefined,
+    hint?: GruntToolHint,
+  ): boolean {
+    const name = (tool ?? "").toLowerCase()
+    if (name === "read") return true
+    if (name === "bash" || name === "interactive_bash") {
+      return classifyShellCommand(hint?.command) === "narrow_read"
+    }
+    return false
+  }
+
   // Verified recovery is a success state: reconcile it to normal execution.
   function healVerifiedRecovery(rec: SessionRecord): void {
     rec.recoveryPhase = "normal"
@@ -311,7 +333,7 @@ export function createRootWorkerState(
     rec.recoveryEvidence.set(id, { ...evidence, id })
     rec.failureReason = evidence.reason
     rec.recoveryUpdatedAtMs = Date.now()
-    rec.workPhase = "worker_required"
+    enterWorkerRequired(rec)
     if (rec.recoveryPhase === "normal") rec.recoveryPhase = "delegation_degraded"
     if (rec.recoveryEvidence.size >= cfg.recoveryEvidenceThreshold) {
       rec.recoveryPhase = "recovery_mode"
@@ -336,6 +358,7 @@ export function createRootWorkerState(
   function decideNormal(
     rec: SessionRecord,
     opClass: OperationClass,
+    tool: string | undefined,
     hint?: GruntToolHint,
   ): RootWorkerGateDecision {
     if (opClass === "delegation" || opClass === "control" || opClass === "metadata") {
@@ -348,31 +371,44 @@ export function createRootWorkerState(
         recordTarget(rec, hint)
         const selectiveVerification = hint?.selective === true
         if (rec.narrowOps > cfg.bootstrapNarrowBudget) {
-          rec.workPhase = "worker_required"
+          enterWorkerRequired(rec)
           return block(rec, REASON_NARROW, opClass, hint?.target ?? null)
         }
         return allow(rec, { opClass, selectiveVerification })
       }
       if (opClass === "broad") {
-        rec.workPhase = "worker_required"
+        enterWorkerRequired(rec)
         return block(rec, REASON_BROAD, opClass, hint?.target ?? hint?.command ?? null)
       }
       if (opClass === "implementation") {
         rec.implOps += 1
         if (rec.implOps > cfg.bootstrapImplementationBudget) {
-          rec.workPhase = "worker_required"
+          enterWorkerRequired(rec)
           return block(rec, REASON_IMPL, opClass, hint?.target ?? null)
         }
         return allow(rec, { opClass })
       }
       if (opClass === "test_build") {
-        rec.workPhase = "worker_required"
+        enterWorkerRequired(rec)
         return block(rec, REASON_IMPL, opClass, hint?.command ?? null)
       }
       return allow(rec, { opClass })
     }
 
     if (rec.workPhase === "worker_required") {
+      if (
+        rec.recoveryPhase === "normal"
+        && opClass === "narrow"
+        && isBoundedWorkerRequiredDiagnostic(tool, hint)
+      ) {
+        const anchored = hint?.selective === true || isKnownAnchor(rec, hint)
+        if (anchored || rec.workerRequiredDiagnosticOps < cfg.workerRequiredDiagnosticBudget) {
+          if (!anchored) rec.workerRequiredDiagnosticOps += 1
+          rec.narrowOps += 1
+          recordTarget(rec, hint)
+          return allow(rec, { opClass, selectiveVerification: anchored })
+        }
+      }
       return block(rec, REASON_BROAD, opClass, hint?.target ?? hint?.command ?? null)
     }
 
@@ -388,7 +424,7 @@ export function createRootWorkerState(
     if (opClass === "narrow") {
       const anchored = hint?.selective === true || isKnownAnchor(rec, hint)
       if (!anchored) {
-        rec.workPhase = "worker_required"
+        enterWorkerRequired(rec)
         return block(rec, REASON_ADDITIONAL, opClass, hint?.target ?? null)
       }
       recordTarget(rec, hint)
@@ -396,7 +432,7 @@ export function createRootWorkerState(
     }
     if (opClass === "test_build") return allow(rec, { opClass })
     if (opClass === "broad" || opClass === "implementation") {
-      rec.workPhase = "worker_required"
+      enterWorkerRequired(rec)
       return block(rec, REASON_ADDITIONAL, opClass, hint?.target ?? hint?.command ?? null)
     }
     return allow(rec, { opClass })
@@ -476,7 +512,7 @@ export function createRootWorkerState(
 
       if (rec.recoveryPhase === "delegation_degraded") {
         const recoveryScope = evaluateRecoveryScope(tool, hint)
-        const normalDecision = decideNormal(rec, opClass, hint)
+        const normalDecision = decideNormal(rec, opClass, tool, hint)
         if (normalDecision.block && recoveryScope.allowed && opClass !== "delegation") {
           addCircularDeadlockEvidence(rec, tool, hint)
           // re-read via phaseFor (function call, un-narrowed): the circular
@@ -489,7 +525,7 @@ export function createRootWorkerState(
         return normalDecision
       }
 
-      return decideNormal(rec, opClass, hint)
+      return decideNormal(rec, opClass, tool, hint)
     },
 
     noteWorkerRunning(sessionID) {
@@ -524,7 +560,7 @@ export function createRootWorkerState(
       }
       // failed / cancelled / killed: the root may delegate again immediately.
       if (rec.workPhase === "worker_active") {
-        rec.workPhase = "worker_required"
+        enterWorkerRequired(rec)
       }
     },
 

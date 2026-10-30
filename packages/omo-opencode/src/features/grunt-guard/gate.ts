@@ -23,6 +23,10 @@ import {
 export type GruntToolHint = {
   /** File path (read) or pattern/dir (grep/glob). */
   target?: string
+  /** Every path affected by a multi-target native operation such as apply_patch. */
+  materializationTargets?: readonly string[]
+  /** True when the native operation deletes a target rather than materializing state. */
+  materializationDestructive?: boolean
   /** True when the read is anchored to a specific line range (a worker-identified verification). */
   selective?: boolean
   /** Raw shell command for `bash` calls (semantic classification of the command). */
