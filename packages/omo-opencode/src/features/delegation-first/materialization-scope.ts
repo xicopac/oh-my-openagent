@@ -1,3 +1,5 @@
+import { posix } from "node:path"
+
 import type { GruntToolHint } from "../grunt-guard"
 
 export type MaterializationScopeCategory = "materialization"
@@ -19,18 +21,34 @@ export const MATERIALIZATION_PATH_MARKERS = [
   ".omo/plans/",
 ] as const
 
-function normalizePath(value: string): string {
-  const normalized = value.trim().replaceAll("\\", "/").replace(/^['"]|['"]$/g, "")
-  return normalized.startsWith("./") ? normalized.slice(2) : normalized
+const MATERIALIZATION_DIRECTORIES = new Set(["handoffs", "evidence", "state", "plans"])
+
+function normalizePath(value: string): string | null {
+  let normalized = value.trim().replaceAll("\\", "/")
+  if (normalized.length === 0 || normalized.includes("\0") || /[\r\n]/.test(normalized)) return null
+  if (
+    normalized.length >= 2
+    && ((normalized.startsWith("'") && normalized.endsWith("'"))
+      || (normalized.startsWith('"') && normalized.endsWith('"')))
+  ) {
+    normalized = normalized.slice(1, -1)
+  }
+  normalized = posix.normalize(normalized)
+  if (normalized === ".." || normalized.startsWith("../")) return null
+  return normalized
 }
 
 export function isMaterializationPath(value: string | undefined): boolean {
   if (!value) return false
   const normalized = normalizePath(value)
-  const padded = normalized.startsWith("/") ? normalized : `/${normalized}`
-  return MATERIALIZATION_PATH_MARKERS.some(
-    (marker) => normalized.includes(marker) || padded.includes(marker),
-  )
+  if (!normalized) return false
+  const segments = normalized.split("/").filter(Boolean)
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    if (segments[index] === ".omo" && MATERIALIZATION_DIRECTORIES.has(segments[index + 1] ?? "")) {
+      return true
+    }
+  }
+  return false
 }
 
 function allow(category: MaterializationScopeCategory, reason: string): MaterializationScopeDecision {
@@ -41,80 +59,100 @@ function deny(reason: string): MaterializationScopeDecision {
   return { allowed: false, reason }
 }
 
-function allBashSegmentsAllowed(command: string): MaterializationScopeDecision {
-  const segments = command
-    .split(/(?:&&|\|\||;|\r?\n)/)
-    .map((segment) => segment.trim())
-    .filter(Boolean)
+function tokenizeMechanicalCommand(command: string): string[] | null {
+  if (/[`$*?\[\]{}<>]/.test(command)) return null
+  const words: string[] = []
+  let word = ""
+  let quote: "'" | '"' | null = null
+  let escaped = false
 
-  if (segments.length === 0) return deny("materialization_requires_mechanical_command")
+  const flush = (): void => {
+    if (word.length > 0) words.push(word)
+    word = ""
+  }
 
-  for (const segment of segments) {
-    // Strip pipes for mechanical verification commands
-    const pipelineParts = segment.split("|").map((p) => p.trim()).filter(Boolean)
-    // If pipeline, every part must be mechanical; otherwise check single segment
-    if (pipelineParts.length > 1) {
-      const allMechanical = pipelineParts.every((part) => isMechanicalSegment(part))
-      if (!allMechanical) return deny("materialization_requires_mechanical_command")
+  for (const char of command) {
+    if (escaped) {
+      word += char
+      escaped = false
       continue
     }
-    if (!isMechanicalSegment(segment)) return deny("materialization_requires_mechanical_command")
+    if (char === "\\" && quote !== "'") {
+      escaped = true
+      continue
+    }
+    if (quote !== null) {
+      if (char === quote) quote = null
+      else word += char
+      continue
+    }
+    if (char === "'" || char === '"') {
+      quote = char
+      continue
+    }
+    if (/\s/.test(char)) {
+      flush()
+      continue
+    }
+    word += char
   }
-  return allow("materialization", "materialization_command")
+
+  if (escaped || quote !== null) return null
+  flush()
+  return words
+}
+
+function pathArguments(words: readonly string[]): string[] {
+  return words.filter((word) => word !== "--" && !word.startsWith("-"))
 }
 
 function isMechanicalSegment(segment: string): boolean {
-  const s = segment.trim()
-  // mkdir -p <materialization-path>
-  if (/^mkdir\s+-p\s+/.test(s)) {
-    const pathPart = s.replace(/^mkdir\s+-p\s+/, "").trim().replace(/^['"]|['"]$/g, "")
-    // extract first path token (before space/flags)
-    const target = pathPart.split(/\s+/)[0] ?? ""
-    if (isMaterializationPath(target)) return true
-    // Also check if raw segment contains marker anywhere (handles absolute)
-    if (isMaterializationPath(s)) return true
-    return false
+  const words = tokenizeMechanicalCommand(segment.trim())
+  if (!words || words.length === 0) return false
+  const [command, ...args] = words
+
+  if (command === "mkdir") {
+    if (args.some((arg) => arg.startsWith("-") && arg !== "-p" && arg !== "--parents")) return false
+    const targets = pathArguments(args)
+    return targets.length > 0 && targets.every(isMaterializationPath)
   }
-  // read/hash/stat/list commands where arg is materialization path
-  if (/^(?:stat|sha256sum|sha1sum|md5sum|ls|cat|head|tail)\b/.test(s)) {
-    if (isMaterializationPath(s)) return true
-    return false
+
+  if (["stat", "sha256sum", "sha1sum", "md5sum", "ls", "cat", "head", "tail"].includes(command ?? "")) {
+    const targets = pathArguments(args)
+    return targets.length > 0 && targets.every(isMaterializationPath)
   }
-  // mv / cp where destination is materialization path
-  if (/^(?:mv|cp)\b/.test(s)) {
-    // naive: check if destination (last path-like token) is materialization path
-    // Also check if any marker present and destination contains it
-    if (isMaterializationPath(s)) {
-      // Need to ensure destination is materialization path, not just source
-      // Split on whitespace, last token is dest
-      const tokens = s.split(/\s+/).filter((t) => !t.startsWith("-") && t.length > 0)
-      // tokens[0] is mv/cp, last is dest
-      const dest = tokens[tokens.length - 1] ?? ""
-      const cleaned = dest.replace(/^['"]|['"]$/g, "")
-      if (isMaterializationPath(cleaned) || isMaterializationPath(s)) {
-        // For safety: if s contains marker, we consider mv/cp allowed when dest is allowed
-        // Check last token specifically
-        if (isMaterializationPath(cleaned)) return true
-        // Fallback: if s contains marker but dest extraction failed, deny
-        return false
-      }
-    }
-    return false
+
+  if (command === "cp" || command === "mv") {
+    const targets = pathArguments(args)
+    if (targets.length < 2) return false
+    if (command === "mv") return targets.every(isMaterializationPath)
+    return isMaterializationPath(targets[targets.length - 1])
   }
+
   return false
+}
+
+function allBashSegmentsAllowed(command: string): MaterializationScopeDecision {
+  if (command.includes("|") || command.includes("&")) {
+    return deny("materialization_requires_mechanical_command")
+  }
+  const segments = command
+    .split(/(?:;|\r?\n)/)
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+
+  if (segments.length === 0 || !segments.every(isMechanicalSegment)) {
+    return deny("materialization_requires_mechanical_command")
+  }
+  return allow("materialization", "materialization_command")
 }
 
 export function evaluateMaterializationScope(
   tool: string | undefined,
   hint: MaterializationHint = {},
 ): MaterializationScopeDecision {
-  if (hint.materialization !== true) {
-    return deny("materialization_not_requested")
-  }
-
   const name = (tool ?? "").trim().toLowerCase()
 
-  // Never delegate/control tools
   if (name === "task" || name === "call_omo_agent" || name.startsWith("team_")) {
     return deny("materialization_never_delegates")
   }
@@ -125,16 +163,23 @@ export function evaluateMaterializationScope(
       : deny("materialization_target_outside_allowed_paths")
   }
 
+  if (name === "apply_patch") {
+    const targets = hint.materializationTargets ?? []
+    if (hint.materializationDestructive === true) {
+      return deny("materialization_patch_delete_denied")
+    }
+    return targets.length > 0 && targets.every(isMaterializationPath)
+      ? allow("materialization", "materialization_patch")
+      : deny("materialization_target_outside_allowed_paths")
+  }
+
   if (name === "mkdir") {
-    // mkdir tool with target path
     return isMaterializationPath(hint.target)
       ? allow("materialization", "materialization_directory")
       : deny("materialization_target_outside_allowed_paths")
   }
 
-  if (name === "bash") {
-    return allBashSegmentsAllowed(hint.command ?? "")
-  }
+  if (name === "bash") return allBashSegmentsAllowed(hint.command ?? "")
 
   if (name === "read") {
     return isMaterializationPath(hint.target)

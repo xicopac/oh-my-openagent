@@ -18,10 +18,12 @@ import { stopContinuation } from "./stop-continuation"
 
 import type { CreatedHooks } from "../create-hooks"
 import type { BackgroundManager } from "../features/background-agent"
-import type { DelegationFirstRuntime } from "../features/delegation-first"
-import type { GruntToolHint } from "../features/grunt-guard"
-
-import { classifyBoundaryRole } from "../features/grunt-guard/gate"
+import { isMaterializationPath, type DelegationFirstRuntime } from "../features/delegation-first"
+import {
+  classifyBoundaryRole,
+  isKnownOperationTool,
+  type GruntToolHint,
+} from "../features/grunt-guard"
 
 const BACKGROUND_WAIT_BLOCK_MESSAGE = [
   "Background task wait is already managed by the plugin.",
@@ -62,6 +64,38 @@ function isHumanAuthorizationClaim(value: unknown): { scope: string; reason: str
   return { scope, reason }
 }
 
+type ApplyPatchScope = {
+  targets: string[]
+  destructive: boolean
+}
+
+function extractApplyPatchScope(patchText: string | undefined): ApplyPatchScope {
+  if (!patchText) return { targets: [], destructive: false }
+  const targets: string[] = []
+  const seen = new Set<string>()
+  let destructive = false
+
+  const addTarget = (value: string): void => {
+    const target = value.trim()
+    if (!target || seen.has(target)) return
+    seen.add(target)
+    targets.push(target)
+  }
+
+  for (const line of patchText.split(/\r?\n/)) {
+    const header = /^\*\*\* (Add|Update|Delete) File: (.+)$/.exec(line)
+    if (header) {
+      addTarget(header[2] ?? "")
+      if (header[1] === "Delete") destructive = true
+      continue
+    }
+    const move = /^\*\*\* Move to: (.+)$/.exec(line)
+    if (move) addTarget(move[1] ?? "")
+  }
+
+  return { targets, destructive }
+}
+
 function gruntHintForTool(tool: string, args: Record<string, unknown>): GruntToolHint | undefined {
   const firstString = (keys: string[]): string | undefined => {
     for (const key of keys) {
@@ -71,18 +105,38 @@ function gruntHintForTool(tool: string, args: Record<string, unknown>): GruntToo
     return undefined
   }
   const target = firstString(["filePath", "file_path", "path", "pattern", "query"])
-  const materializationClaim = args["materialization"] === true || args["materialize"] === true
+  const searchPath = firstString(["filePath", "file_path", "path"])
+  const normalizedTool = tool.toLowerCase()
+  const callerMaterializationClaim = args["materialization"] === true || args["materialize"] === true
+  const patchText = normalizedTool === "apply_patch"
+    ? firstString(["patchText", "input", "patch", "command"])
+    : undefined
+  const patchScope = extractApplyPatchScope(patchText)
+  const patchTouchesMaterialization = patchScope.targets.some(isMaterializationPath)
+  const materializationClaim = callerMaterializationClaim || patchTouchesMaterialization
   const materializationHint = materializationClaim ? { materialization: true as const } : {}
   const humanClaim = isHumanAuthorizationClaim(args["humanAuthorization"])
   const humanHint = humanClaim ? { humanAuthorization: humanClaim } : {}
-  if (tool.toLowerCase() === "bash" || tool.toLowerCase() === "interactive_bash") {
+  if (normalizedTool === "bash" || normalizedTool === "interactive_bash") {
     const command = typeof args.command === "string" ? args.command : undefined
     return { ...(command ? { command } : {}), ...materializationHint, ...humanHint }
   }
-  if (tool.toLowerCase() === "read") {
+  if (normalizedTool === "apply_patch") {
+    return {
+      ...(patchScope.targets[0] ? { target: patchScope.targets[0] } : {}),
+      materializationTargets: patchScope.targets,
+      materializationDestructive: patchScope.destructive,
+      ...materializationHint,
+      ...humanHint,
+    }
+  }
+  if (normalizedTool === "grep") {
+    return { ...(searchPath ? { target: searchPath } : {}), ...materializationHint, ...humanHint }
+  }
+  if (normalizedTool === "read") {
     return { ...(target ? { target } : {}), selective: hasNumericRange(args), ...materializationHint, ...humanHint }
   }
-  if (tool.toLowerCase() === "session_read") {
+  if (normalizedTool === "session_read") {
     return { ...(target ? { target } : {}), ...materializationHint, ...humanHint }
   }
   return { ...(target ? { target } : {}), ...materializationHint, ...humanHint }
@@ -115,17 +169,19 @@ export function createToolExecuteBeforeHandler(args: {
   const { ctx, hooks, backgroundManager, delegationFirstRuntime, taskProcessOwnership } = args
 
   return async (input, output): Promise<void> => {
-    // Strip mcp_ prefix from tool names — the model may emit mcp_background_output
-    // but the runtime registry has it as background_output (fixes #2697)
+    // Strip mcp_ only for known local compatibility aliases. An opaque MCP tool
+    // keeps its prefix so the policy classifier can conservatively treat it as broad.
     if (/^mcp_/i.test(input.tool)) {
       const stripped = input.tool.replace(/^mcp_/i, "")
-      log("[tool-execute-before] Stripped mcp_ prefix from tool name", {
-        original: input.tool,
-        resolved: stripped,
-        sessionID: input.sessionID,
-        callID: input.callID,
-      })
-      input.tool = stripped
+      if (isKnownOperationTool(stripped)) {
+        log("[tool-execute-before] Stripped mcp_ compatibility prefix from tool name", {
+          original: input.tool,
+          resolved: stripped,
+          sessionID: input.sessionID,
+          callID: input.callID,
+        })
+        input.tool = stripped
+      }
     }
 
     const normalizedToolName = input.tool.toLowerCase()
