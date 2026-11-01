@@ -1,17 +1,23 @@
 # OMO Stabilization State
 
-Last updated: 2026-10-30 Europe/Madrid
-Status: Milestone 1 and Slice A implementation/QA committed and pushed; stacked canonical-base PR authorized and pending; no production changes.
+Last updated: 2026-11-01 Europe/Madrid
+Status: Slice A stacked PR #1 is clean but awaits human CLA signature; dependent Slice B durable terminal/outbox implementation and real-runtime proof are complete locally and are being committed as a dependent stack; no production changes.
 
 ## Repository state
 
 - Canonical source: `/srv/dev/omo-canonical-release-rc` at `4d1961c7e` on `release/canonical-20261029`.
-- Active implementation worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-omo-core` on `fix/stabilize-omo-core`, based on `4d1961c7e`.
+- Slice A worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-omo-core` on `fix/stabilize-omo-core`, based on `4d1961c7e`.
 - Production plugin: `/srv/dev/oh-my-openagent`; untouched.
 - Existing guard candidate: `/srv/dev/omo-guard-consistency-rc` at `af1b246ee`; preserved and not edited.
 - Existing evidence and historical worktrees: preserved; none deleted.
 - Goal registered: stabilize OMO through architecture, core reliability, real runtime proof, and reproducible release safeguards; stop before deployment.
 - Remote task branch: `origin/fix/stabilize-omo-core`; tracks this checkpoint branch and was pushed without changing `origin/dev` or the production checkout.
+- Slice A PR: `https://github.com/xicopac/oh-my-openagent/pull/1`, base `release/canonical-20261029`, exact merge base `4d1961c7e`, 7 commits and 16 intended files. Structural checks pass; CLA is the only failed gate and requires the human `xicopac` account to sign.
+- Active Slice B worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-worker-ledger` on `fix/stabilize-worker-ledger`, stacked from `e66143235` without modifying the Slice A worktree.
+- Slice B verification: final lifecycle/wake scope is green (79 pass, 0 fail, 319 assertions), scoped OpenCode adapter typecheck exits 0, the 2,168-module candidate bundle imports successfully, and both final real OpenCode runtime scenarios pass.
+- Slice B bundle: `dist/index.js`, 6,585,323 bytes, SHA-256 `054a992efab1e87c43c17e34225466d4600e1f5e409bb635c08d809d49621715`; ignored build artifact only, not production.
+- Slice B evidence: `.omo/evidence/20261030-worker-ledger/README.md` and `SHA256SUMS`; local and gitignored.
+- Thermal checkpoint: the root `bun run build` was stopped when the hottest CPU sensor reached 98°C. Its interrupted materialization left `ui-ux-pro-max` half-checked-out; the worktree had been clean immediately beforehand, and a non-forced pinned submodule update restored exact gitlink `f32d6a61`. The failed build is preserved as `red/full-build-thermal-abort.txt`; it is not acceptance evidence. Future Slice B builds use only the documented single-entry OpenCode bundle command and start below 90°C.
 
 ## Confirmed findings
 
@@ -25,6 +31,11 @@ Status: Milestone 1 and Slice A implementation/QA committed and pushed; stacked 
 8. Real OpenCode 1.19.3 exposes `apply_patch` as its mutation tool. Canonical `classifyOperation()` recognizes only `edit`/`write`, and unknown tools default to `control`; therefore `apply_patch` can bypass the worker-first authorization decision.
 9. Canonical shell classification treats unknown commands as `control`, so mutations such as `rm`, `mv`, `touch`, `chmod`, `tee`, command substitution, and unhandled wrappers can receive weaker authorization than direct mutation tools.
 10. The unfinished guard commit `af1b246ee` improves shell wrapper parsing and selective diagnostics but does not close the demonstrated `apply_patch` gap or all opaque-shell paths.
+11. Worker terminal persistence is now first-writer-wins in the durable store. Terminal result, outcome, attempt identity, event identity, and pending wake outbox are written before session teardown.
+12. Parent wake state is explicit and monotonic: pending -> dispatched -> acknowledged. Dispatch no longer means delivery; actual parent assistant/tool output or history proof acknowledges the exact worker IDs.
+13. Startup recovery replays pending and unacknowledged dispatched terminal outboxes regardless of age for new records, remains backward-compatible with legacy records, and never recreates or reruns completed work.
+14. A failed cancellation abort no longer writes a provisional cancelled terminal record. This preserves the later truthful completion path when the child remains alive.
+15. Coalesced/admitted wake consumption now acknowledges the union of retained and dispatched worker ownership, preventing a completed worker from being stranded behind another wake.
 
 ## Current call graph and ownership defects
 
@@ -46,23 +57,22 @@ Status: Milestone 1 and Slice A implementation/QA committed and pushed; stacked 
 
 ## Current decision
 
-The first implementation slice is authorization consistency because it contains a demonstrated mutation bypass on the real OpenCode tool surface. The isolated worktree now classifies `apply_patch` and equivalent native mutation tools as implementation, fails closed on opaque shell execution, preserves read-only runtime diagnostics, allows one bounded specific-file diagnostic after delegation becomes mandatory, extracts every patch target, and derives durable `.omo` materialization authority from normalized paths. Opaque MCP tools retain their prefix and remain broad; only known local compatibility aliases are normalized.
+Slice B is ready for a dependent stacked PR. The implementation establishes the durable terminal-result/outbox contract without adding a second recovery authority: the background manager still executes sessions, while the worker record is the durable terminal/result/wake ledger and the existing parent-wake machinery advances its delivery state.
 
-Focused RED evidence captured the canonical failures. The final candidate passes 140 guard/recovery/human-authorization/materialization/hook tests with 571 expectations, including a leading-traversal regression added during pre-commit review, and passes `tsgo --noEmit -p packages/omo-opencode/tsconfig.json`. These are unit/type gates only; they do not satisfy the mandatory real OpenCode QA requirement by themselves.
+Final focused evidence is 79 passing tests with 319 expectations plus a clean scoped typecheck. The rebuilt candidate bundle imports with required assets. Real OpenCode 1.19.3 normal completion proved one human prompt can dispatch a real child, persist its result, autonomously resume the parent, and acknowledge the wake after parent output. The restart scenario proved a 48-hour-old pending terminal result with a deleted child survives process restarts, is retrievable through the real `background_output` tool, wakes the idle parent without human input, and does not replay after acknowledgement.
 
-Real OpenCode 1.19.3 QA now satisfies the Slice A runtime requirement. Against the untouched production bundle, the deterministic fake-provider sequence reproduced blocked specific-file diagnostics, successful source `apply_patch`, successful wrapped mutation, and blocked safe stderr metadata. Against the candidate bundle, the first diagnostic completed and the second was bounded, source/wrapped mutations were blocked, durable `.omo/evidence` materialization completed, and safe metadata completed. Both runs kept the real DB count at `2351`, created exactly one sandbox session, used only `gpt-fake`, and stopped the exact OpenCode/provider PIDs.
-
-After the leading-traversal fix, the candidate bundle was rebuilt at SHA-256 `049916ef29d26890f6d32ce8f913453d9b4e23efeeb3dc3242a83316b8d26646` (6,580,169 bytes) and the complete real OpenCode candidate scenario passed again. The post-run package reading reached exactly 90°C, so no further build/test/runtime activity is permitted until another cooldown.
+Both final runtime runs used only local fake endpoints and `gpt-fake-free`, left the real OpenCode DB at 2351 sessions and the real worker store at 93 records, and stopped their isolated OpenCode/provider processes. Production source, build, branch, configuration, and services remain untouched.
 
 ## Next checkpoint
 
-1. Push `release/canonical-20261029` without rewriting any existing ref, prove the stacked merge base is `4d1961c7e`, and verify the diff contains only Slice A files.
-2. Open the stacked PR and resolve CI/review findings with fresh scoped QA if any behavior changes.
-3. Merge with a merge commit into the canonical release branch without updating `dev` or the production checkout, then continue to Slice B.
+1. Commit Slice B in atomic commits, verify the exact merge base and Slice-B-only diff, push the dependent branch, and open a reviewer-readable PR based on `fix/stabilize-omo-core` while PR #1 remains unmerged.
+2. Resolve active Slice B CI/review findings with fresh scoped QA for any behavior-changing fix; never synchronize `dev` or deploy.
+3. After the dependent stack can land, begin Slice C's single-supervision authority and bounded retry/recovery matrix.
 
 ## Honest remaining gaps
 
-- Slice A does not address worker result durability, restart replay, competing watchdog ownership, or unified dispatch authorization; those remain explicitly incomplete.
-- No PR exists for this work.
-- The fork task branch is safely pushed, but no PR exists yet. `origin/dev` is an ancestor of local `dev`, with no divergence, and is 6,429 commits behind it. This is now a separate housekeeping task. The user authorized a stacked PR against `release/canonical-20261029` only after exact merge-base and diff verification; `dev` and production history must remain untouched.
-- Milestones 2–4 remain incomplete.
+- Slice B does not remove competing watchdog/recovery authorities or unify every dispatch/fallback paid-authorization decision; those are Slices C and D.
+- Compaction-specific runtime proof, standalone real-runtime cancellation/stall/empty-response/recovery-exhaustion scenarios, and repeated unattended resource measurements remain for Slices C/E.
+- Slice B is not yet committed or opened as a PR at this checkpoint. Slice A PR #1 remains CLA-blocked by required human action.
+- The fork task branch is safely pushed, but `origin/dev` remains 6,429 commits behind local production `dev`. This is a separate housekeeping task; no force-push, rewrite, synchronization, or production checkout mutation is authorized.
+- Milestone 2 is partially complete through the terminal-result/outbox dependency; Milestones 3–4 remain incomplete.
