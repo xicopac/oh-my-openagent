@@ -1,7 +1,7 @@
 # OMO Stabilization State
 
 Last updated: 2026-11-01 Europe/Madrid
-Status: Slice A PR #1 and dependent Slice B PR #2 are clean and mergeable but await the human CLA signature; no production changes.
+Status: Slice A PR #1 and dependent Slice B PR #2 are clean and mergeable but await the human CLA signature; Slice C single-supervision implementation and runtime proof are complete in its dependent worktree and await commit/stacked PR; no production changes.
 
 ## Repository state
 
@@ -18,7 +18,9 @@ Status: Slice A PR #1 and dependent Slice B PR #2 are clean and mergeable but aw
 - Slice B verification: final lifecycle/wake scope is green (79 pass, 0 fail, 319 assertions), scoped OpenCode adapter typecheck exits 0, the 2,168-module candidate bundle imports successfully, and both final real OpenCode runtime scenarios pass.
 - Slice B bundle: `dist/index.js`, 6,585,323 bytes, SHA-256 `054a992efab1e87c43c17e34225466d4600e1f5e409bb635c08d809d49621715`; ignored build artifact only, not production.
 - Slice B evidence: `.omo/evidence/20261030-worker-ledger/README.md` and `SHA256SUMS`; local and gitignored.
-- Thermal checkpoint: the root `bun run build` was stopped when the hottest CPU sensor reached 98°C. Its interrupted materialization left `ui-ux-pro-max` half-checked-out; the worktree had been clean immediately beforehand, and a non-forced pinned submodule update restored exact gitlink `f32d6a61`. The failed build is preserved as `red/full-build-thermal-abort.txt`; it is not acceptance evidence. Future Slice B builds use only the documented single-entry OpenCode bundle command and start below 90°C.
+- Active Slice C worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-worker-supervisor` on `fix/stabilize-worker-supervisor`, stacked from Slice B status commit `22e99e7fa`.
+- Slice C evidence: `.omo/evidence/20261101-worker-supervisor/README.md` and `SHA256SUMS`; local and gitignored.
+- Slice C candidate bundle: 6,564,676 bytes, SHA-256 `5404e1b2d36906b3f516435e721f1f64339d6b489b2ae5422fc41a5a906ebd50`; ignored build artifact only, not production.
 
 ## Confirmed findings
 
@@ -37,6 +39,11 @@ Status: Slice A PR #1 and dependent Slice B PR #2 are clean and mergeable but aw
 13. Startup recovery replays pending and unacknowledged dispatched terminal outboxes regardless of age for new records, remains backward-compatible with legacy records, and never recreates or reruns completed work.
 14. A failed cancellation abort no longer writes a provisional cancelled terminal record. This preserves the later truthful completion path when the child remains alive.
 15. Coalesced/admitted wake consumption now acknowledges the union of retained and dispatched worker ownership, preventing a completed worker from being stranded behind another wake.
+16. Slice C trace confirms the live delegation runtime still embeds `worker-liveness-supervisor`, whose internal `attemptRecovery()` and `wake_parent` events can independently block/retry/wake beside the watchdog/recovery coordinator.
+17. The periodic watchdog sweep currently calls exact process cleanup after every timed-out result even when `reclaimStalled()` returns false, and duplicates cleanup after an accepted reclaim. Cleanup must follow the confirmed BackgroundManager terminal transition instead.
+18. Slice C removes `worker-liveness-supervisor` from the live delegation runtime. The watchdog is now the only live stall detector, the recovery coordinator is the only retry-budget decision authority, and liveness can no longer independently retry, block, or wake a parent.
+19. The independent manager timer now performs a metadata-only sweep and calls only `reclaimStalled()`. It has no process-cleanup dependency; declined recovery has no cleanup side effect, while accepted recovery reaches exact task-owned cleanup only through the confirmed BackgroundManager terminal path.
+20. Real OpenCode provider-stall proof covers both bounded alternate success and bounded exhaustion: each used one human root prompt, produced an acknowledged durable terminal record, and autonomously resumed the parent.
 
 ## Current call graph and ownership defects
 
@@ -58,22 +65,23 @@ Status: Slice A PR #1 and dependent Slice B PR #2 are clean and mergeable but aw
 
 ## Current decision
 
-Slice B is ready for a dependent stacked PR. The implementation establishes the durable terminal-result/outbox contract without adding a second recovery authority: the background manager still executes sessions, while the worker record is the durable terminal/result/wake ledger and the existing parent-wake machinery advances its delivery state.
+Slice C is ready for an atomic three-commit checkpoint and a stacked PR against Slice B. The live delegation runtime no longer embeds a competing liveness retry/block/wake authority. The independent manager timer observes watchdog metadata and delegates each eligible timeout to the single recovery coordinator; lifecycle/process cleanup remains downstream of the confirmed BackgroundManager terminal transition.
 
-Final focused evidence is 79 passing tests with 319 expectations plus a clean scoped typecheck. The rebuilt candidate bundle imports with required assets. Real OpenCode 1.19.3 normal completion proved one human prompt can dispatch a real child, persist its result, autonomously resume the parent, and acknowledge the wake after parent output. The restart scenario proved a 48-hour-old pending terminal result with a deleted child survives process restarts, is retrievable through the real `background_output` tool, wakes the idle parent without human input, and does not replay after acknowledgement.
+Final focused evidence is 86 passing tests with 311 assertions plus a clean scoped typecheck. The rebuilt candidate bundle imports with required assets. Real OpenCode 1.19.3 provider-stall runs prove bounded recovery success and bounded exhaustion both persist an acknowledged terminal result and resume the idle parent without a second human message.
 
-Both final runtime runs used only local fake endpoints and `gpt-fake-free`, left the real OpenCode DB at 2351 sessions and the real worker store at 93 records, and stopped their isolated OpenCode/provider processes. Production source, build, branch, configuration, and services remain untouched.
+Both final runtime runs used only local fake endpoints and explicitly configured zero-cost fake models, left the real OpenCode DB at 2,351 sessions and the real worker store at 93 records, and stopped their isolated OpenCode/provider processes. Production source, build, branch, configuration, and services remain untouched.
 
 ## Next checkpoint
 
-1. The human `xicopac` account signs the CLA so PRs #1 and #2 can satisfy their only failing gate.
-2. Merge #1 and then #2 with merge commits after gates pass; never synchronize `dev` or deploy.
-3. Begin Slice C's single-supervision authority and bounded retry/recovery matrix in a fresh dependent worktree.
+1. Commit Slice C atomically, verify both merge bases and its exact dependent diff, push, and open its stacked PR against `fix/stabilize-worker-ledger`.
+2. The human `xicopac` account signs the CLA so the stacked PRs can satisfy their only non-automatable gate.
+3. Merge the stack in dependency order with merge commits after gates pass; never synchronize `dev` or deploy.
+4. Continue with Slice D unified dispatch authorization and the remaining Slice E runtime/release matrix in fresh dependent worktrees.
 
 ## Honest remaining gaps
 
-- Slice B does not remove competing watchdog/recovery authorities or unify every dispatch/fallback paid-authorization decision; those are Slices C and D.
-- Compaction-specific runtime proof, standalone real-runtime cancellation/stall/empty-response/recovery-exhaustion scenarios, and repeated unattended resource measurements remain for Slices C/E.
+- Slice C removes the live competing liveness authority but does not unify every dispatch/fallback paid-authorization decision; that remains Slice D.
+- Compaction-specific runtime proof, standalone empty-response and explicit-cancellation scenarios, and repeated unattended resource measurements remain for Slice E. Provider-stall success and recovery exhaustion are now proven in a real isolated runtime.
 - Slice B is committed, pushed, and open as PR #2. Both #1 and #2 are CLA-blocked by required human action; Codex cannot satisfy or bypass that gate.
 - The fork task branch is safely pushed, but `origin/dev` remains 6,429 commits behind local production `dev`. This is a separate housekeeping task; no force-push, rewrite, synchronization, or production checkout mutation is authorized.
-- Milestone 2 is partially complete through the terminal-result/outbox dependency; Milestones 3–4 remain incomplete.
+- Milestone 2 has durable terminal/outbox behavior, autonomous parent wake, and a single live supervision/recovery authority. Unified dispatch authorization remains before the milestone can exit; Milestones 3–4 remain incomplete.

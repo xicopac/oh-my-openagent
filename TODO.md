@@ -77,11 +77,19 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 
 ## Slice C — single supervision authority
 
-- [ ] Inventory every timer/cancel/retry/wake owner and mark the one retained coordinator.
-- [ ] Add failing tests for competing signals and exactly-one reclaim/terminal/wake.
-- [ ] Remove policy authority from liveness/background/watchdog secondary paths and route signals to the coordinator.
-- [ ] Prove pre-response stall, mid-response stall, empty response, disappearance, cancellation, retry success, and retry exhaustion with sequential fake-provider runs.
-- [ ] Update durable state, commit atomically, PR, verify, and merge without deployment.
+- [x] Inventory every timer/cancel/retry/wake owner and mark watchdog + recovery coordinator as the retained detector/decision authority.
+- [x] Capture focused baseline tests for watchdog sweep, delegation runtime coordination, failover redispatch, and process ownership.
+- [x] Add a failing create-managers test proving a declined reclaim never requests process cleanup.
+- [x] Add a failing create-managers test proving an accepted reclaim relies on the manager terminal callback and does not request duplicate sweep cleanup.
+- [x] Add a delegation-runtime regression proving watchdog inspection is read-only until one explicit reclaim produces one cancel, with no liveness-supervisor wake side effect.
+- [x] Remove the live `worker-liveness-supervisor` integration from delegation-first runtime while preserving authoritative request-start, activity, terminal, and vanished-child signals in the watchdog path.
+- [x] Simplify the periodic sweep to call only `reclaimStalled`; retain one unref'd timer and verify shutdown clears it.
+- [x] Re-run focused unit scope and scoped OpenCode adapter typecheck (86 pass, 0 fail, 311 assertions; typecheck exit 0).
+- [x] Build the candidate with the single-entry command and materialize required assets (2,163 modules; bundle SHA-256 `5404e1b2d36906b3f516435e721f1f64339d6b489b2ae5422fc41a5a906ebd50`).
+- [x] Run isolated real OpenCode provider-stall and recovery-exhaustion scenarios sequentially with a local fake provider and no human wake-up message.
+- [x] Prove one bounded alternate succeeds or exhausts to BLOCKED, one acknowledged terminal wake resumes the parent, only configured free fake models are requested, real stores remain unchanged, and exact test processes stop.
+- [x] Freeze local evidence with reviewer-readable summary and SHA-256 manifest.
+- [>] Update durable state, commit atomically, verify the dependent diff/merge bases, push, open a stacked PR, and stop before deployment.
 
 ## Slice D — unified paid/free dispatch authorization
 

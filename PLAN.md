@@ -3,7 +3,7 @@
 Last updated: 2026-11-01 (Europe/Madrid)
 Owner: Codex
 Canonical base: `4d1961c7e45223590768cce43093a839198eb28a`
-Implementation worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-worker-ledger` (Slice B, stacked on reviewed Slice A commit `e66143235`)
+Implementation worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-worker-supervisor` (Slice C, stacked on reviewed Slice B commit `22e99e7fa`)
 Production boundary: `/srv/dev/oh-my-openagent` is read-only and must not be built, edited, restarted, or deployed by this plan.
 
 ## Objective
@@ -124,6 +124,24 @@ Changes:
 Verification:
 
 - Fake-provider stalls before first byte, mid-response, empty response, vanished session, retry success, retry exhaustion, cancellation, repeated unattended loops, restart reconciliation.
+
+Implementation checkpoint (2026-11-01):
+
+- Retain `worker-supervisor/watchdog.ts` as the sole live stall detector and `worker-supervisor/recovery.ts` as the sole retry-budget decision authority.
+- Remove `worker-liveness-supervisor` from `createDelegationFirstRuntime`; its live integration currently mutates retry/block state and emits parent wakes despite being described as detector-only.
+- Preserve vanished-child detection in `detachChildSession`, which already has the authoritative OpenCode session-deletion observation and routes bounded redispatch through the shared recovery coordinator.
+- Make the independent `createManagers` sweep call only `reclaimStalled`; do not request process cleanup when reclaim declines, and do not duplicate cleanup after reclaim. Confirmed terminal cancellation remains the only path to `BackgroundManager` cleanup callbacks and exact task-owned process release.
+- Add focused RED/GREEN coverage for one detector tick, exactly one reclaim/cancel, no cleanup on declined reclaim, no duplicate cleanup on accepted reclaim, and timer disposal.
+- Prove the change through real isolated OpenCode provider-stall/recovery-exhaustion runs before commit; normal completion/restart durability remains covered by Slice B evidence.
+
+Verification checkpoint (2026-11-01):
+
+- Focused supervision/recovery/process-ownership scope: 86 tests pass, 0 fail, 311 assertions; scoped adapter typecheck exits 0.
+- Candidate bundle: 2,163 modules, 6,564,676 bytes, SHA-256 `5404e1b2d36906b3f516435e721f1f64339d6b489b2ae5422fc41a5a906ebd50`; required assets materialize and the bundle imports successfully.
+- Real provider-stall run: the first child stalled, one authorized free alternate completed, the durable terminal record reached `acknowledged`, and the parent produced `PARENT_RESUMED` without another human message.
+- Real exhaustion run: both bounded free attempts stalled, the assignment terminalized `blocked`, the durable terminal record reached `acknowledged`, and the parent resumed with the terminal BLOCKED state without another human message.
+- Both isolated runs used only configured local zero-cost fake models, left the real OpenCode DB at 2,351 sessions and the real worker ledger at 93 records, and stopped their exact OpenCode/provider processes.
+- This slice intentionally does not claim the still-pending empty-response, explicit cancellation, compaction, repeated-loop resource, or unified paid-authorization matrix.
 
 ### Slice D — Unified dispatch authorization
 
