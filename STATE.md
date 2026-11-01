@@ -1,7 +1,7 @@
 # OMO Stabilization State
 
 Last updated: 2026-11-01 Europe/Madrid
-Status: Slice A stacked PR #1 is clean but awaits human CLA signature; dependent Slice B durable terminal/outbox implementation and real-runtime proof are complete locally and are being committed as a dependent stack; no production changes.
+Status: Slice A PR #1 and dependent Slice B PR #2 are clean and mergeable but await the human CLA signature; no production changes.
 
 ## Repository state
 
@@ -14,6 +14,7 @@ Status: Slice A stacked PR #1 is clean but awaits human CLA signature; dependent
 - Remote task branch: `origin/fix/stabilize-omo-core`; tracks this checkpoint branch and was pushed without changing `origin/dev` or the production checkout.
 - Slice A PR: `https://github.com/xicopac/oh-my-openagent/pull/1`, base `release/canonical-20261029`, exact merge base `4d1961c7e`, 7 commits and 16 intended files. Structural checks pass; CLA is the only failed gate and requires the human `xicopac` account to sign.
 - Active Slice B worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-worker-ledger` on `fix/stabilize-worker-ledger`, stacked from `e66143235` without modifying the Slice A worktree.
+- Slice B PR: `https://github.com/xicopac/oh-my-openagent/pull/2`, base `fix/stabilize-omo-core`, exact Slice A merge base `e66143235`, exact canonical merge base `4d1961c7e`, five implementation/evidence commits and 16 intended files before this final status-only checkpoint. GitHub reports the PR mergeable; every active automation check passes except CLA.
 - Slice B verification: final lifecycle/wake scope is green (79 pass, 0 fail, 319 assertions), scoped OpenCode adapter typecheck exits 0, the 2,168-module candidate bundle imports successfully, and both final real OpenCode runtime scenarios pass.
 - Slice B bundle: `dist/index.js`, 6,585,323 bytes, SHA-256 `054a992efab1e87c43c17e34225466d4600e1f5e409bb635c08d809d49621715`; ignored build artifact only, not production.
 - Slice B evidence: `.omo/evidence/20261030-worker-ledger/README.md` and `SHA256SUMS`; local and gitignored.
@@ -65,14 +66,14 @@ Both final runtime runs used only local fake endpoints and `gpt-fake-free`, left
 
 ## Next checkpoint
 
-1. Commit Slice B in atomic commits, verify the exact merge base and Slice-B-only diff, push the dependent branch, and open a reviewer-readable PR based on `fix/stabilize-omo-core` while PR #1 remains unmerged.
-2. Resolve active Slice B CI/review findings with fresh scoped QA for any behavior-changing fix; never synchronize `dev` or deploy.
-3. After the dependent stack can land, begin Slice C's single-supervision authority and bounded retry/recovery matrix.
+1. The human `xicopac` account signs the CLA so PRs #1 and #2 can satisfy their only failing gate.
+2. Merge #1 and then #2 with merge commits after gates pass; never synchronize `dev` or deploy.
+3. Begin Slice C's single-supervision authority and bounded retry/recovery matrix in a fresh dependent worktree.
 
 ## Honest remaining gaps
 
 - Slice B does not remove competing watchdog/recovery authorities or unify every dispatch/fallback paid-authorization decision; those are Slices C and D.
 - Compaction-specific runtime proof, standalone real-runtime cancellation/stall/empty-response/recovery-exhaustion scenarios, and repeated unattended resource measurements remain for Slices C/E.
-- Slice B is not yet committed or opened as a PR at this checkpoint. Slice A PR #1 remains CLA-blocked by required human action.
+- Slice B is committed, pushed, and open as PR #2. Both #1 and #2 are CLA-blocked by required human action; Codex cannot satisfy or bypass that gate.
 - The fork task branch is safely pushed, but `origin/dev` remains 6,429 commits behind local production `dev`. This is a separate housekeeping task; no force-push, rewrite, synchronization, or production checkout mutation is authorized.
 - Milestone 2 is partially complete through the terminal-result/outbox dependency; Milestones 3–4 remain incomplete.

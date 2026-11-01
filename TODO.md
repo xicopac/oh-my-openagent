@@ -41,9 +41,9 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 - [x] Update `PLAN.md`, `STATE.md`, and `TODO.md` with observed behavior and remaining risks.
 - [x] Commit documentation/plan, tests, and implementation in five atomic commits according to repository commit-count policy.
 - [x] Push `fix/stabilize-omo-core` to the fork without altering production.
-- [>] Push the canonical base and open a reviewer-readable stacked PR against `release/canonical-20261029`; first prove the merge base is exactly `4d1961c7e` and the diff contains only Slice A stabilization files.
+- [x] Push the canonical base and open reviewer-readable PR #1 against `release/canonical-20261029`; exact merge base is `4d1961c7e` and the diff contains only Slice A stabilization files.
 - [ ] Resolve CI and review findings with fresh QA for behavior-changing fixes.
-- [>] Merge the stacked PR into `release/canonical-20261029` with a merge commit after its active gates pass. Do not update `dev` or deploy.
+- [!] Merge PR #1 into `release/canonical-20261029` with a merge commit after its active gates pass. Blocked only on the human CLA signature; do not update `dev` or deploy.
 
 ## Separate housekeeping — fork Git history
 
@@ -72,7 +72,8 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 - [x] Prove real DB count unchanged, fake free model only, bounded replay, exact process cleanup, and no orphan test process.
 - [x] Freeze reviewer-readable evidence and SHA-256 manifest under `.omo/evidence/20261030-worker-ledger/`.
 - [x] Update `PLAN.md`, `STATE.md`, and `TODO.md` with observed behavior and residual risks.
-- [>] Commit atomically according to file-count policy, push a dependent stacked branch, open a reviewer-readable PR, resolve active gates, and merge without deployment.
+- [x] Commit Slice B in five atomic commits, verify exact merge bases and the 16-file intended diff, push the dependent branch, and open reviewer-readable PR #2.
+- [!] Merge PR #2 with a merge commit after #1 and active gates pass. Blocked only on the human CLA signature; no deployment.
 
 ## Slice C — single supervision authority
 
