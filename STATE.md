@@ -1,7 +1,7 @@
 # OMO Stabilization State
 
 Last updated: 2026-11-01 Europe/Madrid
-Status: Slice A PR #1 and dependent Slice B PR #2 are clean and mergeable but await the human CLA signature; Slice C single-supervision implementation and runtime proof are complete in its dependent worktree and await commit/stacked PR; no production changes.
+Status: Slice A PR #1, Slice B PR #2, and Slice C PR #3 form a clean mergeable stack; all active automation passes except the human CLA signature. No production changes.
 
 ## Repository state
 
@@ -21,6 +21,7 @@ Status: Slice A PR #1 and dependent Slice B PR #2 are clean and mergeable but aw
 - Active Slice C worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-worker-supervisor` on `fix/stabilize-worker-supervisor`, stacked from Slice B status commit `22e99e7fa`.
 - Slice C evidence: `.omo/evidence/20261101-worker-supervisor/README.md` and `SHA256SUMS`; local and gitignored.
 - Slice C candidate bundle: 6,564,676 bytes, SHA-256 `5404e1b2d36906b3f516435e721f1f64339d6b489b2ae5422fc41a5a906ebd50`; ignored build artifact only, not production.
+- Slice C PR: `https://github.com/xicopac/oh-my-openagent/pull/3`, base `fix/stabilize-worker-ledger`, exact Slice B merge base `22e99e7fa`, exact canonical merge base `4d1961c7e`, three implementation/evidence commits and eight intended files before this status-only checkpoint. GitHub reports the PR clean and mergeable; ensure-labels, label-pull-request, review-claim, and signal checks pass, while CLA is the only failed gate.
 
 ## Confirmed findings
 
@@ -73,15 +74,14 @@ Both final runtime runs used only local fake endpoints and explicitly configured
 
 ## Next checkpoint
 
-1. Commit Slice C atomically, verify both merge bases and its exact dependent diff, push, and open its stacked PR against `fix/stabilize-worker-ledger`.
-2. The human `xicopac` account signs the CLA so the stacked PRs can satisfy their only non-automatable gate.
-3. Merge the stack in dependency order with merge commits after gates pass; never synchronize `dev` or deploy.
-4. Continue with Slice D unified dispatch authorization and the remaining Slice E runtime/release matrix in fresh dependent worktrees.
+1. The human `xicopac` account signs the CLA so PRs #1–#3 can satisfy their only non-automatable gate.
+2. Merge the stack in dependency order with merge commits after gates pass; never synchronize `dev` or deploy.
+3. Continue with Slice D unified dispatch authorization and the remaining Slice E runtime/release matrix in fresh dependent worktrees.
 
 ## Honest remaining gaps
 
 - Slice C removes the live competing liveness authority but does not unify every dispatch/fallback paid-authorization decision; that remains Slice D.
 - Compaction-specific runtime proof, standalone empty-response and explicit-cancellation scenarios, and repeated unattended resource measurements remain for Slice E. Provider-stall success and recovery exhaustion are now proven in a real isolated runtime.
-- Slice B is committed, pushed, and open as PR #2. Both #1 and #2 are CLA-blocked by required human action; Codex cannot satisfy or bypass that gate.
+- Slices A–C are committed, pushed, and open as PRs #1–#3. All three are CLA-blocked by required human action; Codex cannot satisfy or bypass that gate.
 - The fork task branch is safely pushed, but `origin/dev` remains 6,429 commits behind local production `dev`. This is a separate housekeeping task; no force-push, rewrite, synchronization, or production checkout mutation is authorized.
 - Milestone 2 has durable terminal/outbox behavior, autonomous parent wake, and a single live supervision/recovery authority. Unified dispatch authorization remains before the milestone can exit; Milestones 3–4 remain incomplete.

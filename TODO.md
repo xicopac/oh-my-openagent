@@ -89,7 +89,8 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 - [x] Run isolated real OpenCode provider-stall and recovery-exhaustion scenarios sequentially with a local fake provider and no human wake-up message.
 - [x] Prove one bounded alternate succeeds or exhausts to BLOCKED, one acknowledged terminal wake resumes the parent, only configured free fake models are requested, real stores remain unchanged, and exact test processes stop.
 - [x] Freeze local evidence with reviewer-readable summary and SHA-256 manifest.
-- [>] Update durable state, commit atomically, verify the dependent diff/merge bases, push, open a stacked PR, and stop before deployment.
+- [x] Update durable state, commit atomically, verify the dependent diff/merge bases, push, and open clean mergeable stacked PR #3.
+- [!] Merge PR #3 with a merge commit after #1 and #2 and all active gates pass. Blocked only on the human CLA signature; no deployment.
 
 ## Slice D — unified paid/free dispatch authorization
 
