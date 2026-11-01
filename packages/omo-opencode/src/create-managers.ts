@@ -89,6 +89,52 @@ export type Managers = {
   paidConsentRegistry?: PaidConsentRegistry
 }
 
+type DelegationWatchdogSweepRuntime = {
+  checkAllWatchdogs(): Array<{
+    sessionID: string
+    result: {
+      timedOut: boolean
+      stallMode: string | null
+    }
+  }>
+  reclaimStalled(sessionID: string, providerModel: string | null): boolean
+}
+
+export type DelegationWatchdogSweepResult = {
+  checked: number
+  attempted: number
+  reclaimed: number
+}
+
+/**
+ * Run one metadata-only supervision pass. This adapter deliberately has no
+ * process-cleanup dependency: only the recovery sink may terminalize a worker,
+ * and BackgroundManager's confirmed terminal callback releases owned scopes.
+ */
+export function runDelegationWatchdogSweep(input: {
+  runtime: DelegationWatchdogSweepRuntime
+  findTask: (sessionID: string) => { model?: { providerID: string; modelID: string } } | undefined
+  onSessionError: (sessionID: string, error: unknown) => void
+}): DelegationWatchdogSweepResult {
+  const checks = input.runtime.checkAllWatchdogs()
+  let attempted = 0
+  let reclaimed = 0
+  for (const { sessionID, result } of checks) {
+    try {
+      if (!result.timedOut || !result.stallMode || result.stallMode === "QUIET_BUT_ACTIVE") continue
+      const task = input.findTask(sessionID)
+      const providerModel = task?.model
+        ? `${task.model.providerID}/${task.model.modelID}`
+        : null
+      attempted += 1
+      if (input.runtime.reclaimStalled(sessionID, providerModel)) reclaimed += 1
+    } catch (error) {
+      input.onSessionError(sessionID, error)
+    }
+  }
+  return { checked: checks.length, attempted, reclaimed }
+}
+
 export function createManagers(args: {
   ctx: PluginContext
   pluginConfig: OhMyOpenCodeConfig
@@ -203,15 +249,6 @@ export function createManagers(args: {
           : undefined,
         pricing: pricingCatalog,
         maxConcurrentPaidWorkers: paidConcurrencyLimit(pluginConfig.model_routing),
-        onTerminalHold: (sessionID, reason) => {
-          void taskProcessOwnership.holdTask(sessionID, reason).catch((error) => {
-            log("[create-managers] terminal HOLD process quiesce failed:", {
-              sessionID,
-              reason,
-              error: error instanceof Error ? error.message : String(error),
-            })
-          })
-        },
       })
     : undefined
 
@@ -224,18 +261,10 @@ export function createManagers(args: {
     const sweepIntervalMs = Math.max(watchdogCfg?.quiet_stall_threshold_ms ?? 180_000, 5_000) / 6
     const timer = setInterval(() => {
       try {
-        for (const { sessionID, result } of delegationFirstRuntime.checkAllWatchdogs()) {
-          try {
-            if (!result.timedOut || !result.stallMode || result.stallMode === "QUIET_BUT_ACTIVE") continue
-            const task = backgroundManager?.findBySession(sessionID)
-            const providerModel = task?.model
-              ? `${task.model.providerID}/${task.model.modelID}`
-              : null
-            delegationFirstRuntime.reclaimStalled(sessionID, providerModel)
-            void taskProcessOwnership.cleanupTask(sessionID, "watchdog-reclaim").catch((error) => {
-              log("[create-managers] watchdog process cleanup failed:", { sessionID, error })
-            })
-          } catch (error) {
+        runDelegationWatchdogSweep({
+          runtime: delegationFirstRuntime,
+          findTask: (sessionID) => backgroundManager?.findBySession(sessionID),
+          onSessionError: (sessionID, error) => {
             log("[create-managers] watchdog sweep session error:", { sessionID, error })
             governanceAudit?.write(sessionID, {
               subsystem: "watchdog",
@@ -243,8 +272,8 @@ export function createManagers(args: {
               session_id: sessionID,
               error: String(error),
             })
-          }
-        }
+          },
+        })
       } catch (error) {
         log("[create-managers] watchdog sweep error:", { error })
       }
