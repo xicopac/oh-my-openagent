@@ -22,6 +22,24 @@ function eventNames(events: CapturedEvent[], sessionID: string): string[] {
 const DUMMY_WORKERS = [{ model_id: "opengateway/explore", tier: "free" as const, capability: 0.7, free: true }]
 
 describe("delegation-first child stall lifecycle and recovery", () => {
+  test("watchdog inspection is read-only until the single recovery authority explicitly reclaims", () => {
+    const rt = createDelegationFirstRuntime(undefined, {})
+    const cancelled: string[] = []
+    rt.setRecoverySink({ cancel: async (sessionID) => void cancelled.push(sessionID) })
+    const t0 = Date.now()
+    rt.attachChildSession("parent", "child1")
+    rt.markRequestStarted("child1")
+
+    const results = rt.checkAllWatchdogs(t0 + 200_000)
+
+    expect(results.find((entry) => entry.sessionID === "child1")?.result.timedOut).toBe(true)
+    expect(cancelled).toEqual([])
+
+    expect(rt.reclaimStalled("child1", "opengateway/explore", t0 + 200_000)).toBe(true)
+    expect(cancelled).toEqual(["child1"])
+    rt.dispose()
+  })
+
   test("healthy child lifecycle reaches completion with the expected milestone sequence", () => {
     // given
     const { writer, events } = captureAudit()
