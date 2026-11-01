@@ -129,6 +129,7 @@ import {
   type WorkerRecordPatch,
   type WorkerRecordState,
   type WorkerRecordStore,
+  type WorkerTerminalTransition,
   type WorkerTerminalOutcome,
 } from "./worker-record"
 import type { DelegationFirstRuntime } from "../delegation-first"
@@ -393,6 +394,7 @@ export class BackgroundManager {
   private enableParentSessionNotifications: boolean
   private modelFallbackControllerAccessor?: ModelFallbackControllerAccessor
   private readonly workerRecordStore: WorkerRecordStore
+  private readonly workerRecordRecoveryTimer: ReturnType<typeof setTimeout>
   private logger: typeof log
   private loggedSessionStatusUnavailable = false
   readonly taskHistory = new TaskHistory()
@@ -444,7 +446,12 @@ export class BackgroundManager {
         onScheduledFlushSettled: (sessionID) => this.recordScheduledFlushSettled(sessionID),
         onWakeDispatched: (_sessionID, wake) => {
           for (const workerID of wake.workerIDs ?? []) {
-            this.workerRecordStore.markNotificationDelivered(workerID, new Date())
+            this.workerRecordStore.markWakeDispatched(workerID, new Date())
+          }
+        },
+        onWakeAcknowledged: (_sessionID, wake) => {
+          for (const workerID of wake.workerIDs ?? []) {
+            this.workerRecordStore.markWakeAcknowledged(workerID, new Date())
           }
         },
       },
@@ -458,14 +465,14 @@ export class BackgroundManager {
       },
     )
     this.registerProcessCleanup()
-    const recoveryTimer = setTimeout(() => {
+    this.workerRecordRecoveryTimer = setTimeout(() => {
       void this.recoverTerminalWorkerRecords().catch((error) => {
         log("[background-agent] Worker record recovery failed:", {
           error: error instanceof Error ? error.message : String(error),
         })
       })
     }, 1_000)
-    recoveryTimer.unref?.()
+    this.workerRecordRecoveryTimer.unref?.()
   }
 
   private async abortSessionWithLogging(sessionID: string, reason: string): Promise<boolean> {
@@ -1967,7 +1974,7 @@ The fallback retry session is now created and can be inspected directly.
 
   private clearDispatchedParentWake(sessionID: string): void {
     this.clearParentWakeTextDeltaBuffers(sessionID)
-    this.parentWakeNotifier.clearDispatchedParentWake(sessionID)
+    this.parentWakeNotifier.acknowledgeDispatchedParentWake(sessionID)
   }
 
   private async requeueDispatchedParentWake(sessionID: string, reason: string): Promise<boolean> {
@@ -2660,6 +2667,7 @@ The task was re-queued on a fallback model after a retryable failure.
   private persistWorkerRecord(task: BackgroundTask, state: WorkerRecordState, patch: WorkerRecordPatch = {}): void {
     const now = new Date().toISOString()
     const existing = this.workerRecordStore.get(task.id)
+    if (existing?.terminalAt) return
     const base: WorkerRecord = existing ?? {
       schemaVersion: 1,
       workerID: task.id,
@@ -2699,13 +2707,16 @@ The task was re-queued on a fallback model after a retryable failure.
     reason?: string,
   ): void {
     const terminalAt = (task.completedAt ?? new Date()).toISOString()
-    this.persistWorkerRecord(task, workerStateForStatus(outcome) ?? "failed", {
+    const transition: WorkerTerminalTransition = {
+      state: (workerStateForStatus(outcome) ?? "failed") as WorkerTerminalTransition["state"],
       terminalAt,
       terminalOutcome: outcome,
+      ...(task.currentAttemptID ? { terminalAttemptID: task.currentAttemptID } : {}),
       ...(reason !== undefined ? { terminalReason: reason } : task.error !== undefined ? { terminalReason: task.error } : {}),
       ...(task.result !== undefined ? { result: task.result } : {}),
       ...(task.attempts !== undefined ? { attempts: task.attempts.length } : {}),
-    })
+    }
+    this.workerRecordStore.terminalize(task.id, transition)
   }
 
   private async captureTerminalResult(task: BackgroundTask): Promise<string | undefined> {
@@ -2789,31 +2800,29 @@ Recovery exhausted or the worker vanished without a terminal result. This worker
         if (!Number.isFinite(updatedAt) || updatedAt > orphanCutoff) continue
         if (record.state !== "dispatched" && record.state !== "starting" && record.state !== "running") continue
         const terminalAt = new Date().toISOString()
-        this.workerRecordStore.update(record.workerID, {
+        this.workerRecordStore.terminalize(record.workerID, {
           state: "blocked",
           terminalAt,
           terminalOutcome: "blocked",
           terminalReason: "worker vanished across plugin restart",
-          updatedAt: terminalAt,
         })
         const recovered = this.workerRecordStore.get(record.workerID)
         if (!recovered || !(await this.verifySessionExists(recovered.parentSessionID))) continue
         await this.notifyParentSession(this.taskFromWorkerRecord(recovered))
-        this.workerRecordStore.markNotificationQueued(recovered.workerID, new Date())
         continue
       }
-      if (record.notificationDeliveredAt !== undefined) continue
+      const wakeAcknowledged = record.wakeState === "acknowledged"
+        || (record.wakeState === undefined && record.notificationDeliveredAt !== undefined)
+      if (wakeAcknowledged) continue
       const terminalAt = Date.parse(record.terminalAt)
-      if (!Number.isFinite(terminalAt) || terminalAt < cutoff) {
-        this.workerRecordStore.markNotificationDelivered(record.workerID, new Date())
+      const isLegacyWakeRecord = record.wakeState === undefined
+      if (!Number.isFinite(terminalAt) || (isLegacyWakeRecord && terminalAt < cutoff)) {
         continue
       }
       if (!(await this.verifySessionExists(record.parentSessionID))) {
-        this.workerRecordStore.markNotificationDelivered(record.workerID, new Date())
         continue
       }
       await this.notifyParentSession(this.taskFromWorkerRecord(record))
-      this.workerRecordStore.markNotificationQueued(record.workerID, new Date())
     }
   }
 
@@ -3114,11 +3123,6 @@ Recovery exhausted or the worker vanished without a terminal result. This worker
     if (wasRunning && task.sessionId) {
       const partialResult = await this.captureTerminalResult(task)
       if (partialResult !== undefined) task.result = partialResult
-      this.persistTerminalWorkerRecord(
-        task,
-        terminalStatus === "blocked" ? "blocked" : "cancelled",
-        reason ?? source,
-      )
     }
     if (wasRunning && abortSession && task.sessionId) {
       const aborted = await this.abortSessionWithLogging(task.sessionId, `task cancellation (${source})`)
@@ -3980,6 +3984,7 @@ Recovery exhausted or the worker vanished without a terminal result. This worker
     this.shutdownTriggered = true
     log("[background-agent] Shutting down BackgroundManager")
     this.stopPolling()
+    clearTimeout(this.workerRecordRecoveryTimer)
     const trackedSessionIDs = new Set<string>()
     const abortRequests: Array<{ sessionID: string; promise: Promise<unknown> }> = []
     const queuedResumeParents = new Set<string>()

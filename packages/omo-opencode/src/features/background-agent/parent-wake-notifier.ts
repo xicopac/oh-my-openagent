@@ -41,6 +41,7 @@ export class ParentWakeNotifier {
           sessionInspector: this.sessionInspector,
           requeueWake: (latestWake) => this.requeueWake(sessionID, latestWake),
           scheduleFlush: () => this.schedulePendingParentWakeFlush(sessionID),
+          onWakeAcknowledged: (acknowledgedWake) => deps.onWakeAcknowledged?.(sessionID, acknowledgedWake),
         }).catch((error: unknown) => {
           logParentWakeWindowRecoveryError(
             sessionID,
@@ -125,6 +126,13 @@ export class ParentWakeNotifier {
     this.dispatchedTracker.clearWake(sessionID)
   }
 
+  acknowledgeDispatchedParentWake(sessionID: string): boolean {
+    const wake = this.dispatchedTracker.clearWake(sessionID)
+    if (!wake) return false
+    this.flushRunner.acknowledgeWake(sessionID, wake)
+    return true
+  }
+
   async requeueDispatchedParentWake(sessionID: string, reason: string): Promise<boolean> {
     const wake = this.dispatchedTracker.getWake(sessionID)
     if (!wake) {
@@ -134,7 +142,7 @@ export class ParentWakeNotifier {
     await settleAfterSessionIdle()
 
     if (await this.sessionInspector.hasAssistantOrToolOutputAfterDispatchedWake(sessionID, wake)) {
-      this.clearDispatchedParentWake(sessionID)
+      this.acknowledgeDispatchedParentWake(sessionID)
       log("[background-agent] Ignored late parent wake failure after assistant output:", {
         sessionID,
         reason,
