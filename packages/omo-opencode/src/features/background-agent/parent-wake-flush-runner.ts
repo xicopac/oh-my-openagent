@@ -1,6 +1,12 @@
 import { log } from "../../shared"
 import { isSessionActive as isOpenCodeSessionActive, settleAfterSessionIdle } from "../../hooks/shared/session-idle-settle"
-import { isFailureParentWake, isRedundantParentWake, type PendingParentWake } from "./parent-wake-dedupe"
+import {
+  cloneParentWake,
+  isFailureParentWake,
+  isRedundantParentWake,
+  mergeParentWakeNotifications,
+  type PendingParentWake,
+} from "./parent-wake-dedupe"
 import type { ParentWakeDispatchedTracker } from "./parent-wake-dispatched-tracker"
 import type { ParentWakePendingQueue } from "./parent-wake-pending-queue"
 import { sendParentWakePrompt } from "./parent-wake-prompt-dispatch"
@@ -19,6 +25,10 @@ const PENDING_PARENT_WAKE_MAX_ACTIVE_DEFER_MS = 60_000
 
 export class ParentWakeFlushRunner {
   constructor(private readonly deps: ParentWakeFlushRunnerDeps) {}
+
+  acknowledgeWake(sessionID: string, wake: PendingParentWake): void {
+    this.deps.notifierDeps.onWakeAcknowledged?.(sessionID, wake)
+  }
 
   async flushPendingParentWake(sessionID: string): Promise<void> {
     if (!this.deps.pendingQueue.hasWake(sessionID)) {
@@ -197,7 +207,8 @@ export class ParentWakeFlushRunner {
       return false
     }
     this.deps.pendingQueue.deleteWake(sessionID)
-    this.deps.dispatchedTracker.clearWake(sessionID)
+    const dispatchedWake = this.deps.dispatchedTracker.clearWake(sessionID)
+    this.acknowledgeWake(sessionID, mergeAcknowledgedWakes(latestWake, dispatchedWake))
     log("[background-agent] Dropped retained parent wake after parent consumed admitted notification:", { sessionID })
     return true
   }
@@ -291,4 +302,28 @@ export class ParentWakeFlushRunner {
   private requeueWake(sessionID: string, latestWake: PendingParentWake): void {
     this.deps.pendingQueue.requeueWake(sessionID, latestWake)
   }
+}
+
+function mergeAcknowledgedWakes(
+  latestWake: PendingParentWake,
+  dispatchedWake: PendingParentWake | undefined,
+): PendingParentWake {
+  const acknowledgedWake = cloneParentWake(latestWake)
+  if (!dispatchedWake) return acknowledgedWake
+
+  acknowledgedWake.notifications = dispatchedWake.notifications.reduce(
+    (notifications, notification) => mergeParentWakeNotifications(notifications, notification),
+    acknowledgedWake.notifications,
+  )
+  acknowledgedWake.shouldReply ||= dispatchedWake.shouldReply
+  acknowledgedWake.workerIDs = mergeWorkerIDs(acknowledgedWake.workerIDs, dispatchedWake.workerIDs)
+  return acknowledgedWake
+}
+
+function mergeWorkerIDs(
+  latest: readonly string[] | undefined,
+  dispatched: readonly string[] | undefined,
+): string[] | undefined {
+  if ((!latest || latest.length === 0) && (!dispatched || dispatched.length === 0)) return undefined
+  return [...new Set([...(latest ?? []), ...(dispatched ?? [])])]
 }
