@@ -1,7 +1,7 @@
 # OMO Stabilization State
 
-Last updated: 2026-11-01 Europe/Madrid
-Status: Slice A PR #1, Slice B PR #2, and Slice C PR #3 form a clean mergeable stack; all active automation passes except the human CLA signature. No production changes.
+Last updated: 2026-11-02 Europe/Madrid
+Status: Slice A PR #1, Slice B PR #2, and Slice C PR #3 form a clean mergeable stack; all active automation passes except the human CLA signature. Slice D unified dispatch authorization is implemented and runtime-verified in its dependent worktree, pending atomic commits and PR. No production changes.
 
 ## Repository state
 
@@ -22,6 +22,9 @@ Status: Slice A PR #1, Slice B PR #2, and Slice C PR #3 form a clean mergeable s
 - Slice C evidence: `.omo/evidence/20261101-worker-supervisor/README.md` and `SHA256SUMS`; local and gitignored.
 - Slice C candidate bundle: 6,564,676 bytes, SHA-256 `5404e1b2d36906b3f516435e721f1f64339d6b489b2ae5422fc41a5a906ebd50`; ignored build artifact only, not production.
 - Slice C PR: `https://github.com/xicopac/oh-my-openagent/pull/3`, base `fix/stabilize-worker-ledger`, exact Slice B merge base `22e99e7fa`, exact canonical merge base `4d1961c7e`, three implementation/evidence commits and eight intended files before this status-only checkpoint. GitHub reports the PR clean and mergeable; ensure-labels, label-pull-request, review-claim, and signal checks pass, while CLA is the only failed gate.
+- Active Slice D worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-dispatch-authorization` on `fix/stabilize-dispatch-authorization`, stacked from Slice C status commit `6784d7a61`.
+- Slice D evidence: `.omo/evidence/20261101-dispatch-authorization/`; local and gitignored.
+- Slice D candidate bundle: SHA-256 `c9efff12498a282b330db709154fea16997ac30faa94d7787547a527ad5079f0`; ignored build artifact only, not production.
 
 ## Confirmed findings
 
@@ -45,43 +48,50 @@ Status: Slice A PR #1, Slice B PR #2, and Slice C PR #3 form a clean mergeable s
 18. Slice C removes `worker-liveness-supervisor` from the live delegation runtime. The watchdog is now the only live stall detector, the recovery coordinator is the only retry-budget decision authority, and liveness can no longer independently retry, block, or wake a parent.
 19. The independent manager timer now performs a metadata-only sweep and calls only `reclaimStalled()`. It has no process-cleanup dependency; declined recovery has no cleanup side effect, while accepted recovery reaches exact task-owned cleanup only through the confirmed BackgroundManager terminal path.
 20. Real OpenCode provider-stall proof covers both bounded alternate success and bounded exhaustion: each used one human root prompt, produced an acknowledged durable terminal record, and autonomously resumed the parent.
+21. Slice D trace confirms ordinary task dispatch requests and consumes exact paid consent in `tools/delegate-task/tools.ts`, while BackgroundManager fallback retries bypass that boundary and mutate the effective model before queueing a new attempt.
+22. Sync fallback can change the effective model both inside the existing session and while creating a replacement session without re-running the paid-consent boundary.
+23. Recovery relaunch uses a separate persistent approval-file policy instead of the single-use in-memory operator approval registry. This is inconsistent with initial dispatch and can authorize repeated paid recovery attempts from one static entry.
+24. Slice D replaces the split cost gates with one final effective-model decision. Missing pricing is unknown/paid, free models require catalog or retained-record verification, and paid models require exact single-use root/worker/model/task approval.
+25. Background and sync fallback now authorize the next effective model before aborting, mutating task state, queueing, prompting, or creating a replacement session. Automatic fallback has no approval nonce and therefore remains free-only.
+26. Automatic recovery no longer reads a static approval file as spending authority. Paid or unknown recovery terminalizes blocked; verified-free recovery retains bounded autonomous relaunch.
+27. Real approved-path QA exposed and fixed a second consent owner: Resource Governor rejected an already-approved paid launch. Exact approval now satisfies only the same dispatch-level governor evaluation and never persists as reusable session consent.
+28. On the final candidate bundle, real OpenCode requested zero paid models without interactive availability and exactly one paid model after synthetic explicit approval. Free completion also persisted and acknowledged its terminal result and woke the parent unattended.
 
-## Current call graph and ownership defects
+## Current call graph and ownership
 
-- Background dispatch: `createDelegateTask()` performs model/free-first/paid decisions, `executeBackgroundTask()` calls `BackgroundManager.launch()`, and the manager performs a second resource-governor decision before queue/session/prompt work.
-- Background terminal observations arrive through `background-notification` event forwarding and the manager's own polling interval. Idle, deleted, error, retry, missing status, empty turn, stale task, explicit cancel, and circuit breaker paths can terminalize the task.
-- Delegation recovery: `createManagers()` drives `checkAllWatchdogs()` on an independent timer. `createDelegationFirstRuntime()` owns watchdog, recovery coordinator, liveness supervisor, relaunch, and a cancel dedupe set. The liveness callbacks can call the same `reclaimStalled()` and blocked-notification paths as the watchdog sweep.
-- Runtime fallback separately owns a first-prompt timer and error/status handlers that abort and re-prompt child sessions. Background fallback separately requeues attempts. Sync fallback separately retries prompts or creates a new child session.
-- Sync execution bypasses the durable background worker record/outbox and returns its result through the live tool call. Restart recovery therefore differs by execution mode.
-- The worker JSON record uses atomic rename but no terminal compare-and-set. Terminal payload and notification timestamps are separate writes. The pending/dispatched wake queues are in-memory; `notificationDeliveredAt` records prompt dispatch, not durable parent consumption.
-- Process ownership records exact ai-job units/process groups and is idempotent per record. Multiple event paths request cleanup, but the ownership service is the only component that signals those recorded scopes. This mechanism should remain the exclusive process terminator.
-- `docs/reference/worker-reliability-architecture.md` now records the required invariants, current split ownership, target coordinator/ledger/outbox, migration sequence, runtime matrix, and release boundary.
+- `createDelegateTask()` resolves the initial model, prefers free candidates, obtains any exact paid approval, and calls the shared final cost decision. `BackgroundManager.launch()` consumes the trusted in-process decision marker and performs the separate Resource Governor budget/backstop decision before queue/session/prompt work.
+- Background fallback and both sync fallback forms call the same final cost decision before changing model, aborting an attempt, queueing, prompting, or creating a replacement session. They carry no paid nonce and are therefore free-only.
+- Recovery relaunch accepts only catalog or retained-record verified-free candidates. A paid or unknown candidate exhausts to the existing blocked terminal path and parent wake; static approval files are no longer part of recovery authority.
+- `createManagers()` drives the one watchdog sweep on an independent unref'd timer. The watchdog detects stalls, the recovery coordinator owns bounded retry/exhaustion, and the removed live liveness supervisor no longer retries, blocks, or wakes independently.
+- Background terminal observations converge on first-writer-wins durable terminal records and a monotonic pending/dispatched/acknowledged wake outbox. Startup replay never repeats completed work.
+- Sync execution still returns through the live tool call rather than the durable background worker ledger/outbox. Restart recovery therefore remains intentionally different by execution mode and is a future simplification candidate.
+- Process ownership records exact ai-job units/process groups and is idempotent per record. It remains the only component that signals recorded task-owned scopes.
+- `docs/reference/worker-reliability-architecture.md` records the invariants, ownership boundaries, migration sequence, runtime matrix, and release boundary.
 
 ## Safety and resource state
 
 - One orphaned isolated QA server from the previous guard run (PID 918547, port 4199) was confirmed to use the synthetic XDG sandbox and stopped with SIGTERM. No matching QA process remains.
-- Temperature after the source trace was 91°C, then cooled to 82°C before focused work resumed. The dependency install unexpectedly invoked the repository build but remained isolated; its tracked generated output was restored from the clean same-commit canonical checkout. An earlier typecheck reached 92°C, so work paused until cooldown. The final post-edit typecheck passed with an immediate CPU package reading of 86°C.
 - No credentials were read. No real provider was contacted.
 - No production process, config, bundle, source checkout, or service was modified.
 
 ## Current decision
 
-Slice C is ready for an atomic three-commit checkpoint and a stacked PR against Slice B. The live delegation runtime no longer embeds a competing liveness retry/block/wake authority. The independent manager timer observes watchdog metadata and delegates each eligible timeout to the single recovery coordinator; lifecycle/process cleanup remains downstream of the confirmed BackgroundManager terminal transition.
+Slice D is ready for atomic commits and a stacked PR against Slice C. Cost authority is now path-independent: initial dispatch and every effective-model switch use one decision, automatic fallback/recovery is free-only, and paid approval is exact and single-use.
 
-Final focused evidence is 86 passing tests with 311 assertions plus a clean scoped typecheck. The rebuilt candidate bundle imports with required assets. Real OpenCode 1.19.3 provider-stall runs prove bounded recovery success and bounded exhaustion both persist an acknowledged terminal result and resume the idle parent without a second human message.
+Final focused evidence is 119 passing tests with 355 assertions plus a clean scoped typecheck. The 2,163-module candidate bundle imports with required assets at SHA-256 `c9efff12498a282b330db709154fea16997ac30faa94d7787547a527ad5079f0`. Real OpenCode 1.19.3 runs prove free completion and parent wake, zero unattended paid requests, and exactly one paid request after one synthetic explicit approval.
 
-Both final runtime runs used only local fake endpoints and explicitly configured zero-cost fake models, left the real OpenCode DB at 2,351 sessions and the real worker store at 93 records, and stopped their isolated OpenCode/provider processes. Production source, build, branch, configuration, and services remain untouched.
+All final runtime runs used only local fake endpoints, left the real OpenCode DB at 2,351 sessions and the real worker store at 93 records, and stopped their isolated OpenCode/provider processes. Production source, build, branch, configuration, and services remain untouched.
 
 ## Next checkpoint
 
-1. The human `xicopac` account signs the CLA so PRs #1–#3 can satisfy their only non-automatable gate.
-2. Merge the stack in dependency order with merge commits after gates pass; never synchronize `dev` or deploy.
-3. Continue with Slice D unified dispatch authorization and the remaining Slice E runtime/release matrix in fresh dependent worktrees.
+1. Commit Slice D atomically, verify its exact merge bases and diff, push, and open PR #4 against Slice C.
+2. The human `xicopac` account signs the CLA so PRs #1–#4 can satisfy their only non-automatable gate.
+3. Merge the stack in dependency order with merge commits after gates pass; never synchronize `dev` or deploy.
+4. Continue with the remaining Slice E runtime/release matrix.
 
 ## Honest remaining gaps
 
-- Slice C removes the live competing liveness authority but does not unify every dispatch/fallback paid-authorization decision; that remains Slice D.
 - Compaction-specific runtime proof, standalone empty-response and explicit-cancellation scenarios, and repeated unattended resource measurements remain for Slice E. Provider-stall success and recovery exhaustion are now proven in a real isolated runtime.
 - Slices A–C are committed, pushed, and open as PRs #1–#3. All three are CLA-blocked by required human action; Codex cannot satisfy or bypass that gate.
 - The fork task branch is safely pushed, but `origin/dev` remains 6,429 commits behind local production `dev`. This is a separate housekeeping task; no force-push, rewrite, synchronization, or production checkout mutation is authorized.
-- Milestone 2 has durable terminal/outbox behavior, autonomous parent wake, and a single live supervision/recovery authority. Unified dispatch authorization remains before the milestone can exit; Milestones 3–4 remain incomplete.
+- Milestone 2 now has durable terminal/outbox behavior, autonomous parent wake, one live supervision/recovery authority, and unified dispatch authorization. Slice E still owns the complete repeated runtime matrix and reproducible-release gate; Milestones 3–4 remain incomplete.
