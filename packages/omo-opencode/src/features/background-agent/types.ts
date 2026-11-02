@@ -144,6 +144,10 @@ export interface LaunchInput {
   userPermission?: Record<string, "ask" | "allow" | "deny">
   /** Marks this launch as a delegation-first recovery probe (machine-consumed by the control plane). */
   recoveryProbe?: boolean
+  /** Exact effective model already passed the shared final cost decision. */
+  effectiveModelAuthorized?: boolean
+  /** Recovery-only evidence that the retained candidate was verified free. */
+  verifiedFreeModel?: boolean
 }
 
 export interface ResumeInput {

@@ -163,6 +163,68 @@ export type PaidLaunchIdentity = {
   taskID: string
 }
 
+export type EffectiveModelDispatchDenyCode =
+  | 'MODEL_UNRESOLVED'
+  | 'PAID_APPROVAL_REQUIRED'
+  | 'PAID_APPROVAL_INVALID'
+
+export type EffectiveModelDispatchAuthorization =
+  | { allowed: true; kind: 'free'; model: string }
+  | { allowed: true; kind: 'approved_paid'; model: string; approvalNonce: string }
+  | { allowed: false; code: EffectiveModelDispatchDenyCode; message: string }
+
+/**
+ * Final, path-independent cost decision for the exact model that will execute.
+ * Free models proceed automatically. Paid and unknown-cost models require an
+ * exact single-use approval bound to root, worker, model, and logical task.
+ */
+export function authorizeEffectiveModelDispatch(input: {
+  resolvedModelKey: string | null | undefined
+  pricing: PricingCatalog | undefined
+  verifiedFree?: boolean
+  registry?: PaidConsentRegistry
+  approvalNonce?: string | null
+  identity: PaidLaunchIdentity
+  audit?: GovernanceAuditWriter
+}): EffectiveModelDispatchAuthorization {
+  const model = typeof input.resolvedModelKey === 'string' ? input.resolvedModelKey.trim() : ''
+  if (model.length === 0) {
+    return {
+      allowed: false,
+      code: 'MODEL_UNRESOLVED',
+      message: 'MODEL_UNRESOLVED: child dispatch has no exact effective provider/model; refusing an unpriced launch.',
+    }
+  }
+
+  if (input.verifiedFree === true || classifyPaidStatus(model, input.pricing) === 'free') {
+    return { allowed: true, kind: 'free', model }
+  }
+
+  if (!input.registry || !input.approvalNonce) {
+    return {
+      allowed: false,
+      code: 'PAID_APPROVAL_REQUIRED',
+      message: `PAID_APPROVAL_REQUIRED: paid or unknown-cost model "${model}" requires a fresh exact operator approval; no automatic fallback or recovery spend is allowed.`,
+    }
+  }
+
+  const approval = consumePaidApproval(
+    input.registry,
+    input.approvalNonce,
+    { ...input.identity, resolvedModelID: model },
+    input.audit,
+  )
+  if (!approval) {
+    return {
+      allowed: false,
+      code: 'PAID_APPROVAL_INVALID',
+      message: `PAID_APPROVAL_INVALID: approval is missing, consumed, or does not match root/worker/model/task for "${model}".`,
+    }
+  }
+
+  return { allowed: true, kind: 'approved_paid', model, approvalNonce: approval.nonce }
+}
+
 export class PaidConsentRegistry {
   private readonly approvals = new Map<string, PaidWorkerApproval>()
   private readonly consumed = new Set<string>()

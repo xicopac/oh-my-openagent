@@ -334,6 +334,14 @@ export interface BackgroundManagerConfig {
    * authorizeChildDispatch and fails closed if it is missing or mismatched.
    */
   launchGuard?: ChildLaunchGuard
+  /** Final cost authorization for automatic model switches. */
+  authorizeEffectiveModelDispatch?: (input: {
+    resolvedModelKey: string
+    rootSessionID: string
+    workerIdentity: string
+    taskID: string
+    verifiedFree?: boolean
+  }) => { allowed: true; kind: string; model: string } | { allowed: false; code: string; message: string }
 }
 
 export class BackgroundManager {
@@ -405,6 +413,7 @@ export class BackgroundManager {
   private readonly resourceGovernorDefaultChildTokens?: number
   private readonly settleChildDispatch?: (sessionID: string, escrowID: string, status: "completed" | "failed" | "exhausted") => void
   private readonly launchGuard?: ChildLaunchGuard
+  private readonly authorizeEffectiveModelDispatch?: BackgroundManagerConfig["authorizeEffectiveModelDispatch"]
   private readonly escrowByTask = new Map<string, { sessionID: string; escrowID: string; authorization?: ChildLaunchAuthorization }>()
 
   constructor(config: BackgroundManagerConfig) {
@@ -436,6 +445,7 @@ export class BackgroundManager {
     this.resourceGovernorDefaultChildTokens = options?.resourceGovernorDefaultChildTokens
     this.settleChildDispatch = options?.settleChildDispatch
     this.launchGuard = options?.launchGuard
+    this.authorizeEffectiveModelDispatch = options?.authorizeEffectiveModelDispatch
     this.logger = options?.log ?? log
     this.parentWakeNotifier = new ParentWakeNotifier(
       {
@@ -800,6 +810,21 @@ export class BackgroundManager {
   }
 
   private authorizeLaunch(input: LaunchInput): { escrowID: string | null; authorization: ChildLaunchAuthorization | null } | null {
+    if (!input.effectiveModelAuthorized && this.authorizeEffectiveModelDispatch) {
+      const resolvedModelID = input.model?.modelID
+        ? resolvedModelKey(input.model.providerID, input.model.modelID)
+        : ""
+      const decision = this.authorizeEffectiveModelDispatch({
+        resolvedModelKey: resolvedModelID,
+        rootSessionID: input.parentSessionId,
+        workerIdentity: input.agent,
+        taskID: `launch:${input.parentMessageId}`,
+        ...(input.verifiedFreeModel ? { verifiedFree: true } : {}),
+      })
+      if (!decision.allowed) {
+        throw new ResourceGovernorRejectedError(decision.message)
+      }
+    }
     const authorize = this.authorizeChildDispatch
     if (!authorize) return null
     const resolvedModelID = input.model?.modelID
@@ -817,6 +842,7 @@ export class BackgroundManager {
       requestedTier: null,
       expectedTokens: this.resourceGovernorDefaultChildTokens ?? 600_000,
       rootModelID,
+      consentApproved: input.effectiveModelAuthorized === true,
     })
     if (result.verdict !== "ALLOW") {
       throw new ResourceGovernorRejectedError(result.message)
@@ -2619,6 +2645,7 @@ The fallback retry session is now created and can be inspected directly.
       idleDeferralTimers: this.idleDeferralTimers,
       queuesByKey: this.queuesByKey,
       processKey: (key: string) => this.processKey(key),
+      authorizeEffectiveModelDispatch: this.authorizeEffectiveModelDispatch,
       onRetrying: ({ task, source }) => {
         const currentAttempt = getCurrentAttempt(task)
         const previousAttempt = getPreviousAttempt(task, currentAttempt?.attemptId)

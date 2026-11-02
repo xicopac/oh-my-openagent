@@ -26,7 +26,7 @@ import { createTaskProcessOwnership, type TaskProcessOwnership } from "./feature
 import { markServerRunningInProcess } from "./shared/tmux/tmux-utils/server-health"
 import type { ModelFallbackControllerAccessor } from "./hooks/model-fallback"
 import { authorizeChildDispatch, createResourceGovernorRuntime, loadPricingCatalog, type ResourceGovernorRuntime } from "./hooks/resource-governor"
-import { PaidConsentRegistry } from "./tools/delegate-task/paid-consent"
+import { PaidConsentRegistry, authorizeEffectiveModelDispatch } from "./tools/delegate-task/paid-consent"
 import { maxConcurrentPaidWorkers as paidConcurrencyLimit } from "./tools/delegate-task/paid-consent"
 import { recordRecoveryProbeTerminalFailure } from "./tools/delegate-task/recovery-probe"
 import {
@@ -441,6 +441,19 @@ export function createManagers(args: {
       ? (sessionID, escrowID, status) => resourceGovernorRuntime.settleChild(sessionID, escrowID, status)
       : undefined,
     launchGuard: resourceGovernorRuntime?.launchGuard,
+    authorizeEffectiveModelDispatch: (input) => authorizeEffectiveModelDispatch({
+      resolvedModelKey: input.resolvedModelKey,
+      pricing: { ...pricingCatalog, ...getCachedPricingForDelegateTask() },
+      verifiedFree: input.verifiedFree,
+      registry: paidConsentRegistry,
+      identity: {
+        rootSessionID: input.rootSessionID,
+        workerIdentity: input.workerIdentity,
+        resolvedModelID: input.resolvedModelKey,
+        taskID: input.taskID,
+      },
+      audit: governanceAudit,
+    }),
   })
 
   // Liveness probe: lets the delegation runtime distinguish "root is waiting on
