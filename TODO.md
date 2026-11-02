@@ -94,10 +94,22 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 
 ## Slice D — unified paid/free dispatch authorization
 
-- [ ] Enumerate sync, background, continuation, retry, relaunch, fallback, and resume dispatch entry points.
-- [ ] Add one effective-model authorization decision and idempotent approval consumption.
-- [ ] Prove free-first selection and zero unauthorized paid-route requests on the fake-provider ledger.
-- [ ] Update durable state, commit atomically, PR, verify, and merge without deployment.
+- [x] Enumerate initial sync/background, unstable-agent, continuation, background retry, sync prompt fallback, sync replacement-session fallback, recovery relaunch, and resume entry points.
+- [x] Capture focused baseline tests for paid consent, free-first dispatch, recovery authorization, background fallback, and sync fallback before source edits.
+- [x] Add RED tests for one final effective-model decision: verified free allow, unknown-cost fail closed, exact paid approval allow once, wrong identity reject, and replay reject.
+- [x] Add a RED background fallback test proving an unapproved paid/unknown next model is never queued or prompted, while a catalog-verified free fallback remains eligible.
+- [x] Add RED sync fallback tests proving both same-session prompt fallback and replacement-session fallback reject an unapproved paid/unknown model before provider dispatch.
+- [x] Add a RED recovery test proving a static approval file cannot authorize paid automatic recovery and exact verified-free evidence still allows a free relaunch.
+- [x] Implement the shared effective-model decision on top of the single-use `PaidConsentRegistry`; missing model/pricing is paid/unknown and fails closed without exact approval.
+- [x] Wire BackgroundManager initial launch and fallback retry through the shared decision; pass the initial approval nonce/task identity to the execution boundary and never copy it to automatic fallback/recovery attempts.
+- [x] Wire sync initial dispatch and both sync fallback paths through the same decision.
+- [x] Remove the recovery approval-file exception and retain only catalog/retained-worker verified-free automatic relaunch.
+- [x] Pass exact dispatch approval through Resource Governor once so a valid launch is not rejected and no reusable session consent is created.
+- [x] Run the focused unit scope and scoped OpenCode adapter typecheck (119 pass, 0 fail, 355 assertions; typecheck exit 0).
+- [x] Build/import the candidate and run isolated real OpenCode fake-provider scenarios proving no unapproved paid/unknown request and exactly one synthetic single-use approved paid request.
+- [x] Prove only configured local fake endpoints were contacted, real stores were unchanged, and exact test processes stopped.
+- [x] Freeze reviewer-readable evidence and SHA-256 manifest under `.omo/evidence/20261101-dispatch-authorization/`.
+- [ ] Update durable state, commit atomically, verify merge bases/dependent diff, push, open the stacked PR, and stop before deployment.
 
 ## Slice E — reliability gate and reproducible release
 

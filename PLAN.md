@@ -1,9 +1,9 @@
 # OMO Stabilization Plan
 
-Last updated: 2026-11-01 (Europe/Madrid)
+Last updated: 2026-11-02 (Europe/Madrid)
 Owner: Codex
 Canonical base: `4d1961c7e45223590768cce43093a839198eb28a`
-Implementation worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-worker-supervisor` (Slice C, stacked on reviewed Slice B commit `22e99e7fa`)
+Implementation worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-dispatch-authorization` (Slice D, stacked on reviewed Slice C commit `6784d7a61`)
 Production boundary: `/srv/dev/oh-my-openagent` is read-only and must not be built, edited, restarted, or deployed by this plan.
 
 ## Objective
@@ -160,6 +160,26 @@ Changes:
 Verification:
 
 - Real fake-provider request ledger proves zero paid-route requests without approval and exactly one authorized request with synthetic approval; no real paid provider is contacted.
+
+Implementation checkpoint (2026-11-01):
+
+- Retain the existing host permission prompt and `PaidConsentRegistry` as the only source of explicit paid-worker approval; do not add a file-based or model-authored approval path.
+- Add one final effective-model decision that treats missing pricing as paid, allows verified free models, and consumes an exact root/worker/model/task approval for paid or unknown-cost models.
+- Invoke that decision from BackgroundManager's initial launch boundary and every background fallback attempt. Automatic recovery and fallback carry no approval nonce, so they may use only verified free models.
+- Route sync initial dispatch through the same decision and add a free-only decision before every in-session prompt fallback or replacement-session fallback.
+- Remove the recovery relaunch approval-file exception. A retained recovery candidate is automatically eligible only when catalog pricing or the retained worker record verifies it as free; paid recovery requires a new interactive operator approval and therefore fails closed in unattended recovery.
+- Preserve Resource Governor escrow/backstop as the resource-budget authority after cost authorization; cost authorization and resource budgeting remain distinct checks at one launch boundary.
+- Prove the boundary with focused RED/GREEN tests and real isolated OpenCode request ledgers for free fallback, unapproved paid/unknown fallback rejection, and one synthetic single-use paid approval. No real provider is contacted.
+
+Verification checkpoint (2026-11-02):
+
+- A single final `authorizeEffectiveModelDispatch()` decision now covers initial task dispatch, direct manager launches, background fallback, sync prompt fallback, sync replacement-session fallback, and recovery relaunch.
+- Paid/unknown automatic fallback and recovery fail closed. Static recovery approval files no longer grant spending authority; only catalog or retained-record verified-free recovery proceeds unattended.
+- Exact paid approval is bound to root, worker, effective model, and logical task and is consumed once. The Resource Governor receives that approval only for the same dispatch, so its older consent check no longer rejects a valid launch or creates reusable session consent.
+- Final focused scope: 119 tests pass, 0 fail, 355 assertions; scoped OpenCode adapter typecheck exits 0.
+- Candidate bundle: 2,163 modules, SHA-256 `c9efff12498a282b330db709154fea16997ac30faa94d7787547a527ad5079f0`; required assets materialize and the bundle imports successfully.
+- Real OpenCode 1.19.3 proof on that exact bundle: free completion persisted an acknowledged terminal result and woke the idle parent; unattended paid dispatch made zero paid-model requests and created zero workers; synthetic explicit approval made exactly one paid-model request and one worker record.
+- All runtime requests used local fake endpoints, the real OpenCode DB remained at 2,351 sessions, the real worker store remained at 93 records, and every exact test process stopped.
 
 ### Slice E — Runtime reliability gate and release reproducibility
 
