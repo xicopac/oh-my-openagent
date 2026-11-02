@@ -67,6 +67,12 @@ export async function tryFallbackRetry(args: {
     failedError?: string
     nextModel: string
   }) => void
+  authorizeEffectiveModelDispatch?: (input: {
+    resolvedModelKey: string
+    rootSessionID: string
+    workerIdentity: string
+    taskID: string
+  }) => { allowed: true; kind: string; model: string } | { allowed: false; code: string; message: string }
   deps?: Partial<FallbackRetryHandlerDeps>
 }): Promise<boolean> {
   const { task, errorInfo, source, concurrencyManager, client, idleDeferralTimers, queuesByKey, processKey, onRetrying } = args
@@ -152,6 +158,28 @@ export async function tryFallbackRetry(args: {
     task.model?.providerID,
   )
 
+  const transformedModelId = deps.transformModelForProvider(providerID, nextFallback.model)
+  const nextModel = {
+    providerID,
+    modelID: transformedModelId,
+    variant: nextFallback.variant,
+  }
+  const dispatchAuthorization = args.authorizeEffectiveModelDispatch?.({
+    resolvedModelKey: `${providerID}/${transformedModelId}`,
+    rootSessionID: task.rootSessionId ?? task.parentSessionId,
+    workerIdentity: task.agent,
+    taskID: task.id,
+  })
+  if (dispatchAuthorization && !dispatchAuthorization.allowed) {
+    deps.log("[background-agent] Fallback dispatch denied:", {
+      taskId: task.id,
+      source,
+      code: dispatchAuthorization.code,
+      model: `${providerID}/${transformedModelId}`,
+    })
+    return false
+  }
+
   deps.log("[background-agent] Retryable error, attempting fallback:", {
     taskId: task.id,
     source,
@@ -175,12 +203,6 @@ export async function tryFallbackRetry(args: {
   const previousSessionID = task.sessionId
   const previousModel = task.model
 
-  const transformedModelId = deps.transformModelForProvider(providerID, nextFallback.model)
-  const nextModel = {
-    providerID,
-    modelID: transformedModelId,
-    variant: nextFallback.variant,
-  }
   task.attemptCount = selectedAttemptCount
   const failedAttemptID = ensureCurrentAttempt(task, previousModel).attemptId
   const nextAttempt = failedAttemptID
