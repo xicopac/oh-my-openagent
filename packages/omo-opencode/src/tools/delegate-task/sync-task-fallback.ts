@@ -27,6 +27,7 @@ export async function retrySyncPromptWithFallbacks(input: {
   categoryModel: DelegatedModelConfig | undefined
   fallbackChain: FallbackEntry[] | undefined
   sendPrompt: (categoryModel: DelegatedModelConfig) => Promise<string | null>
+  authorizeFallback?: (categoryModel: DelegatedModelConfig) => string | null
 }): Promise<{ promptError: string | null; categoryModel: DelegatedModelConfig | undefined; fallbackState?: ModelFallbackState }> {
   const { sessionID, initialError, categoryModel, fallbackChain, sendPrompt } = input
 
@@ -59,6 +60,14 @@ export async function retrySyncPromptWithFallbacks(input: {
     }
 
     const fallbackModel = toDelegatedModelConfig(nextFallback)
+    const authorizationError = input.authorizeFallback?.(fallbackModel) ?? null
+    if (authorizationError) {
+      return {
+        promptError: authorizationError,
+        categoryModel,
+        fallbackState,
+      }
+    }
     const promptError = await sendPrompt(fallbackModel)
     if (!promptError) {
       return {
