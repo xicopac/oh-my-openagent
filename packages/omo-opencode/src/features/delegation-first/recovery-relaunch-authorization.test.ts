@@ -108,28 +108,24 @@ describe("recovery relaunch authorization", () => {
   })
 
   test("#given a paid model with no approval #when evaluated #then it is denied fail-closed", () => {
-    const decision = authorizeRecoveryRelaunch(
-      baseInput({ model: PAID_MODEL, approvalsPath: join(tempDir(), "missing.json") }),
-    )
+    const decision = authorizeRecoveryRelaunch(baseInput({ model: PAID_MODEL }))
     expect(decision.allowed).toBe(false)
     if (decision.allowed) return
-    expect(decision.code).toBe("PAID_APPROVAL_MISSING")
+    expect(decision.code).toBe("MODEL_PAID")
   })
 
-  test("#given an explicitly approved paid model #when evaluated #then the deployed v1 approval permits it", () => {
-    const decision = authorizeRecoveryRelaunch(
-      baseInput({ model: PAID_MODEL, approvalsPath: approvalPath([{ model: PAID_MODEL }]) }),
-    )
-    expect(decision.allowed).toBe(true)
-    if (!decision.allowed) return
-    expect(decision.kind).toBe("approved_paid")
+  test("#given a static approval-file entry for a paid model #when automatic recovery evaluates it #then it still fails closed", () => {
+    approvalPath([{ model: PAID_MODEL }])
+    const decision = authorizeRecoveryRelaunch(baseInput({ model: PAID_MODEL }))
+    expect(decision.allowed).toBe(false)
+    if (decision.allowed) return
+    expect(decision.code).toBe("MODEL_PAID")
   })
 
   test("#given paid workers disabled by policy #when a paid model is evaluated #then even an approval cannot permit it", () => {
     const decision = authorizeRecoveryRelaunch(
       baseInput({
         model: PAID_MODEL,
-        approvalsPath: approvalPath([{ model: PAID_MODEL }]),
         modelRouting: {
           allow_paid_workers: true,
           max_concurrent_paid_workers: 1,
@@ -147,7 +143,6 @@ describe("recovery relaunch authorization", () => {
       baseInput({
         model: PAID_MODEL,
         requestingSessionID: "child",
-        approvalsPath: approvalPath([{ model: PAID_MODEL }]),
       }),
     )
     expect(decision.allowed).toBe(false)
@@ -155,13 +150,13 @@ describe("recovery relaunch authorization", () => {
     expect(decision.code).toBe("PAID_AUTHORITY_REJECTED")
   })
 
-  test("#given an invalid approval file #when a paid model is evaluated #then it is denied", () => {
+  test("#given an invalid approval file #when automatic recovery evaluates a paid model #then the file is irrelevant and spending is denied", () => {
     const path = join(tempDir(), "paid-model-approvals.json")
     writeFileSync(path, "{not-json")
-    const decision = authorizeRecoveryRelaunch(baseInput({ model: PAID_MODEL, approvalsPath: path }))
+    const decision = authorizeRecoveryRelaunch(baseInput({ model: PAID_MODEL }))
     expect(decision.allowed).toBe(false)
     if (decision.allowed) return
-    expect(decision.code).toBe("PAID_APPROVAL_INVALID")
+    expect(decision.code).toBe("MODEL_PAID")
   })
 })
 
@@ -203,7 +198,6 @@ describe("recovery relaunch handler", () => {
         },
       },
       pricing: () => PRICING,
-      approvalsPath: join(tempDir(), "missing.json"),
     })
 
     const outcome = await handler(makeAssignment(), paidAction, "replacement")
@@ -275,7 +269,6 @@ describe("recovery runtime terminal handling", () => {
         },
       },
       pricing: () => PRICING,
-      approvalsPath: join(tempDir(), "missing.json"),
     })
     runtime.setRecoverySink({
       cancel: (sessionID, reason, options) => {

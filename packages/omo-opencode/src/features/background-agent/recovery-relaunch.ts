@@ -21,7 +21,6 @@ export type CreateRecoveryRelaunchHandlerInput = {
   backgroundManager: RecoveryRelaunchLauncher
   pricing: () => PricingCatalog
   modelRouting?: ModelRoutingConfig
-  approvalsPath?: string
   audit?: GovernanceAuditWriter
   onSessionCreated?: (assignmentID: string, sessionID: string) => void
 }
@@ -45,7 +44,6 @@ export function createRecoveryRelaunchHandler(
       modelRouting: input.modelRouting,
       rootSessionID: assignment.root_session_id,
       requestingSessionID: assignment.parent_session_id,
-      approvalsPath: input.approvalsPath,
     })
 
     if (!authorization.allowed) {
@@ -105,6 +103,7 @@ export function createRecoveryRelaunchHandler(
       parentAgent: assignment.parent_agent,
       parentTools: assignment.parent_tools,
       model: replacementModel,
+      verifiedFreeModel: authorization.kind === "free",
       fallbackChain,
       skills: assignment.skills,
       skillContent: assignment.skill_content,
