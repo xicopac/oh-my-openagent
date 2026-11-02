@@ -1,7 +1,7 @@
 # OMO Stabilization State
 
 Last updated: 2026-11-02 Europe/Madrid
-Status: Slice A PR #1, Slice B PR #2, and Slice C PR #3 form a clean mergeable stack; all active automation passes except the human CLA signature. Slice D unified dispatch authorization is implemented and runtime-verified in its dependent worktree, pending atomic commits and PR. No production changes.
+Status: Slice A PR #1, Slice B PR #2, Slice C PR #3, and Slice D PR #4 form a clean mergeable stack. Earlier PR automation is green except the human CLA signature; PR #4 checks are newly queued. No production changes.
 
 ## Repository state
 
@@ -25,6 +25,7 @@ Status: Slice A PR #1, Slice B PR #2, and Slice C PR #3 form a clean mergeable s
 - Active Slice D worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-dispatch-authorization` on `fix/stabilize-dispatch-authorization`, stacked from Slice C status commit `6784d7a61`.
 - Slice D evidence: `.omo/evidence/20261101-dispatch-authorization/`; local and gitignored.
 - Slice D candidate bundle: SHA-256 `c9efff12498a282b330db709154fea16997ac30faa94d7787547a527ad5079f0`; ignored build artifact only, not production.
+- Slice D PR: `https://github.com/xicopac/oh-my-openagent/pull/4`, base `fix/stabilize-worker-supervisor`, exact Slice C merge base `6784d7a61`, exact canonical merge base `4d1961c7e`, six implementation/evidence commits and 23 intended files before this status-only checkpoint. GitHub reports the PR clean and mergeable.
 
 ## Confirmed findings
 
@@ -84,14 +85,14 @@ All final runtime runs used only local fake endpoints, left the real OpenCode DB
 
 ## Next checkpoint
 
-1. Commit Slice D atomically, verify its exact merge bases and diff, push, and open PR #4 against Slice C.
-2. The human `xicopac` account signs the CLA so PRs #1–#4 can satisfy their only non-automatable gate.
+1. Observe PR #4 automation and repair any real finding with fresh scoped QA.
+2. The human `xicopac` account signs the CLA so PRs #1–#4 can satisfy their non-automatable gate.
 3. Merge the stack in dependency order with merge commits after gates pass; never synchronize `dev` or deploy.
 4. Continue with the remaining Slice E runtime/release matrix.
 
 ## Honest remaining gaps
 
 - Compaction-specific runtime proof, standalone empty-response and explicit-cancellation scenarios, and repeated unattended resource measurements remain for Slice E. Provider-stall success and recovery exhaustion are now proven in a real isolated runtime.
-- Slices A–C are committed, pushed, and open as PRs #1–#3. All three are CLA-blocked by required human action; Codex cannot satisfy or bypass that gate.
+- Slices A–D are committed, pushed, and open as PRs #1–#4. The earlier stack is CLA-blocked by required human action; Codex cannot satisfy or bypass that gate.
 - The fork task branch is safely pushed, but `origin/dev` remains 6,429 commits behind local production `dev`. This is a separate housekeeping task; no force-push, rewrite, synchronization, or production checkout mutation is authorized.
 - Milestone 2 now has durable terminal/outbox behavior, autonomous parent wake, one live supervision/recovery authority, and unified dispatch authorization. Slice E still owns the complete repeated runtime matrix and reproducible-release gate; Milestones 3–4 remain incomplete.

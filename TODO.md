@@ -109,7 +109,8 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 - [x] Build/import the candidate and run isolated real OpenCode fake-provider scenarios proving no unapproved paid/unknown request and exactly one synthetic single-use approved paid request.
 - [x] Prove only configured local fake endpoints were contacted, real stores were unchanged, and exact test processes stopped.
 - [x] Freeze reviewer-readable evidence and SHA-256 manifest under `.omo/evidence/20261101-dispatch-authorization/`.
-- [ ] Update durable state, commit atomically, verify merge bases/dependent diff, push, open the stacked PR, and stop before deployment.
+- [x] Update durable state, commit atomically, verify exact Slice C/canonical merge bases and the 23-file dependent diff, push, and open clean mergeable stacked PR #4.
+- [!] Merge PR #4 with a merge commit after #1–#3 and all active gates pass. Human CLA action remains outside Codex authority; no deployment.
 
 ## Slice E — reliability gate and reproducible release
 
