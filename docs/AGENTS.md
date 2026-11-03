@@ -45,6 +45,7 @@
 | `omo-ai` npm publishing playbook | [docs/reference/omo-ai-publishing.md](reference/omo-ai-publishing.md) |
 | mass-ULW dag protocol (events, catch-up, overflow) | [docs/reference/mass-ulw-protocol.md](reference/mass-ulw-protocol.md) |
 | Monitor tool reference | [docs/reference/monitor.md](reference/monitor.md) |
+| Worker lifecycle, recovery, authorization, and release invariants | [docs/reference/worker-reliability-architecture.md](reference/worker-reliability-architecture.md) |
 | Web-terminal visual QA helper | [docs/reference/web-terminal-visual-qa.md](reference/web-terminal-visual-qa.md) |
 | Sample configs | [docs/examples/](examples) (default, coding-focused, planning-focused) |
 | Privacy & ToS | [docs/legal/](legal) |

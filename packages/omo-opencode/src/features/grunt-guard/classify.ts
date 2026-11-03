@@ -1,9 +1,9 @@
 /**
  * Deterministic semantic classifier for the hard worker-first gate. Distinguishes
  * harmless orchestration/metadata from broad delegable repository work, WITHOUT any
- * model call. Classification is cheap, regex-only, and conservative: it only marks
- * an operation as delegable exploration when the signal is unambiguous — unknown
- * operations default to `control` so a false positive can never deadlock MAIN.
+ * model call. Classification is cheap and conservative. Equivalent effects receive
+ * the same class across native and shell spellings, while opaque/unknown execution
+ * fails closed as implementation instead of silently becoming control-plane work.
  */
 
 import type { GruntToolHint } from "./gate"
@@ -12,6 +12,7 @@ import { isMcpPrefixedTool } from "./detector"
 /** Semantics of a bash `command` string (the `bash` tool's single argument). */
 export type ShellSemantics =
   | "metadata"
+  | "diagnostic"
   | "narrow_read"
   | "discovery"
   | "investigation"
@@ -30,12 +31,21 @@ export type OperationClass =
   | "delegation"
 
 const DELEGATION_TOOL_NAMES = new Set(["task", "call_omo_agent"])
+const IMPLEMENTATION_TOOL_NAMES = new Set(["edit", "write", "multiedit", "apply_patch", "mkdir"])
+const BROAD_TOOL_NAMES = new Set(["glob", "webfetch", "websearch"])
+const NARROW_TOOL_NAMES = new Set(["read"])
+const SHELL_TOOL_NAMES = new Set(["bash", "interactive_bash"])
 
 const CONTROL_TOOL_NAMES: ReadonlySet<string> = new Set([
   "background_output",
   "background_cancel",
+  "session_list",
   "session_read",
   "session_search",
+  "session_info",
+  "skill",
+  "skill_mcp",
+  "look_at",
   "todowrite",
   "todo_write",
   "question",
@@ -47,6 +57,10 @@ const CONTROL_TOOL_NAMES: ReadonlySet<string> = new Set([
   "monitor_stop",
   "monitor_list",
   "monitor_output",
+  "task_create",
+  "task_get",
+  "task_list",
+  "task_update",
   "lsp_status",
   "lsp_diagnostics",
   "lsp_goto_definition",
@@ -60,6 +74,7 @@ const CONTROL_TOOL_NAMES: ReadonlySet<string> = new Set([
 /** Semantics of a bash `command` string (the `bash` tool's single argument). */
 const DISCOVERY_COMMANDS: RegExp[] = [
   /\bgrep\s+-[a-zA-Z]*[Rr]\b/,          // grep -R / grep -r / rgrep
+  /(^|\s)grep\b/,
   /(^|\s)(rg|ripgrep|ack|ag|fd|tree|locate)\b/,
   /(^|\s)find\b/,
   /\bls\s+.*-R\b/,                       // ls -R (recursive)
@@ -68,11 +83,17 @@ const DISCOVERY_COMMANDS: RegExp[] = [
 ]
 
 const INVESTIGATION_COMMANDS: RegExp[] = [
-  /\bdocker\s+(inspect|logs|exec|ps|events|top|diff|stats|compose.*logs)\b/,
-  /\bkubectl\s+(logs|describe|exec|get\s+-o\s+yaml)\b/,
   /(^|\s)(strace|gdb|lldb)\s/,
-  /(^|\s)(journalctl|tail\s+-f|debugfs)\s/,
+  /(^|\s)(tail\s+-f|debugfs)\s/,
   /\bssh\s+.*(gdb|strace|tcpdump)\b/,
+]
+
+const DIAGNOSTIC_COMMANDS: RegExp[] = [
+  /^docker\s+(inspect|logs|ps|top|diff)\b/,
+  /^docker\s+compose\b.*\blogs\b/,
+  /^kubectl\s+(logs|describe|get)\b/,
+  /^(journalctl|ps|pgrep|pstree|ss|netstat|lsof|df|du|free|uptime|vmstat|iostat)\b/,
+  /^systemctl\s+(status|show|is-active|is-failed)\b/,
 ]
 
 const TEST_BUILD_COMMANDS: RegExp[] = [
@@ -100,14 +121,21 @@ const IMPLEMENTATION_COMMANDS: RegExp[] = [
   /\bcargo\s+add\b/,
   /\bgo\s+get\b/,
   /\bmake\s+install\b/,
+  /^(rm|mv|cp|touch|mkdir|rmdir|chmod|chown|ln|install|truncate|tee|dd|patch)\b/,
+  /^(docker|kubectl)\s+exec\b/,
+  /^(python|python3|node|nodejs|deno|ruby|php|osascript)\b(?!\s+(-v|--version|-V)\b)/,
+  /^(bun|npx|pnpm|yarn)\s+(-e|--eval)\b/,
   /\bcat\s+<<\s*['"]?[-A-Za-z0-9_]+['"]?\s*>\s*\S+/,
-  />\s*\/?[A-Za-z0-9_.\-/]+\s*\$?/,
 ]
 
 const METADATA_COMMANDS: RegExp[] = [
-  /^git\s+(status|log|diff|show|rev-parse|branch|remote|config|stash|tag|describe|shortlog|blame|mergetool|reflog|worktree|ls-files|check-ignore)\b/,
-  /^git\s+(--version|init|help)\b/,
-  /^git\s+diff\s+--stat\b/,
+  /^git\s+(status|log|diff|show|rev-parse|describe|shortlog|blame|reflog|ls-files|check-ignore)\b/,
+  /^git\s+(--version|help)\b/,
+  /^git\s+branch(?:\s+(?:--show-current|--list|-l|-a|-r|-v|-vv|--contains|--merged|--no-merged)\b)*\s*$/,
+  /^git\s+remote(?:\s+-v|\s+get-url\b.*)?\s*$/,
+  /^git\s+config\s+(--get|--get-all|--get-regexp|--list|--show-origin)\b/,
+  /^git\s+worktree\s+list\b/,
+  /^git\s+tag\s+(--list|-l)\b/,
   /^pwd\s*$/,
   /^ls\b(?!.*-R)/,
   /^echo\s/,
@@ -121,8 +149,9 @@ const METADATA_COMMANDS: RegExp[] = [
 ]
 
 const NARROW_READ_COMMANDS: RegExp[] = [
-  /^(cat|less|head|tail)\s+\/?[A-Za-z0-9_.\-/]+\s*$/,
-  /^sed\s+(-n\s+)?(['"][^'"]*['"]\s+)?[A-Za-z0-9_.\-/]+\s*$/,
+  /^(cat|less)\s+(?:--\s+)?\/?[A-Za-z0-9_.\-/]+\s*$/,
+  /^(head|tail)\s+(?:(?:-n\s+|-)[0-9]+\s+)?\/?[A-Za-z0-9_.\-/]+\s*$/,
+  /^sed\s+(?:-n\s+)?(?:['"]?[^'"\s]+['"]?\s+)?[A-Za-z0-9_.\-/]+\s*$/,
 ]
 
 function firstMatch(command: string, patterns: RegExp[]): boolean {
@@ -140,28 +169,269 @@ function isMultiFileCat(command: string): boolean {
   return tokens.length > 1
 }
 
+const SHELL_EXECUTABLES = new Set(["bash", "sh", "zsh", "dash", "ksh"])
+const SIMPLE_WRAPPERS = new Set(["command", "exec", "nohup", "time"])
+const ASSIGNMENT_TOKEN = /^[A-Za-z_][A-Za-z0-9_]*=/
+
+const SHELL_SEMANTICS_PRIORITY: Record<ShellSemantics, number> = {
+  control: 0,
+  metadata: 1,
+  diagnostic: 2,
+  narrow_read: 3,
+  test_build: 4,
+  implementation: 5,
+  discovery: 6,
+  investigation: 7,
+}
+
+function tokenizeShellWords(command: string): string[] | null {
+  const words: string[] = []
+  let word = ""
+  let quote: "'" | '"' | null = null
+  let escaped = false
+
+  const flush = (): void => {
+    if (word.length > 0) words.push(word)
+    word = ""
+  }
+
+  for (const char of command) {
+    if (escaped) {
+      word += char
+      escaped = false
+      continue
+    }
+    if (char === "\\" && quote !== "'") {
+      escaped = true
+      continue
+    }
+    if (quote !== null) {
+      if (char === quote) quote = null
+      else word += char
+      continue
+    }
+    if (char === "'" || char === '"') {
+      quote = char
+      continue
+    }
+    if (/\s/.test(char)) {
+      flush()
+      continue
+    }
+    word += char
+  }
+
+  if (escaped || quote !== null) return null
+  flush()
+  return words
+}
+
+function unwrapShellSegment(command: string): string | null {
+  let current = command.trim()
+  for (let depth = 0; depth < 8; depth += 1) {
+    const words = tokenizeShellWords(current)
+    if (!words || words.length === 0) return words ? "" : null
+
+    while (words.length > 0 && ASSIGNMENT_TOKEN.test(words[0] ?? "")) words.shift()
+    const executable = words[0]
+    if (!executable) return ""
+
+    if (executable === "sudo") return null
+
+    if (executable === "env") {
+      words.shift()
+      while (words.length > 0) {
+        const token = words[0] ?? ""
+        if (ASSIGNMENT_TOKEN.test(token) || token === "--") {
+          words.shift()
+          continue
+        }
+        if (token === "-u" || token === "--unset" || token === "-C" || token === "--chdir") {
+          if (words.length < 2) return null
+          words.splice(0, 2)
+          continue
+        }
+        if (token.startsWith("--unset=") || token.startsWith("--chdir=")) {
+          words.shift()
+          continue
+        }
+        if (token.startsWith("-")) return null
+        break
+      }
+      current = words.join(" ")
+      continue
+    }
+
+    if (SIMPLE_WRAPPERS.has(executable)) {
+      words.shift()
+      while ((words[0] ?? "").startsWith("-")) words.shift()
+      current = words.join(" ")
+      continue
+    }
+
+    if (executable === "timeout") {
+      words.shift()
+      while ((words[0] ?? "").startsWith("-")) {
+        const option = words.shift() ?? ""
+        if (option === "-k" || option === "--kill-after" || option === "-s" || option === "--signal") {
+          if (words.length === 0) return null
+          words.shift()
+        }
+      }
+      if (words.length < 2) return null
+      words.shift()
+      current = words.join(" ")
+      continue
+    }
+
+    if (executable === "nice") {
+      words.shift()
+      if (words[0] === "-n" || words[0] === "--adjustment") {
+        if (words.length < 3) return null
+        words.splice(0, 2)
+      } else if ((words[0] ?? "").startsWith("--adjustment=")) {
+        words.shift()
+      }
+      current = words.join(" ")
+      continue
+    }
+
+    if (executable === "stdbuf") {
+      words.shift()
+      while (/^-[ioe]/.test(words[0] ?? "")) words.shift()
+      current = words.join(" ")
+      continue
+    }
+
+    if (executable === "setsid") {
+      words.shift()
+      while ((words[0] ?? "").startsWith("-")) words.shift()
+      current = words.join(" ")
+      continue
+    }
+
+    if (SHELL_EXECUTABLES.has(executable)) {
+      let commandIndex = -1
+      for (let index = 1; index < words.length; index += 1) {
+        const token = words[index] ?? ""
+        if (token === "--command" || /^-[A-Za-z]*c[A-Za-z]*$/.test(token)) {
+          commandIndex = index + 1
+          break
+        }
+      }
+      if (commandIndex < 0 || commandIndex >= words.length) return null
+      current = words[commandIndex] ?? ""
+      continue
+    }
+
+    return current
+  }
+  return null
+}
+
+function stripSafeRedirects(command: string): string {
+  return command
+    .replace(/\s+2\s*>\s*\/dev\/null(?=\s|$)/g, " ")
+    .replace(/\s+2\s*>\s*&\s*1(?=\s|$)/g, " ")
+    .replace(/\s+1\s*>\s*\/dev\/null(?=\s|$)/g, " ")
+}
+
+function scanShellSegments(command: string): { segments: string[]; opaque: boolean } {
+  const segments: string[] = []
+  let segment = ""
+  let quote: "'" | '"' | null = null
+  let escaped = false
+
+  const flush = (): void => {
+    const trimmed = segment.trim()
+    if (trimmed) segments.push(trimmed)
+    segment = ""
+  }
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] ?? ""
+    const next = command[index + 1] ?? ""
+    if (escaped) {
+      segment += char
+      escaped = false
+      continue
+    }
+    if (char === "\\" && quote !== "'") {
+      segment += char
+      escaped = true
+      continue
+    }
+    if (quote !== null) {
+      segment += char
+      if (char === quote) quote = null
+      else if (quote === '"' && (char === "`" || (char === "$" && next === "("))) {
+        return { segments: [], opaque: true }
+      }
+      continue
+    }
+    if (char === "'" || char === '"') {
+      quote = char
+      segment += char
+      continue
+    }
+    if (char === "`" || ((char === "$" || char === "<" || char === ">") && next === "(")) {
+      return { segments: [], opaque: true }
+    }
+    if (char === "<" || char === ">") return { segments: [], opaque: true }
+    if (char === ";" || char === "\n" || char === "|" || (char === "&" && next === "&")) {
+      flush()
+      if ((char === "|" || char === "&") && next === char) index += 1
+      continue
+    }
+    segment += char
+  }
+
+  if (escaped || quote !== null) return { segments: [], opaque: true }
+  flush()
+  return { segments, opaque: false }
+}
+
+function classifySimpleSegment(command: string): ShellSemantics {
+  if (firstMatch(command, INVESTIGATION_COMMANDS)) return "investigation"
+  if (firstMatch(command, DISCOVERY_COMMANDS)) return "discovery"
+  if (firstMatch(command, TEST_BUILD_COMMANDS)) return "test_build"
+  if (firstMatch(command, IMPLEMENTATION_COMMANDS)) return "implementation"
+  if (firstMatch(command, DIAGNOSTIC_COMMANDS)) return "diagnostic"
+  if (firstMatch(command, METADATA_COMMANDS)) return "metadata"
+  if (isMultiFileCat(command)) return "discovery"
+  if (firstMatch(command, NARROW_READ_COMMANDS)) return "narrow_read"
+  return "implementation"
+}
+
 /**
  * Classify a raw bash command string into a semantic bucket. Deterministic and
- * regex-only. Priority: investigation > discovery > test_build > implementation >
- * metadata > narrow_read, with the multi-file cat refinement before narrow_read.
+ * wrapper-aware. Shell substitutions, malformed quoting, redirection to a file,
+ * and commands whose effects are not known are classified as implementation.
  */
 export function classifyShellCommand(command: string | undefined): ShellSemantics {
   if (!command || command.length === 0) return "control"
-  const trimmed = command.trim()
+  const scan = scanShellSegments(stripSafeRedirects(command.trim()))
+  if (scan.opaque) return "implementation"
 
-  if (firstMatch(trimmed, INVESTIGATION_COMMANDS)) return "investigation"
-  if (firstMatch(trimmed, DISCOVERY_COMMANDS)) return "discovery"
-  if (firstMatch(trimmed, TEST_BUILD_COMMANDS)) return "test_build"
-  if (firstMatch(trimmed, IMPLEMENTATION_COMMANDS)) return "implementation"
-  if (firstMatch(trimmed, METADATA_COMMANDS)) return "metadata"
-  if (isMultiFileCat(trimmed)) return "discovery"
-  if (firstMatch(trimmed, NARROW_READ_COMMANDS)) return "narrow_read"
-
-  return "control"
+  let mostRestrictive: ShellSemantics = "control"
+  for (const raw of scan.segments) {
+    const unwrapped = unwrapShellSegment(raw)
+    if (unwrapped === null) return "implementation"
+    const innerScan = scanShellSegments(stripSafeRedirects(unwrapped))
+    if (innerScan.opaque) return "implementation"
+    for (const inner of innerScan.segments) {
+      const semantics = classifySimpleSegment(inner)
+      if (SHELL_SEMANTICS_PRIORITY[semantics] > SHELL_SEMANTICS_PRIORITY[mostRestrictive]) {
+        mostRestrictive = semantics
+      }
+    }
+  }
+  return mostRestrictive
 }
 
 const SHELL_TO_OPERATION: Record<ShellSemantics, OperationClass> = {
   metadata: "metadata",
+  diagnostic: "metadata",
   narrow_read: "narrow",
   discovery: "broad",
   investigation: "broad",
@@ -186,7 +456,8 @@ export function classifyOperation(tool: string | undefined, hint?: GruntToolHint
   // session cannot use an MCP bridge to bypass the delegation gate.
   if (isMcpPrefixedTool(name)) {
     const bare = name.replace(/^mcp[_-]+/i, "")
-    return DELEGATION_TOOL_NAMES.has(bare) ? "delegation" : "broad"
+    if (DELEGATION_TOOL_NAMES.has(bare)) return "delegation"
+    return isKnownOperationTool(bare) ? classifyOperation(bare, hint) : "broad"
   }
 
   // `interactive_bash` must be classified through the shell semantic classifier,
@@ -210,7 +481,22 @@ export function classifyOperation(tool: string | undefined, hint?: GruntToolHint
   if (name === "read") return "narrow"
   if (name === "session_read") return "control"
 
-  if (name === "edit" || name === "write") return "implementation"
+  if (IMPLEMENTATION_TOOL_NAMES.has(name)) return "implementation"
 
-  return "control"
+  if (name === "webfetch" || name === "websearch") return "broad"
+
+  return "implementation"
+}
+
+/** True when an `mcp_` prefix is a compatibility alias for a known local tool. */
+export function isKnownOperationTool(tool: string | undefined): boolean {
+  const name = (tool ?? "").toLowerCase()
+  return DELEGATION_TOOL_NAMES.has(name)
+    || CONTROL_TOOL_NAMES.has(name)
+    || IMPLEMENTATION_TOOL_NAMES.has(name)
+    || BROAD_TOOL_NAMES.has(name)
+    || NARROW_TOOL_NAMES.has(name)
+    || SHELL_TOOL_NAMES.has(name)
+    || name === "grep"
+    || name.startsWith("team_")
 }

@@ -243,4 +243,88 @@ describe("root materialization lane", () => {
       cleanup(r)
     }
   })
+
+  test("10. materialization paths are policy-derived and do not require a model-supplied marker", () => {
+    const r = makeRuntime()
+    try {
+      r.rt.preGruntCheck("m", "bash", { command: "rg TODO ." })
+      for (const target of [
+        ".omo/evidence/run/result.txt",
+        ".omo/plans/stabilization.md",
+        ".omo/state/worker.json",
+        ".omo/handoffs/next.md",
+      ]) {
+        const decision = r.rt.preGruntCheck("m", "write", { target })
+        expect(decision.block).toBe(false)
+        expect(decision.materializationAuthorized).toBe(true)
+      }
+    } finally {
+      cleanup(r)
+    }
+  })
+
+  test("11. apply_patch materializes only when every target is an allowed durable path", () => {
+    const r = makeRuntime()
+    try {
+      r.rt.preGruntCheck("m", "bash", { command: "rg TODO ." })
+      const allowed = r.rt.preGruntCheck("m", "apply_patch", {
+        target: ".omo/evidence/run/result.txt",
+        materializationTargets: [
+          ".omo/evidence/run/result.txt",
+          ".omo/plans/stabilization.md",
+        ],
+      } as never)
+      expect(allowed.block).toBe(false)
+      expect(allowed.materializationAuthorized).toBe(true)
+
+      const source = r.rt.preGruntCheck("m", "apply_patch", {
+        target: "packages/omo-opencode/src/index.ts",
+        materializationTargets: ["packages/omo-opencode/src/index.ts"],
+        materialization: true,
+      } as never)
+      expect(source.block).toBe(true)
+
+      const mixed = r.rt.preGruntCheck("m", "apply_patch", {
+        target: ".omo/evidence/run/result.txt",
+        materializationTargets: [
+          ".omo/evidence/run/result.txt",
+          "packages/omo-opencode/src/index.ts",
+        ],
+        materialization: true,
+      } as never)
+      expect(mixed.block).toBe(true)
+    } finally {
+      cleanup(r)
+    }
+  })
+
+  test("12. traversal and destructive durable-path patches fail closed", () => {
+    const r = makeRuntime()
+    try {
+      r.rt.preGruntCheck("m", "bash", { command: "rg TODO ." })
+      const traversal = r.rt.preGruntCheck("m", "apply_patch", {
+        target: ".omo/evidence/../../packages/omo-opencode/src/index.ts",
+        materializationTargets: [".omo/evidence/../../packages/omo-opencode/src/index.ts"],
+        materialization: true,
+      } as never)
+      expect(traversal.block).toBe(true)
+
+      const leadingTraversal = r.rt.preGruntCheck("m", "apply_patch", {
+        target: "../.omo/evidence/escaped.txt",
+        materializationTargets: ["../.omo/evidence/escaped.txt"],
+        materialization: true,
+      } as never)
+      expect(leadingTraversal.block).toBe(true)
+
+      const deletion = r.rt.preGruntCheck("m", "apply_patch", {
+        target: ".omo/evidence/run/result.txt",
+        materializationTargets: [".omo/evidence/run/result.txt"],
+        materializationDestructive: true,
+        materialization: true,
+      } as never)
+      expect(deletion.block).toBe(true)
+    } finally {
+      cleanup(r)
+    }
+  })
 })

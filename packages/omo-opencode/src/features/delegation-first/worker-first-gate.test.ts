@@ -91,10 +91,13 @@ describe("classifier (semantic, not just tool name)", () => {
     expect(classifyShellCommand("tree")).toBe("discovery")
   })
 
-  test("bash docker inspect / logs are investigation", () => {
-    expect(classifyShellCommand("docker inspect mycontainer")).toBe("investigation")
-    expect(classifyShellCommand("docker logs myapp")).toBe("investigation")
-    expect(classifyShellCommand("kubectl logs pod-1")).toBe("investigation")
+  test("read-only runtime diagnostics are distinct from invasive investigation", () => {
+    expect(classifyShellCommand("docker inspect mycontainer")).toBe("diagnostic")
+    expect(classifyShellCommand("docker logs myapp")).toBe("diagnostic")
+    expect(classifyShellCommand("kubectl logs pod-1")).toBe("diagnostic")
+    expect(classifyShellCommand("journalctl -n 20 --no-pager")).toBe("diagnostic")
+    expect(classifyShellCommand("docker exec myapp sh -c 'touch /tmp/pwned'")).toBe("implementation")
+    expect(classifyShellCommand("kubectl exec pod-1 -- touch /tmp/pwned")).toBe("implementation")
   })
 
   test("bash multi-file cat is discovery, single-file cat is narrow", () => {
@@ -108,6 +111,32 @@ describe("classifier (semantic, not just tool name)", () => {
     expect(classifyShellCommand("bun run build")).toBe("test_build")
     expect(classifyShellCommand("tsc --noEmit")).toBe("test_build")
     expect(classifyShellCommand("sed -i 's/a/b/' x.ts")).toBe("implementation")
+  })
+
+  test("shell wrappers preserve the effect of the wrapped command", () => {
+    expect(classifyShellCommand("bash -lc 'git status'")).toBe("metadata")
+    expect(classifyShellCommand("env FOO=1 bash -c 'rg TODO src'")).toBe("discovery")
+    expect(classifyShellCommand("timeout 5s rm -f src/obsolete.ts")).toBe("implementation")
+    expect(classifyShellCommand("nice -n 5 touch src/generated.ts")).toBe("implementation")
+    expect(classifyShellCommand("stdbuf -oL tee src/generated.ts")).toBe("implementation")
+    expect(classifyShellCommand("sudo cat /etc/shadow")).toBe("implementation")
+  })
+
+  test("opaque execution, substitutions, and unknown shell commands fail closed", () => {
+    expect(classifyShellCommand("python -c 'open(\"src/x.ts\", \"w\").write(\"x\")'")).toBe("implementation")
+    expect(classifyShellCommand("echo $(touch src/x.ts)")).toBe("implementation")
+    expect(classifyShellCommand("cat <(touch src/x.ts)")).toBe("implementation")
+    expect(classifyShellCommand("echo `touch src/x.ts`")).toBe("implementation")
+    expect(classifyShellCommand("chmod 777 src/x.ts")).toBe("implementation")
+    expect(classifyShellCommand(String.raw`bash -c "bash -c \"bash -c 'echo pwn > src/x.ts'\""`)).toBe("implementation")
+    expect(classifyShellCommand("grep -E 'a|b' src/auth.ts")).toBe("discovery")
+  })
+
+  test("safe stderr suppression preserves metadata while write redirection is mutation", () => {
+    expect(classifyShellCommand("git status 2>/dev/null")).toBe("metadata")
+    expect(classifyShellCommand("git status 2>&1")).toBe("metadata")
+    expect(classifyShellCommand("cat src/auth.ts 2>/dev/null")).toBe("narrow_read")
+    expect(classifyShellCommand("git status > .omo-state.txt")).toBe("implementation")
   })
 })
 
@@ -204,11 +233,13 @@ describe("worker-first hard gate (runtime preGruntCheck)", () => {
     }
   })
 
-  test("7. Docker/debug exploration is blocked", () => {
+  test("7. read-only runtime diagnostics are allowed while invasive investigation is blocked", () => {
     const r = makeRuntime()
     try {
-      expect(r.rt.preGruntCheck("m", "bash", { command: "docker inspect c1" }).block).toBe(true)
-      expect(r.rt.preGruntCheck("m", "bash", { command: "docker logs myapp" }).block).toBe(true)
+      expect(r.rt.preGruntCheck("m", "bash", { command: "docker inspect c1" }).block).toBe(false)
+      expect(r.rt.preGruntCheck("m", "bash", { command: "docker logs myapp" }).block).toBe(false)
+      expect(r.rt.preGruntCheck("m", "bash", { command: "rg TODO ." }).block).toBe(true)
+      expect(r.rt.preGruntCheck("m", "bash", { command: "docker exec c1 touch /tmp/pwned" }).block).toBe(true)
     } finally {
       cleanup(r)
     }
@@ -274,6 +305,25 @@ describe("worker-first hard gate (runtime preGruntCheck)", () => {
         expect(r.rt.preGruntCheck("m", tool, {}).block).toBe(false)
       }
       expect(r.rt.preGruntCheck("m", "bash", { command: "git status" }).block).toBe(false)
+    } finally {
+      cleanup(r)
+    }
+  })
+
+  test("19. worker_required permits one bounded specific-file diagnostic but no mutation or broad work", () => {
+    const r = makeRuntime()
+    try {
+      expect(r.rt.preGruntCheck("m", "bash", { command: "rg TODO ." }).block).toBe(true)
+      expect(r.rt.rootPhase("m")).toBe("worker_required")
+
+      const diagnostic = r.rt.preGruntCheck("m", "bash", { command: "cat src/auth.ts" })
+      expect(diagnostic.block).toBe(false)
+      expect(r.rt.preGruntCheck("m", "bash", { command: "cat src/other.ts" }).block).toBe(true)
+
+      expect(r.rt.preGruntCheck("m", "apply_patch", { target: "src/auth.ts" }).block).toBe(true)
+      expect(r.rt.preGruntCheck("m", "write", { target: "src/auth.ts" }).block).toBe(true)
+      expect(r.rt.preGruntCheck("m", "bash", { command: "bun test" }).block).toBe(true)
+      expect(r.rt.preGruntCheck("m", "bash", { command: "find . -name '*.ts'" }).block).toBe(true)
     } finally {
       cleanup(r)
     }
@@ -510,5 +560,9 @@ describe("root-worker-state (pure state machine)", () => {
     expect(classifyOperation("grep", { pattern: "x" })).toBe("broad")
     expect(classifyOperation("grep", { target: "src" })).toBe("narrow")
     expect(classifyOperation("bash", { command: "git status" })).toBe("metadata")
+    expect(classifyOperation("apply_patch", { target: "src/auth.ts" })).toBe("implementation")
+    expect(classifyOperation("multiedit", { target: "src/auth.ts" })).toBe("implementation")
+    expect(classifyOperation("skill", {})).toBe("control")
+    expect(classifyOperation("unknown_native_tool", {})).toBe("implementation")
   })
 })

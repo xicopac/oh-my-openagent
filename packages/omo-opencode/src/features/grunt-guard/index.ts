@@ -34,6 +34,7 @@ export {
 export {
   classifyOperation,
   classifyShellCommand,
+  isKnownOperationTool,
   type OperationClass,
   type ShellSemantics,
 } from "./classify"
