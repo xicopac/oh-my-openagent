@@ -131,7 +131,7 @@ describe("watchdog telemetry attribution", () => {
 })
 
 describe("terminal notification + single-cancel coordination", () => {
-  test("terminal BLOCKED is surfaced to the parent exactly once (no repeated wakes)", () => {
+  test("terminal detach does not emit a competing liveness wake", () => {
     const { writer, events } = captureAudit()
     const rt = makeRuntime(writer)
     rt.attachChildSession("root", "c1")
@@ -141,10 +141,10 @@ describe("terminal notification + single-cancel coordination", () => {
     rt.detachChildSession("c1", "cancelled")
     rt.detachChildSession("c1", "cancelled")
 
-    // then: exactly one terminal BLOCKED notification for the child
+    // then: BackgroundManager owns the terminal parent notification; the
+    // delegation runtime only clears its latch and emits no second wake.
     const blocked = eventNames(events, "worker_liveness_blocked")
-    expect(blocked.length).toBe(1)
-    expect(blocked[0]?.fields.wake_reason).toBe("terminal")
+    expect(blocked).toEqual([])
     expect(rt.rootPhase("root")).toBe("worker_required")
     rt.dispose()
   })

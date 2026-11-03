@@ -1,9 +1,9 @@
 # OMO Stabilization Plan
 
-Last updated: 2026-11-01 (Europe/Madrid)
+Last updated: 2026-11-02 (Europe/Madrid)
 Owner: Codex
 Canonical base: `4d1961c7e45223590768cce43093a839198eb28a`
-Implementation worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-worker-ledger` (Slice B, stacked on reviewed Slice A commit `e66143235`)
+Implementation worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-dispatch-authorization` (Slice D, stacked on reviewed Slice C commit `6784d7a61`)
 Production boundary: `/srv/dev/oh-my-openagent` is read-only and must not be built, edited, restarted, or deployed by this plan.
 
 ## Objective
@@ -125,6 +125,24 @@ Verification:
 
 - Fake-provider stalls before first byte, mid-response, empty response, vanished session, retry success, retry exhaustion, cancellation, repeated unattended loops, restart reconciliation.
 
+Implementation checkpoint (2026-11-01):
+
+- Retain `worker-supervisor/watchdog.ts` as the sole live stall detector and `worker-supervisor/recovery.ts` as the sole retry-budget decision authority.
+- Remove `worker-liveness-supervisor` from `createDelegationFirstRuntime`; its live integration currently mutates retry/block state and emits parent wakes despite being described as detector-only.
+- Preserve vanished-child detection in `detachChildSession`, which already has the authoritative OpenCode session-deletion observation and routes bounded redispatch through the shared recovery coordinator.
+- Make the independent `createManagers` sweep call only `reclaimStalled`; do not request process cleanup when reclaim declines, and do not duplicate cleanup after reclaim. Confirmed terminal cancellation remains the only path to `BackgroundManager` cleanup callbacks and exact task-owned process release.
+- Add focused RED/GREEN coverage for one detector tick, exactly one reclaim/cancel, no cleanup on declined reclaim, no duplicate cleanup on accepted reclaim, and timer disposal.
+- Prove the change through real isolated OpenCode provider-stall/recovery-exhaustion runs before commit; normal completion/restart durability remains covered by Slice B evidence.
+
+Verification checkpoint (2026-11-01):
+
+- Focused supervision/recovery/process-ownership scope: 86 tests pass, 0 fail, 311 assertions; scoped adapter typecheck exits 0.
+- Candidate bundle: 2,163 modules, 6,564,676 bytes, SHA-256 `5404e1b2d36906b3f516435e721f1f64339d6b489b2ae5422fc41a5a906ebd50`; required assets materialize and the bundle imports successfully.
+- Real provider-stall run: the first child stalled, one authorized free alternate completed, the durable terminal record reached `acknowledged`, and the parent produced `PARENT_RESUMED` without another human message.
+- Real exhaustion run: both bounded free attempts stalled, the assignment terminalized `blocked`, the durable terminal record reached `acknowledged`, and the parent resumed with the terminal BLOCKED state without another human message.
+- Both isolated runs used only configured local zero-cost fake models, left the real OpenCode DB at 2,351 sessions and the real worker ledger at 93 records, and stopped their exact OpenCode/provider processes.
+- This slice intentionally does not claim the still-pending empty-response, explicit cancellation, compaction, repeated-loop resource, or unified paid-authorization matrix.
+
 ### Slice D — Unified dispatch authorization
 
 Files expected after source confirmation:
@@ -142,6 +160,26 @@ Changes:
 Verification:
 
 - Real fake-provider request ledger proves zero paid-route requests without approval and exactly one authorized request with synthetic approval; no real paid provider is contacted.
+
+Implementation checkpoint (2026-11-01):
+
+- Retain the existing host permission prompt and `PaidConsentRegistry` as the only source of explicit paid-worker approval; do not add a file-based or model-authored approval path.
+- Add one final effective-model decision that treats missing pricing as paid, allows verified free models, and consumes an exact root/worker/model/task approval for paid or unknown-cost models.
+- Invoke that decision from BackgroundManager's initial launch boundary and every background fallback attempt. Automatic recovery and fallback carry no approval nonce, so they may use only verified free models.
+- Route sync initial dispatch through the same decision and add a free-only decision before every in-session prompt fallback or replacement-session fallback.
+- Remove the recovery relaunch approval-file exception. A retained recovery candidate is automatically eligible only when catalog pricing or the retained worker record verifies it as free; paid recovery requires a new interactive operator approval and therefore fails closed in unattended recovery.
+- Preserve Resource Governor escrow/backstop as the resource-budget authority after cost authorization; cost authorization and resource budgeting remain distinct checks at one launch boundary.
+- Prove the boundary with focused RED/GREEN tests and real isolated OpenCode request ledgers for free fallback, unapproved paid/unknown fallback rejection, and one synthetic single-use paid approval. No real provider is contacted.
+
+Verification checkpoint (2026-11-02):
+
+- A single final `authorizeEffectiveModelDispatch()` decision now covers initial task dispatch, direct manager launches, background fallback, sync prompt fallback, sync replacement-session fallback, and recovery relaunch.
+- Paid/unknown automatic fallback and recovery fail closed. Static recovery approval files no longer grant spending authority; only catalog or retained-record verified-free recovery proceeds unattended.
+- Exact paid approval is bound to root, worker, effective model, and logical task and is consumed once. The Resource Governor receives that approval only for the same dispatch, so its older consent check no longer rejects a valid launch or creates reusable session consent.
+- Final focused scope: 119 tests pass, 0 fail, 355 assertions; scoped OpenCode adapter typecheck exits 0.
+- Candidate bundle: 2,163 modules, SHA-256 `c9efff12498a282b330db709154fea16997ac30faa94d7787547a527ad5079f0`; required assets materialize and the bundle imports successfully.
+- Real OpenCode 1.19.3 proof on that exact bundle: free completion persisted an acknowledged terminal result and woke the idle parent; unattended paid dispatch made zero paid-model requests and created zero workers; synthetic explicit approval made exactly one paid-model request and one worker record.
+- All runtime requests used local fake endpoints, the real OpenCode DB remained at 2,351 sessions, the real worker store remained at 93 records, and every exact test process stopped.
 
 ### Slice E — Runtime reliability gate and release reproducibility
 

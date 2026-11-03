@@ -1,6 +1,5 @@
 import type { ModelRoutingConfig } from "../../config/schema"
 import { isFreePricing, type PricingCatalog } from "../../hooks/resource-governor/pricing"
-import { readPaidModelApprovals, type PaidModelApprovalsSnapshot } from "../../shared/paid-model-approvals"
 import type { FallbackEntry } from "../../shared/model-requirements"
 
 export const RECOVERY_RELAUNCH_DENIED_PREFIX = "RECOVERY_RELAUNCH_DENIED"
@@ -11,12 +10,9 @@ export type RecoveryRelaunchDenyCode =
   | "MODEL_PAID"
   | "PAID_POLICY_DISABLED"
   | "PAID_AUTHORITY_REJECTED"
-  | "PAID_APPROVAL_MISSING"
-  | "PAID_APPROVAL_INVALID"
 
 export type RecoveryRelaunchAuthorization =
   | { allowed: true; kind: "free"; model: string }
-  | { allowed: true; kind: "approved_paid"; model: string; approvedBy: string; approvedAt: string }
   | { allowed: false; code: RecoveryRelaunchDenyCode; message: string }
 
 export type AuthorizeRecoveryRelaunchInput = {
@@ -31,8 +27,6 @@ export type AuthorizeRecoveryRelaunchInput = {
   modelRouting?: ModelRoutingConfig
   rootSessionID?: string
   requestingSessionID?: string
-  approvals?: PaidModelApprovalsSnapshot
-  approvalsPath?: string
 }
 
 function denied(code: RecoveryRelaunchDenyCode, detail: string): RecoveryRelaunchAuthorization {
@@ -97,38 +91,10 @@ function authorizePaid(
     )
   }
 
-  const snapshot =
-    input.approvals ??
-    readPaidModelApprovals(input.approvalsPath)
-
-  if (snapshot.status === "missing") {
-    return denied(
-      "PAID_APPROVAL_MISSING",
-      `paid recovery relaunch for "${model}" requires an explicit approval; no approval file at ${snapshot.path}`,
-    )
-  }
-  if (snapshot.status === "invalid") {
-    return denied(
-      "PAID_APPROVAL_INVALID",
-      `paid recovery relaunch for "${model}" requires an explicit approval; approval file is invalid: ${snapshot.error}`,
-    )
-  }
-
-  const approval = snapshot.approvals.find((entry) => entry.model === model)
-  if (!approval) {
-    return denied(
-      "PAID_APPROVAL_MISSING",
-      `paid recovery relaunch for "${model}" requires an exact approval entry in ${snapshot.path}`,
-    )
-  }
-
-  return {
-    allowed: true,
-    kind: "approved_paid",
-    model,
-    approvedBy: approval.approvedBy,
-    approvedAt: approval.approvedAt,
-  }
+  return denied(
+    "MODEL_PAID",
+    `automatic recovery cannot spend on paid model "${model}"; a fresh interactive single-use approval is required at a new dispatch boundary`,
+  )
 }
 
 export function filterFreeRecoveryFallbackChain(

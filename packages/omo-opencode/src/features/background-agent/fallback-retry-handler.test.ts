@@ -125,6 +125,45 @@ describe("tryFallbackRetry", () => {
   })
 
   describe("#given retryable error with fallback chain", () => {
+    test("rejects an unapproved paid effective model before aborting or queueing the fallback", async () => {
+      const args = createDefaultArgs()
+      const authorize = mock(() => ({
+        allowed: false as const,
+        code: "PAID_APPROVAL_REQUIRED",
+        message: "paid fallback requires fresh approval",
+      }))
+
+      const result = await tryFallbackRetry({
+        ...args,
+        authorizeEffectiveModelDispatch: authorize,
+      })
+
+      expect(result).toBe(false)
+      expect(authorize).toHaveBeenCalledWith({
+        resolvedModelKey: "provider-a/fallback-model-1",
+        rootSessionID: "parent-session-1",
+        workerIdentity: "sisyphus-junior",
+        taskID: "test-task-1",
+      })
+      expect(args.abortMock).not.toHaveBeenCalled()
+      expect(args.queuesByKey.size).toBe(0)
+      expect(args.task.model).toEqual({ providerID: "provider-a", modelID: "original-model" })
+    })
+
+    test("queues a catalog-authorized free effective model", async () => {
+      const args = createDefaultArgs()
+      const authorize = mock(() => ({ allowed: true as const, kind: "free" as const, model: "provider-a/fallback-model-1" }))
+
+      const result = await tryFallbackRetry({
+        ...args,
+        authorizeEffectiveModelDispatch: authorize,
+      })
+
+      expect(result).toBe(true)
+      expect(authorize).toHaveBeenCalledTimes(1)
+      expect([...args.queuesByKey.values()].flat()).toHaveLength(1)
+    })
+
     test("includes the original task and latest continuation in a fresh-session retry", async () => {
       // given
       const args = createDefaultArgs({ prompt: "latest-continuation", originalPrompt: "original-task" })

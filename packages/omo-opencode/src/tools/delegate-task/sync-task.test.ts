@@ -10,6 +10,17 @@ function clearRequireCache(modulePath: string): void {
 type AddTaskArg = Parameters<import("../../features/task-toast-manager/manager").TaskToastManager["addTask"]>[0]
 type CapturedMetadata = { title?: string; metadata: Record<string, unknown> }
 
+const FREE_SYNC_FALLBACK_PRICING = {
+  "opencode-go/kimi-k2.6": { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+  "openai/gpt-5.4": { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+  "genai-proxy-aws/us.anthropic.claude-haiku-4-5-20251001-v1:0": {
+    input: 0,
+    output: 0,
+    cache_read: 0,
+    cache_write: 0,
+  },
+}
+
 describe("executeSyncTask - cleanup on error paths", () => {
   let removeTaskCalls: string[] = []
   let addTaskCalls: AddTaskArg[] = []
@@ -413,6 +424,7 @@ describe("executeSyncTask - cleanup on error paths", () => {
     const mockExecutorCtx = {
       client: mockClient,
       directory: "/tmp",
+      pricingCatalog: FREE_SYNC_FALLBACK_PRICING,
       onSyncSessionCreated: null,
     }
 
@@ -480,6 +492,7 @@ describe("executeSyncTask - cleanup on error paths", () => {
     const mockExecutorCtx = {
       client: mockClient,
       directory: "/tmp",
+      pricingCatalog: FREE_SYNC_FALLBACK_PRICING,
       onSyncSessionCreated: null,
     }
 
@@ -543,6 +556,63 @@ describe("executeSyncTask - cleanup on error paths", () => {
     expect(result.promptError).toBe("JSON Parse error: Unexpected EOF")
     expect(result.categoryModel).toEqual(initialModel)
     expect(sendPrompt).toHaveBeenCalledTimes(1)
+  })
+
+  test("#given a paid same-session fallback without fresh approval #when prompt retry evaluates it #then no fallback provider request is sent", async () => {
+    const { retrySyncPromptWithFallbacks } = require("./sync-task-fallback")
+    const sendPrompt = mock(async () => null)
+
+    const result = await retrySyncPromptWithFallbacks({
+      sessionID: "ses_paid_prompt_fallback",
+      initialError: "provider overloaded",
+      categoryModel: { providerID: "local", modelID: "free-primary" },
+      fallbackChain: [{ providers: ["paid"], model: "expensive-next" }],
+      authorizeFallback: (model: { providerID: string; modelID: string }) =>
+        model.providerID === "paid"
+          ? "PAID_APPROVAL_REQUIRED: automatic sync fallback cannot spend"
+          : null,
+      sendPrompt,
+    })
+
+    expect(result.promptError).toContain("PAID_APPROVAL_REQUIRED")
+    expect(sendPrompt).not.toHaveBeenCalled()
+  })
+
+  test("#given a paid replacement-session fallback without fresh approval #when polling fails #then no replacement session is created", async () => {
+    const { executeSyncTask } = require("./sync-task")
+    const createdSessions: string[] = []
+    const deps = {
+      createSyncSession: async () => {
+        const sessionID = createdSessions.length === 0 ? "ses_free_primary" : "ses_paid_forbidden"
+        createdSessions.push(sessionID)
+        return { ok: true as const, sessionID }
+      },
+      sendSyncPrompt: async () => null,
+      pollSyncSession: async () => "Forbidden: Selected provider is forbidden",
+      fetchSyncResult: async () => ({ ok: false as const, error: "no result" }),
+    }
+    const pricing = {
+      "local/free-primary": { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+      "paid/expensive-next": { input: 1, output: 2, cache_read: 0, cache_write: 0 },
+    }
+    const result = await executeSyncTask(
+      { prompt: "test", description: "test", category: "quick", load_skills: [], run_in_background: false, command: null },
+      { sessionID: "parent-session", callID: "call-paid-fallback", metadata: () => {} },
+      { client: { session: { create: async () => ({ data: { id: "ignored" } }) } }, directory: "/tmp", pricingCatalog: pricing },
+      { sessionID: "parent-session" },
+      "sisyphus-junior",
+      { providerID: "local", modelID: "free-primary" },
+      undefined,
+      undefined,
+      [
+        { providers: ["local"], model: "free-primary" },
+        { providers: ["paid"], model: "expensive-next" },
+      ],
+      deps,
+    )
+
+    expect(createdSessions).toEqual(["ses_free_primary"])
+    expect(result).toContain("PAID_APPROVAL_REQUIRED")
   })
 
   test("cleans up toast and subagentSessions on successful completion", async () => {
@@ -652,6 +722,7 @@ describe("executeSyncTask - cleanup on error paths", () => {
     const mockExecutorCtx = {
       client: mockClient,
       directory: "/tmp",
+      pricingCatalog: FREE_SYNC_FALLBACK_PRICING,
       onSyncSessionCreated: null,
       modelFallbackControllerAccessor: {
         setSessionFallbackChain: () => {},
@@ -748,6 +819,7 @@ describe("executeSyncTask - cleanup on error paths", () => {
     const mockExecutorCtx = {
       client: mockClient,
       directory: "/tmp",
+      pricingCatalog: FREE_SYNC_FALLBACK_PRICING,
       onSyncSessionCreated: null,
       modelFallbackControllerAccessor: {
         setSessionFallbackChain: () => {},
@@ -945,6 +1017,7 @@ describe("executeSyncTask - cleanup on error paths", () => {
     const mockExecutorCtx = {
       client: mockClient,
       directory: "/tmp",
+      pricingCatalog: FREE_SYNC_FALLBACK_PRICING,
       onSyncSessionCreated,
       modelFallbackControllerAccessor: {
         setSessionFallbackChain: () => {},
@@ -1019,6 +1092,7 @@ describe("executeSyncTask - cleanup on error paths", () => {
     const mockExecutorCtx = {
       client: mockClient,
       directory: "/tmp",
+      pricingCatalog: FREE_SYNC_FALLBACK_PRICING,
       onSyncSessionCreated: null,
       modelFallbackControllerAccessor: {
         setSessionFallbackChain: () => {},

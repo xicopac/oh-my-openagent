@@ -8,7 +8,7 @@ import { filterEnabledModelKeys } from "../../shared/model-enable-state"
 import { paidWorkerGate } from "./paid-worker-gate"
 import {
   classifyPaidStatus,
-  consumePaidApproval,
+  authorizeEffectiveModelDispatch,
   createOpenCodePermissionConsentProvider,
   enforcePaidWorkerLaunch,
   isRootSessionInfo,
@@ -355,6 +355,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         await applyModelTier()
         await applyFreeFirstReselection()
 
+        const unstablePricing = await resolveEffectivePricing(options)
         const unstablePaidGate = await gatePaidChildLaunch({
           options,
           ctx,
@@ -367,7 +368,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
           task: delegateTaskArgs.prompt,
           reason: "unstable agent forced to background",
           freeCandidatesExhausted,
-          pricingCatalog: await resolveEffectivePricing(options),
+          pricingCatalog: unstablePricing,
         })
         if (!unstablePaidGate.ok) {
           notifyChildLaunchBlocked(options, ctx, "paid_gate_block")
@@ -399,10 +400,10 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
             availableSkills,
             nativeSkillInfos,
           })
-          if (!consumePaidLaunchApproval(options, ctx, agentToUse, categoryModel, taskID, unstablePaidNonce)) {
+          if (!consumePaidLaunchApproval(options, ctx, agentToUse, categoryModel, taskID, unstablePaidNonce, unstablePricing)) {
             return "PAID_WORKER_CONSENT_CONSUMED: single-use paid approval did not match the unstable-agent launch identity."
           }
-          return executeUnstableAgentTask(delegateTaskArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, actualModel)
+          return executeUnstableAgentTask(delegateTaskArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, actualModel, true)
         }
       } else {
         const resolution = await resolveSubagentExecution(delegateTaskArgs, modelOptions, parentContext.agent, categoryExamples, { mainModel: inheritedModel })
@@ -490,7 +491,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         : delegateTaskArgs
 
       if (runInBackground) {
-        if (!consumePaidLaunchApproval(options, ctx, agentToUse, categoryModel, taskID, paidApprovalNonce)) {
+        if (!consumePaidLaunchApproval(options, ctx, agentToUse, categoryModel, taskID, paidApprovalNonce, effectivePricing)) {
           if (paidSlotAcquired) {
             if (options.delegationFirstRuntime) options.delegationFirstRuntime.releasePaidChild()
             else paidWorkerGate.release()
@@ -498,7 +499,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
           notifyChildLaunchBlocked(options, ctx, "paid_consent_consumed")
           return "PAID_WORKER_CONSENT_CONSUMED: single-use paid approval did not match the launch identity."
         }
-        return executeBackgroundTask(dispatchArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, fallbackChain, paidSlotAcquired, activeProbe !== null)
+        return executeBackgroundTask(dispatchArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, fallbackChain, paidSlotAcquired, activeProbe !== null, true)
       }
 
       if (options.delegationFirstRuntime) {
@@ -516,6 +517,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
             isRootSession,
             taskID,
             freeCandidatesExhausted,
+            initialApprovalNonce: paidApprovalNonce,
           })
           if (activeProbe) {
             maybeVerifyRecoveryProbe(options.delegationFirstRuntime, ctx.sessionID, result, {
@@ -535,11 +537,12 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         agentToUse,
         categoryModel,
         parentContext,
+        paidApprovalNonce !== null,
       )
       if (enforcement.message !== null) return enforcement.message
 
       try {
-        if (!consumePaidLaunchApproval(options, ctx, agentToUse, categoryModel, taskID, paidApprovalNonce)) {
+        if (!consumePaidLaunchApproval(options, ctx, agentToUse, categoryModel, taskID, paidApprovalNonce, effectivePricing)) {
           if (paidSlotAcquired) {
             paidWorkerGate.release()
           }
@@ -568,6 +571,7 @@ function enforceResourceGovernor(
   agentToUse: string,
   categoryModel: DelegatedModelConfig | undefined,
   parentContext: ParentContext,
+  consentApproved = false,
 ): { message: string | null; escrowID: string | null; backstop: ChildLaunchBackstop | undefined } {
   const runtime = options.resourceGovernorRuntime
   if (!runtime) return { message: null, escrowID: null, backstop: undefined }
@@ -589,6 +593,7 @@ function enforceResourceGovernor(
     requestedTier: args.model_tier ?? null,
     expectedTokens: options.resourceGovernorDefaultChildTokens ?? 600_000,
     rootModelID,
+    consentApproved,
   })
 
   return {
@@ -692,25 +697,25 @@ function consumePaidLaunchApproval(
   categoryModel: DelegatedModelConfig | undefined,
   taskID: string,
   nonce: string | null,
+  pricing: PricingCatalog | undefined,
 ): boolean {
-  if (!nonce) return true
-  const registry = options.paidConsentRegistry
-  if (!registry) return false
   const resolvedModelKeyValue = categoryModel?.modelID
     ? resolvedModelKey(categoryModel.providerID, categoryModel.modelID)
     : null
-  const approval = consumePaidApproval(
-    registry,
-    nonce,
-    {
+  const decision = authorizeEffectiveModelDispatch({
+    resolvedModelKey: resolvedModelKeyValue,
+    pricing,
+    registry: options.paidConsentRegistry,
+    approvalNonce: nonce,
+    identity: {
       rootSessionID: ctx.sessionID,
       workerIdentity: agentToUse,
       resolvedModelID: resolvedModelKeyValue ?? "",
       taskID,
     },
-    options.paidConsentAudit,
-  )
-  return approval !== null
+    audit: options.paidConsentAudit,
+  })
+  return decision.allowed
 }
 
 function isExplicitSyncRun(runInBackground: unknown): boolean {
@@ -732,6 +737,7 @@ type DelegationFirstSyncParams = {
   isRootSession: boolean
   taskID: string
   freeCandidatesExhausted: boolean
+  initialApprovalNonce: string | null
 }
 
 async function runDelegationFirstSync(params: DelegationFirstSyncParams): Promise<string> {
@@ -792,6 +798,26 @@ async function runDelegationFirstSync(params: DelegationFirstSyncParams): Promis
   let lastAdequacy = null as ReturnType<typeof judgeSyncAdequacy> | null
 
   for (let attempt = 0; attempt < MAX_DELEGATION_FIRST_ATTEMPTS; attempt++) {
+    // Each paid child launch requires its own fresh single-use operator approval.
+    let attemptNonce = attempt === 0 ? params.initialApprovalNonce : null
+    if (attempt > 0) {
+      const attemptGate = await gatePaidChildLaunch({
+        options,
+        ctx,
+        modelOptions: options,
+        args: { ...args, prompt: currentPrompt },
+        agentToUse,
+        categoryModel: currentModel,
+        isRootSession: params.isRootSession,
+        taskID: params.taskID,
+        task: currentPrompt,
+        reason: "delegation ladder escalated to a stronger/paid worker",
+        freeCandidatesExhausted: params.freeCandidatesExhausted,
+        pricingCatalog: pricing,
+      })
+      if (!attemptGate.ok) return attemptGate.message
+      attemptNonce = attemptGate.nonce
+    }
     const enforcement = enforceResourceGovernor(
       options,
       ctx,
@@ -799,28 +825,12 @@ async function runDelegationFirstSync(params: DelegationFirstSyncParams): Promis
       agentToUse,
       currentModel,
       parentContext,
+      attemptNonce !== null,
     )
     if (enforcement.message !== null) {
       return enforcement.message
     }
-
-    // Each paid child launch requires its own fresh single-use operator approval.
-    const attemptGate = await gatePaidChildLaunch({
-      options,
-      ctx,
-      modelOptions: options,
-      args: { ...args, prompt: currentPrompt },
-      agentToUse,
-      categoryModel: currentModel,
-      isRootSession: params.isRootSession,
-      taskID: params.taskID,
-      task: currentPrompt,
-      reason: "delegation ladder escalated to a stronger/paid worker",
-      freeCandidatesExhausted: params.freeCandidatesExhausted,
-      pricingCatalog: pricing,
-    })
-    if (!attemptGate.ok) return attemptGate.message
-    if (!consumePaidLaunchApproval(options, ctx, agentToUse, currentModel, params.taskID, attemptGate.nonce)) {
+    if (!consumePaidLaunchApproval(options, ctx, agentToUse, currentModel, params.taskID, attemptNonce, pricing)) {
       return "PAID_WORKER_CONSENT_CONSUMED: single-use paid approval did not match the escalation launch identity."
     }
 

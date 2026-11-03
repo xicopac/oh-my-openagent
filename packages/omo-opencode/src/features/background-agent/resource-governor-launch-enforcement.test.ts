@@ -6,7 +6,11 @@ import type { AuthorizeResult, DelegateEnforcementInput } from "../../hooks/reso
 type Authorizer = (input: DelegateEnforcementInput) => AuthorizeResult
 type Settler = (sessionID: string, escrowID: string, status: "completed" | "failed" | "exhausted") => void
 
-function managerWithAuthorizer(authorize?: Authorizer, settle?: Settler): BackgroundManager {
+function managerWithAuthorizer(
+  authorize?: Authorizer,
+  settle?: Settler,
+  authorizeEffectiveModelDispatch?: ConstructorParameters<typeof BackgroundManager>[0]["authorizeEffectiveModelDispatch"],
+): BackgroundManager {
   const client = {
     session: {
       prompt: async () => ({}),
@@ -19,6 +23,7 @@ function managerWithAuthorizer(authorize?: Authorizer, settle?: Settler): Backgr
     authorizeChildDispatch: authorize,
     resourceGovernorDefaultChildTokens: 600_000,
     settleChildDispatch: settle,
+    authorizeEffectiveModelDispatch,
   })
 }
 
@@ -35,6 +40,49 @@ function launchInput() {
 }
 
 describe("BackgroundManager resource governor enforcement", () => {
+  test("blocks a direct paid or unknown-cost launch that did not pass the shared effective-model decision", () => {
+    const seen: Array<Record<string, unknown>> = []
+    const manager = managerWithAuthorizer(undefined, undefined, (input) => {
+      seen.push(input)
+      return { allowed: false, code: "PAID_APPROVAL_REQUIRED", message: "fresh exact approval required" }
+    })
+    const authorizeLaunch = Reflect.get(manager, "authorizeLaunch") as (input: ReturnType<typeof launchInput>) => unknown
+
+    expect(() => authorizeLaunch.call(manager, launchInput())).toThrow("fresh exact approval required")
+    expect(seen).toEqual([{
+      resolvedModelKey: "openai/gpt-5.6-sol",
+      rootSessionID: "parent-session",
+      workerIdentity: "explore",
+      taskID: "launch:parent-message",
+    }])
+  })
+
+  test("does not reauthorize a launch already approved by the shared task-tool boundary", () => {
+    let calls = 0
+    const manager = managerWithAuthorizer(undefined, undefined, () => {
+      calls += 1
+      return { allowed: false, code: "PAID_APPROVAL_REQUIRED", message: "should not run" }
+    })
+    const authorizeLaunch = Reflect.get(manager, "authorizeLaunch") as (input: ReturnType<typeof launchInput> & { effectiveModelAuthorized: boolean }) => unknown
+
+    expect(authorizeLaunch.call(manager, { ...launchInput(), effectiveModelAuthorized: true })).toBeNull()
+    expect(calls).toBe(0)
+  })
+
+  test("passes exact task-tool approval to the resource governor for this launch", () => {
+    let seen: DelegateEnforcementInput | undefined
+    const manager = managerWithAuthorizer((input) => {
+      seen = input
+      return { verdict: "ALLOW", escrowID: "escrow-approved" }
+    })
+    const authorizeLaunch = Reflect.get(manager, "authorizeLaunch") as (
+      input: ReturnType<typeof launchInput> & { effectiveModelAuthorized: boolean },
+    ) => unknown
+
+    authorizeLaunch.call(manager, { ...launchInput(), effectiveModelAuthorized: true })
+    expect(seen?.consentApproved).toBe(true)
+  })
+
   test("blocks a paid child when the governor returns BLOCK and never reaches session.create", async () => {
     // given a manager whose injected authorizer blocks
     let seen: DelegateEnforcementInput | undefined

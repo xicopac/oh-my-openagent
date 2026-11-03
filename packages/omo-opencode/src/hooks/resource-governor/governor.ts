@@ -296,7 +296,11 @@ export function createResourceGovernor(config: ResourceGovernorConfig) {
         record.input_tokens + record.cache_read_tokens + record.cache_write_tokens + record.output_tokens
     },
 
-    evaluateDelegation(request: DelegationRequest, now_ms: number): DelegationDecision {
+    evaluateDelegation(
+      request: DelegationRequest,
+      now_ms: number,
+      options: { consentApproved?: boolean } = {},
+    ): DelegationDecision {
       now = now_ms
       const ctx: GovernorContext = {
         levels,
@@ -313,7 +317,7 @@ export function createResourceGovernor(config: ResourceGovernorConfig) {
         workers,
         require_paid_escalation: config.require_paid_escalation,
         require_hard_budget_increase: config.require_hard_budget_increase,
-        consent_approved: consentApproved,
+        consent_approved: options.consentApproved === true || consentApproved,
         root_model_id: config.root_model_id,
         root_pricing: rootPricing(),
       }

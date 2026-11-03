@@ -77,18 +77,40 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 
 ## Slice C — single supervision authority
 
-- [ ] Inventory every timer/cancel/retry/wake owner and mark the one retained coordinator.
-- [ ] Add failing tests for competing signals and exactly-one reclaim/terminal/wake.
-- [ ] Remove policy authority from liveness/background/watchdog secondary paths and route signals to the coordinator.
-- [ ] Prove pre-response stall, mid-response stall, empty response, disappearance, cancellation, retry success, and retry exhaustion with sequential fake-provider runs.
-- [ ] Update durable state, commit atomically, PR, verify, and merge without deployment.
+- [x] Inventory every timer/cancel/retry/wake owner and mark watchdog + recovery coordinator as the retained detector/decision authority.
+- [x] Capture focused baseline tests for watchdog sweep, delegation runtime coordination, failover redispatch, and process ownership.
+- [x] Add a failing create-managers test proving a declined reclaim never requests process cleanup.
+- [x] Add a failing create-managers test proving an accepted reclaim relies on the manager terminal callback and does not request duplicate sweep cleanup.
+- [x] Add a delegation-runtime regression proving watchdog inspection is read-only until one explicit reclaim produces one cancel, with no liveness-supervisor wake side effect.
+- [x] Remove the live `worker-liveness-supervisor` integration from delegation-first runtime while preserving authoritative request-start, activity, terminal, and vanished-child signals in the watchdog path.
+- [x] Simplify the periodic sweep to call only `reclaimStalled`; retain one unref'd timer and verify shutdown clears it.
+- [x] Re-run focused unit scope and scoped OpenCode adapter typecheck (86 pass, 0 fail, 311 assertions; typecheck exit 0).
+- [x] Build the candidate with the single-entry command and materialize required assets (2,163 modules; bundle SHA-256 `5404e1b2d36906b3f516435e721f1f64339d6b489b2ae5422fc41a5a906ebd50`).
+- [x] Run isolated real OpenCode provider-stall and recovery-exhaustion scenarios sequentially with a local fake provider and no human wake-up message.
+- [x] Prove one bounded alternate succeeds or exhausts to BLOCKED, one acknowledged terminal wake resumes the parent, only configured free fake models are requested, real stores remain unchanged, and exact test processes stop.
+- [x] Freeze local evidence with reviewer-readable summary and SHA-256 manifest.
+- [x] Update durable state, commit atomically, verify the dependent diff/merge bases, push, and open clean mergeable stacked PR #3.
+- [!] Merge PR #3 with a merge commit after #1 and #2 and all active gates pass. Blocked only on the human CLA signature; no deployment.
 
 ## Slice D — unified paid/free dispatch authorization
 
-- [ ] Enumerate sync, background, continuation, retry, relaunch, fallback, and resume dispatch entry points.
-- [ ] Add one effective-model authorization decision and idempotent approval consumption.
-- [ ] Prove free-first selection and zero unauthorized paid-route requests on the fake-provider ledger.
-- [ ] Update durable state, commit atomically, PR, verify, and merge without deployment.
+- [x] Enumerate initial sync/background, unstable-agent, continuation, background retry, sync prompt fallback, sync replacement-session fallback, recovery relaunch, and resume entry points.
+- [x] Capture focused baseline tests for paid consent, free-first dispatch, recovery authorization, background fallback, and sync fallback before source edits.
+- [x] Add RED tests for one final effective-model decision: verified free allow, unknown-cost fail closed, exact paid approval allow once, wrong identity reject, and replay reject.
+- [x] Add a RED background fallback test proving an unapproved paid/unknown next model is never queued or prompted, while a catalog-verified free fallback remains eligible.
+- [x] Add RED sync fallback tests proving both same-session prompt fallback and replacement-session fallback reject an unapproved paid/unknown model before provider dispatch.
+- [x] Add a RED recovery test proving a static approval file cannot authorize paid automatic recovery and exact verified-free evidence still allows a free relaunch.
+- [x] Implement the shared effective-model decision on top of the single-use `PaidConsentRegistry`; missing model/pricing is paid/unknown and fails closed without exact approval.
+- [x] Wire BackgroundManager initial launch and fallback retry through the shared decision; pass the initial approval nonce/task identity to the execution boundary and never copy it to automatic fallback/recovery attempts.
+- [x] Wire sync initial dispatch and both sync fallback paths through the same decision.
+- [x] Remove the recovery approval-file exception and retain only catalog/retained-worker verified-free automatic relaunch.
+- [x] Pass exact dispatch approval through Resource Governor once so a valid launch is not rejected and no reusable session consent is created.
+- [x] Run the focused unit scope and scoped OpenCode adapter typecheck (119 pass, 0 fail, 355 assertions; typecheck exit 0).
+- [x] Build/import the candidate and run isolated real OpenCode fake-provider scenarios proving no unapproved paid/unknown request and exactly one synthetic single-use approved paid request.
+- [x] Prove only configured local fake endpoints were contacted, real stores were unchanged, and exact test processes stopped.
+- [x] Freeze reviewer-readable evidence and SHA-256 manifest under `.omo/evidence/20261101-dispatch-authorization/`.
+- [x] Update durable state, commit atomically, verify exact Slice C/canonical merge bases and the 23-file dependent diff, push, and open clean mergeable stacked PR #4.
+- [!] Merge PR #4 with a merge commit after #1–#3 and all active gates pass. Human CLA action remains outside Codex authority; no deployment.
 
 ## Slice E — reliability gate and reproducible release
 

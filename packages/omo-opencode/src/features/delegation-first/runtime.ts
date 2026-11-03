@@ -61,7 +61,6 @@ import {
   type WatchdogCheckResult,
   type WatchdogPolicy,
 } from "../worker-supervisor"
-import { createLivenessSupervisor } from "../worker-liveness-supervisor"
 import { recommendFailoverAction, type RedispatchAction } from "./failover"
 import { selectNextEligibleWorker } from "./availability-failover"
 import { createModelAvailabilityCache, type ModelAvailabilityCache } from "./model-availability-cache"
@@ -91,12 +90,6 @@ export type DelegationFirstConfig = {
   modelAvailabilityFilePath?: string
   /** COST-SAFETY: maximum concurrent paid child requests (default 1). */
   maxConcurrentPaidWorkers?: number
-  /**
-   * Terminal HOLD hook: the liveness supervisor reached a blocked/exhausted
-   * terminal state and will not retry. The adapter quiesces disposable
-   * process scopes owned by that child within a bounded deadline.
-   */
-  onTerminalHold?: (sessionID: string, reason: string) => void
 }
 
 /** Result of a governed replacement-child re-dispatch. */
@@ -308,64 +301,6 @@ export function createDelegationFirstRuntime(
 
   const freeWorkerHint = cfg.pricing ? discoverFreeModels(cfg.pricing)[0] ?? null : null
   const rootState: RootWorkerState = createRootWorkerState()
-  let runtimeApi: DelegationFirstRuntime | undefined
-
-  // Liveness supervisor: detector/notifier ONLY. It never cancels a child — the
-  // watchdog/recovery paths below are the single cancel authority — so it cannot
-  // double-cancel. It owns the detections the watchdog lacks (never-started ACK
-  // deadline, OS process exit when a pid is known) and surfaces a terminal
-  // BLOCKED state to the parent exactly once (the notifier dedupes by id+kind,
-  // so there are no repeated paid-parent wakes and no polling loops).
-  const liveness = createLivenessSupervisor({
-    onStallDetected: (id, kind) => {
-      if (kind !== "progress_stall" && kind !== "heartbeat_missing") return
-      const assignmentID = sessionToAssignment.get(id)
-      const providerModel = assignmentID ? lineageByAssignment.get(assignmentID)?.current_worker ?? null : null
-      if (runtimeApi?.reclaimStalled(id, providerModel)) return
-      if (watchdog.sessions().includes(id)) {
-        const check = watchdog.check(id)
-        if (check.stallMode === "QUIET_BUT_ACTIVE" || check.health === "TERMINAL") return
-      }
-      const parentID = sessionJob.get(id)
-      if (parentID) {
-        rootState.recordDelegationFailure(parentID, {
-          id: `liveness-stall:${id}:${kind}`,
-          kind: "watchdog_reclaim_exhausted",
-          reason: kind,
-          observedAtMs: Date.now(),
-          taskID: id,
-        })
-      }
-      void sink?.notifyBlocked?.(id, kind, parentID)
-    },
-    onEvent: (event) => {
-      if (event.kind !== "wake_parent") return
-      if (event.wakeReason === "blocked" || event.wakeReason === "exhausted") {
-        cfg.onTerminalHold?.(event.id, event.wakeReason)
-        void sink?.notifyBlocked?.(event.id, event.wakeReason, sessionJob.get(event.id))
-      }
-      audit?.write(event.id, {
-        subsystem: "delegation",
-        event: "worker_liveness_blocked",
-        wake_reason: event.wakeReason,
-        paid_root_wake: event.paidRootWake,
-      })
-      const parentID = sessionJob.get(event.id)
-      if (parentID) {
-        rootState.noteChildSettled(parentID, "failed")
-        if (event.wakeReason === "blocked" || event.wakeReason === "exhausted") {
-          rootState.recordDelegationFailure(parentID, {
-            id: `liveness-blocked:${event.id}`,
-            kind: "watchdog_reclaim_exhausted",
-            reason: event.wakeReason,
-            observedAtMs: Date.now(),
-            taskID: event.id,
-          })
-        }
-      }
-    },
-  })
-
   // Single-cancel arbiter: at most one cancel per child session, regardless of
   // how many components (watchdog sweep, hard breaker, model-unavailable
   // failover) observe the same terminal condition.
@@ -630,15 +565,6 @@ export function createDelegationFirstRuntime(
     attachChildSession(parentSessionID, childSessionID) {
       sessionJob.set(childSessionID, parentSessionID)
       watchdog.register(childSessionID, childSessionID)
-      const assignmentID = sessionToAssignment.get(childSessionID)
-      const providerId = assignmentID ? lineageByAssignment.get(assignmentID)?.current_worker : undefined
-      liveness.register({
-        id: childSessionID,
-        workerId: childSessionID,
-        providerId: providerId ?? "unknown",
-        parentId: parentSessionID,
-        freeLane: true,
-      })
       if (pendingRequestStarted.delete(childSessionID)) {
         watchdog.markRequestStarted(childSessionID)
         satisfyWorkerRequirement(parentSessionID)
@@ -680,11 +606,6 @@ export function createDelegationFirstRuntime(
             parent_session_id: parentBeforeDetach ?? assignmentBeforeDetach?.parent_session_id ?? null,
           })
           const parentID = parentBeforeDetach ?? assignmentBeforeDetach?.parent_session_id
-          // Process-exit detection: the child session vanished while still
-          // running, i.e. the delegated process crashed. Feed the liveness
-          // supervisor so its detector agrees with the watchdog's
-          // `child_exited_unexpectedly` evidence (the supervisor never cancels).
-          liveness.processExited(childSessionID)
           if (parentID) {
             rootState.recordDelegationFailure(parentID, {
               id: `child-exited-unexpectedly:${childSessionID}`,
@@ -728,14 +649,6 @@ export function createDelegationFirstRuntime(
         } else if (settledTerminal === "failed" || settledTerminal === "cancelled") {
           rootState.noteChildSettled(settledParentID, settledTerminal)
         }
-      }
-
-      // Feed the liveness supervisor the terminal observation. It never cancels;
-      // a cancel after a completion is a no-op because terminal states are final.
-      if (terminalStage === "completed") {
-        liveness.complete(childSessionID)
-      } else {
-        liveness.cancel(childSessionID)
       }
 
       if (paidSessions.has(childSessionID)) {
@@ -809,8 +722,6 @@ export function createDelegationFirstRuntime(
       return ladder.findings(jobID)
     },
     markRequestStarted(sessionID) {
-      liveness.acknowledge(sessionID)
-      liveness.heartbeat(sessionID)
       if (watchdog.sessions().includes(sessionID)) {
         watchdog.markRequestStarted(sessionID)
         const parent = sessionJob.get(sessionID)
@@ -843,7 +754,6 @@ export function createDelegationFirstRuntime(
 
       if (!assignment || !sink?.relaunch) {
         watchdog.onTerminal(sessionID, "failed")
-        liveness.cancel(sessionID)
         issueCancel(sessionID, reason, { blocked: true })
         audit?.write(sessionID, {
           subsystem: "delegation",
@@ -881,7 +791,6 @@ export function createDelegationFirstRuntime(
       )
       if (selection.kind === "no_eligible_worker") {
         watchdog.onTerminal(sessionID, "failed")
-        liveness.cancel(sessionID)
         issueCancel(sessionID, reason, { blocked: true })
         audit?.write(sessionID, {
           subsystem: "delegation",
@@ -959,7 +868,6 @@ export function createDelegationFirstRuntime(
         })
       }
       watchdog.onTerminal(sessionID, "failed")
-      liveness.cancel(sessionID)
       issueCancel(sessionID, `recovery relaunch denied: ${outcome.reason}`, { blocked: true })
     },
     unavailableModels() {
@@ -1028,7 +936,6 @@ export function createDelegationFirstRuntime(
         }
         recovery.reset(episodeKey)
         watchdog.onTerminal(sessionID, "cancelled")
-        liveness.cancel(sessionID)
         releaseChildSessionState(sessionID)
         issueCancel(sessionID, `hard circuit breaker tripped after ${durationMs}ms in ${result.stallMode}`, {
           blocked: true,
@@ -1172,7 +1079,6 @@ export function createDelegationFirstRuntime(
 
       // Truthful terminal: a reclaimed child is cancelled, never left running.
       watchdog.onTerminal(sessionID, "cancelled")
-      liveness.cancel(sessionID)
       // Single terminal wake per episode: when a replacement child was
       // dispatched the reclaim cancel is an intermediate step, so the parent
       // wake is suppressed here and fires once at the episode terminal
@@ -1191,10 +1097,6 @@ export function createDelegationFirstRuntime(
     },
     watchdogActivity(sessionID, signal = "alive") {
       watchdog.onActivity(sessionID, signal)
-      liveness.heartbeat(sessionID)
-      if (signal !== "alive") {
-        liveness.progress(sessionID)
-      }
       if (signal === "alive") return
       if (!modelRecoveredSessions.has(sessionID)) {
         const assignmentID = sessionToAssignment.get(sessionID)
@@ -1213,15 +1115,11 @@ export function createDelegationFirstRuntime(
     },
     watchdogTerminal(sessionID) {
       watchdog.onTerminal(sessionID)
-      liveness.complete(sessionID)
     },
     checkWatchdog(sessionID, nowMs) {
       return watchdog.check(sessionID, nowMs)
     },
     checkAllWatchdogs(nowMs) {
-      // Drive the liveness supervisor from the same periodic sweep that drives
-      // the watchdog. It is detector/notifier-only and never cancels a child.
-      liveness.tick(nowMs)
       return watchdog.checkAll(nowMs)
     },
     sessions() {
@@ -1662,7 +1560,6 @@ export function createDelegationFirstRuntime(
     },
     dispose() {
       watchdog.dispose()
-      liveness.stop()
       cancelIssued.clear()
       rootState.clear()
       jobSession.clear()
@@ -1677,7 +1574,6 @@ export function createDelegationFirstRuntime(
       modelRecoveredSessions.clear()
     },
   }
-  runtimeApi = api
   return api
 }
 

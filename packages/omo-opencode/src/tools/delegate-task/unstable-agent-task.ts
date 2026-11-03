@@ -21,7 +21,8 @@ export async function executeUnstableAgentTask(
   agentToUse: string,
   categoryModel: DelegatedModelConfig | undefined,
   systemContent: string | undefined,
-  actualModel: string | undefined
+  actualModel: string | undefined,
+  effectiveModelAuthorized = false,
 ): Promise<string> {
   const { manager, client, syncPollTimeoutMs, sisyphusAgentConfig } = executorCtx
   let cleanupReason: string | undefined
@@ -45,6 +46,7 @@ export async function executeUnstableAgentTask(
       skillContent: systemContent,
       category: args.category,
       sessionPermission: QUESTION_DENIED_SESSION_PERMISSION,
+      ...(effectiveModelAuthorized ? { effectiveModelAuthorized: true } : {}),
     })
     launchedTaskID = task.id
 

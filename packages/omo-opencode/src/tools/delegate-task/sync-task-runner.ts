@@ -10,6 +10,7 @@ import { shouldAttemptPollErrorRecovery } from "./sync-poll-error-recovery"
 import type { SyncTaskDeps } from "./sync-task-deps"
 import { getNextSyncFallbackModel, retrySyncPromptWithFallbacks } from "./sync-task-fallback"
 import type { DelegatedModelConfig, DelegateTaskArgs, ToolContextWithMetadata } from "./types"
+import { authorizeEffectiveModelDispatch } from "./paid-consent"
 
 type SyncTaskRunnerInput = {
   readonly args: DelegateTaskArgs
@@ -101,6 +102,21 @@ export async function runSyncTaskLoop(input: SyncTaskRunnerInput): Promise<strin
     : undefined
   let activeSessionID = input.sessionID
 
+  const authorizeAutomaticFallback = (model: DelegatedModelConfig): string | null => {
+    const resolvedModelKey = `${model.providerID}/${model.modelID}`
+    const decision = authorizeEffectiveModelDispatch({
+      resolvedModelKey,
+      pricing: executorCtx.pricingCatalog,
+      identity: {
+        rootSessionID: parentContext.sessionID,
+        workerIdentity: agentToUse,
+        resolvedModelID: resolvedModelKey,
+        taskID: taskId,
+      },
+    })
+    return decision.allowed ? null : decision.message
+  }
+
   while (true) {
     let promptError = await deps.sendSyncPrompt(client, {
       sessionID: activeSessionID,
@@ -119,6 +135,7 @@ export async function runSyncTaskLoop(input: SyncTaskRunnerInput): Promise<strin
         initialError: promptError,
         categoryModel: effectiveCategoryModel,
         fallbackChain,
+        authorizeFallback: authorizeAutomaticFallback,
         sendPrompt: async (fallbackModel) => {
           return deps.sendSyncPrompt(client, {
             sessionID: activeSessionID,
@@ -175,6 +192,11 @@ export async function runSyncTaskLoop(input: SyncTaskRunnerInput): Promise<strin
         : null
       if (!nextFallbackModel) {
         return pollError
+      }
+
+      const fallbackAuthorizationError = authorizeAutomaticFallback(nextFallbackModel)
+      if (fallbackAuthorizationError) {
+        return fallbackAuthorizationError
       }
 
       cleanupRetrySession(activeSessionID)

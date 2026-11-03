@@ -77,6 +77,8 @@ export type DelegateEnforcementInput = {
   requestedTier: string | null
   expectedTokens: number
   rootModelID?: string | null
+  /** Exact single-use operator approval already granted for this dispatch only. */
+  consentApproved?: boolean
 }
 
 export type GovernorFacade = ReturnType<typeof createResourceGovernor>
@@ -241,6 +243,7 @@ export function createResourceGovernorRuntime(opts: {
       const decision = forSession(input.sessionID, input.rootModelID ?? null).evaluateDelegation(
         request,
         now ?? Date.now(),
+        { consentApproved: input.consentApproved === true },
       )
       emitDecisionEvent(input.sessionID, decision)
       return decision

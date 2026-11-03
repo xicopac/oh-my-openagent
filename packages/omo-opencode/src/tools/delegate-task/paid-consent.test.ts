@@ -5,6 +5,7 @@ import {
   PAID_WORKER_CONSENT_DENIED,
   PAID_WORKER_CONSENT_UNAVAILABLE,
   PaidConsentRegistry,
+  authorizeEffectiveModelDispatch,
   classifyPaidStatus,
   consumePaidApproval,
   createOpenCodePermissionConsentProvider,
@@ -190,6 +191,73 @@ describe('paid-consent operator approval', () => {
 })
 
 describe('paid-consent single-use binding', () => {
+  test('#given a verified free effective model #when final dispatch authorization runs #then it proceeds without consuming consent', () => {
+    const registry = new PaidConsentRegistry()
+    const decision = authorizeEffectiveModelDispatch({
+      resolvedModelKey: FREE,
+      pricing: PRICING,
+      registry,
+      identity: identityFor(FREE),
+    })
+
+    expect(decision).toEqual({ allowed: true, kind: 'free', model: FREE })
+    expect(registry.pendingCount()).toBe(0)
+  })
+
+  test('#given an unknown-cost effective model #when no exact approval is present #then final dispatch fails closed', () => {
+    const decision = authorizeEffectiveModelDispatch({
+      resolvedModelKey: UNKNOWN,
+      pricing: PRICING,
+      registry: new PaidConsentRegistry(),
+      identity: identityFor(UNKNOWN),
+    })
+
+    expect(decision.allowed).toBe(false)
+    if (decision.allowed) return
+    expect(decision.code).toBe('PAID_APPROVAL_REQUIRED')
+  })
+
+  test('#given an exact paid approval #when final dispatch runs twice #then only the first dispatch is authorized', async () => {
+    const registry = new PaidConsentRegistry()
+    const approval = await enforcePaidWorkerLaunch(gateInput({ registry }))
+    if (approval.action !== 'allow_paid') throw new Error('expected approval')
+    const input = {
+      resolvedModelKey: PAID,
+      pricing: PRICING,
+      registry,
+      approvalNonce: approval.nonce,
+      identity: identityFor(PAID),
+    }
+
+    expect(authorizeEffectiveModelDispatch(input)).toEqual({
+      allowed: true,
+      kind: 'approved_paid',
+      model: PAID,
+      approvalNonce: approval.nonce,
+    })
+    const replay = authorizeEffectiveModelDispatch(input)
+    expect(replay.allowed).toBe(false)
+    if (replay.allowed) return
+    expect(replay.code).toBe('PAID_APPROVAL_INVALID')
+  })
+
+  test('#given a paid approval bound to another worker #when final dispatch runs #then it rejects the identity mismatch', async () => {
+    const registry = new PaidConsentRegistry()
+    const approval = await enforcePaidWorkerLaunch(gateInput({ registry }))
+    if (approval.action !== 'allow_paid') throw new Error('expected approval')
+    const decision = authorizeEffectiveModelDispatch({
+      resolvedModelKey: PAID,
+      pricing: PRICING,
+      registry,
+      approvalNonce: approval.nonce,
+      identity: identityFor(PAID, { workerIdentity: 'other-worker' }),
+    })
+
+    expect(decision.allowed).toBe(false)
+    if (decision.allowed) return
+    expect(decision.code).toBe('PAID_APPROVAL_INVALID')
+  })
+
   test('#given approved model A fails #when the router proposes model B #then B requires a fresh approval', async () => {
     const registry = new PaidConsentRegistry()
     const verdict = await enforcePaidWorkerLaunch(gateInput({ registry }))

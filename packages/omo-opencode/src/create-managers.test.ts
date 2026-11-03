@@ -7,7 +7,7 @@ import { join } from "node:path"
 import type { PluginInput } from "@opencode-ai/plugin"
 
 import { OhMyOpenCodeConfigSchema } from "./config/schema/oh-my-opencode-config"
-import { createManagers } from "./create-managers"
+import { createManagers, runDelegationWatchdogSweep } from "./create-managers"
 import * as openclawRuntimeDispatch from "./openclaw/runtime-dispatch"
 import { createModelCacheState } from "./plugin-state"
 
@@ -456,5 +456,49 @@ describe("createManagers", () => {
     // then: the runtime's negative availability cache records it (auto re-dispatch is governed by the runtime)
     expect(managers.delegationFirstRuntime?.unavailableModels()).toContain("opencode/gpt-5.4")
     rmSync(availabilityDir, { recursive: true, force: true })
+  })
+
+  it("#given a timed-out worker whose recovery authority declines reclaim #when the independent sweep runs #then it does not invent a cleanup or terminal action", () => {
+    const reclaims: Array<{ sessionID: string; providerModel: string | null }> = []
+    const errors: unknown[] = []
+    const result = runDelegationWatchdogSweep({
+      runtime: {
+        checkAllWatchdogs: () => [{
+          sessionID: "ses-declined",
+          result: { timedOut: true, stallMode: "PROVIDER_RESPONSE_STALL" },
+        }],
+        reclaimStalled: (sessionID, providerModel) => {
+          reclaims.push({ sessionID, providerModel })
+          return false
+        },
+      },
+      findTask: () => ({ model: { providerID: "openai", modelID: "free-a" } }),
+      onSessionError: (_sessionID, error) => errors.push(error),
+    })
+
+    expect(reclaims).toEqual([{ sessionID: "ses-declined", providerModel: "openai/free-a" }])
+    expect(result).toEqual({ checked: 1, attempted: 1, reclaimed: 0 })
+    expect(errors).toEqual([])
+  })
+
+  it("#given recovery accepts a timed-out worker #when the independent sweep runs #then exactly one authority receives the reclaim", () => {
+    let reclaimCalls = 0
+    const result = runDelegationWatchdogSweep({
+      runtime: {
+        checkAllWatchdogs: () => [{
+          sessionID: "ses-reclaimed",
+          result: { timedOut: true, stallMode: "EXECUTION_STALL" },
+        }],
+        reclaimStalled: () => {
+          reclaimCalls += 1
+          return true
+        },
+      },
+      findTask: () => undefined,
+      onSessionError: () => {},
+    })
+
+    expect(reclaimCalls).toBe(1)
+    expect(result).toEqual({ checked: 1, attempted: 1, reclaimed: 1 })
   })
 })
