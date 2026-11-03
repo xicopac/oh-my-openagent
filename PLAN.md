@@ -1,9 +1,9 @@
 # OMO Stabilization Plan
 
-Last updated: 2026-11-02 (Europe/Madrid)
+Last updated: 2026-11-03 (Europe/Madrid)
 Owner: Codex
-Canonical base: `4d1961c7e45223590768cce43093a839198eb28a`
-Implementation worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-dispatch-authorization` (Slice D, stacked on reviewed Slice C commit `6784d7a61`)
+Canonical base: `d4e2979b80de9d04768f380828bfca4b428276ae` (merged PR stack on `release/canonical-20261029`)
+Implementation worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-slice-e-release-gate` (Slice E, based directly on the merged release head)
 Production boundary: `/srv/dev/oh-my-openagent` is read-only and must not be built, edited, restarted, or deployed by this plan.
 
 ## Objective
@@ -185,19 +185,25 @@ Verification checkpoint (2026-11-02):
 
 Files:
 
+- `package.json` plus a shared script helper: declare Bun `1.4.3` as the release toolchain and reject mismatched generator invocations before they can rewrite tracked outputs.
+- `script/build.ts`, `script/build-codex-install.ts`, `script/build-service-auth.ts`, and the Senpi extension build entry: enforce the same exact Bun version at every tracked generator boundary.
+- Focused toolchain and clean-build tests under `script/` and `packages/omo-senpi/plugin/scripts/`.
 - Resource-bounded isolated runtime harness under repository test/script conventions.
-- CI workflow/package scripts for the named reliability gate.
-- Release manifest/build verification helper and architecture/release documentation.
+- Release-candidate manifest/build verification helper and architecture/release documentation.
 
 Changes:
 
-- Sequential fake-provider matrix, bounded timeouts, cleanup traps, process-leak assertions, DB isolation proof, CPU/temperature preflight documentation.
-- Clean-checkout build manifest and artifact verification. No production switch.
+- Preserve the integrated A-D stack exactly: PRs #1, #2, and #3 are merge commits on the release line; #4 is present exactly once through #3's tree-identical rewritten commits.
+- Sequential fake-provider matrix, bounded timeouts, cleanup traps, process-leak assertions, DB isolation proof, and no real provider traffic.
+- Regenerate only declared tracked artifacts with the CI-pinned Bun version; add a gate that starts and ends with a clean tracked tree.
+- Emit a deterministic release-candidate manifest containing commit, Bun/Node versions, lockfile hash, artifact hash/size, evidence hashes, and an explicit rollback target. No production switch.
 
 Verification:
 
-- Repeated unattended matrix with stable process count, bounded wall time, bounded artifact growth, and temperature below 90°C.
-- Clean rebuild from commit with matching artifact hash and evidence manifest.
+- Post-merge combined scope: 385 tests / 1,422 assertions and scoped OpenCode typecheck.
+- Real OpenCode 1.19.3 matrix on the exact merged bundle: guard policy, normal completion, free stall recovery, bounded BLOCKED exhaustion, restart/deleted-child replay, paid denial, and one synthetic explicit paid approval.
+- Standalone empty-response, explicit cancellation, compaction, and repeated unattended resource scenarios remain to be added to the committed matrix.
+- Two clean rebuilds from the same commit must leave the tracked tree unchanged and produce the same artifact hash and manifest fields.
 
 ## Execution rules
 

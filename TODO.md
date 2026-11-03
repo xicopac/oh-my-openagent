@@ -42,8 +42,8 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 - [x] Commit documentation/plan, tests, and implementation in five atomic commits according to repository commit-count policy.
 - [x] Push `fix/stabilize-omo-core` to the fork without altering production.
 - [x] Push the canonical base and open reviewer-readable PR #1 against `release/canonical-20261029`; exact merge base is `4d1961c7e` and the diff contains only Slice A stabilization files.
-- [ ] Resolve CI and review findings with fresh QA for behavior-changing fixes.
-- [!] Merge PR #1 into `release/canonical-20261029` with a merge commit after its active gates pass. Blocked only on the human CLA signature; do not update `dev` or deploy.
+- [x] Resolve CI and review findings with fresh QA for behavior-changing fixes.
+- [x] Merge PR #1 into `release/canonical-20261029` with merge commit `876cff5e0`; do not update `dev` or deploy.
 
 ## Separate housekeeping — fork Git history
 
@@ -73,7 +73,7 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 - [x] Freeze reviewer-readable evidence and SHA-256 manifest under `.omo/evidence/20261030-worker-ledger/`.
 - [x] Update `PLAN.md`, `STATE.md`, and `TODO.md` with observed behavior and residual risks.
 - [x] Commit Slice B in five atomic commits, verify exact merge bases and the 16-file intended diff, push the dependent branch, and open reviewer-readable PR #2.
-- [!] Merge PR #2 with a merge commit after #1 and active gates pass. Blocked only on the human CLA signature; no deployment.
+- [x] Retarget PR #2 to `release/canonical-20261029`, revalidate its exact isolated delta/checks, and merge it as `61f887117`; no deployment.
 
 ## Slice C — single supervision authority
 
@@ -90,7 +90,7 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 - [x] Prove one bounded alternate succeeds or exhausts to BLOCKED, one acknowledged terminal wake resumes the parent, only configured free fake models are requested, real stores remain unchanged, and exact test processes stop.
 - [x] Freeze local evidence with reviewer-readable summary and SHA-256 manifest.
 - [x] Update durable state, commit atomically, verify the dependent diff/merge bases, push, and open clean mergeable stacked PR #3.
-- [!] Merge PR #3 with a merge commit after #1 and #2 and all active gates pass. Blocked only on the human CLA signature; no deployment.
+- [x] Retarget PR #3 to `release/canonical-20261029`, revalidate its exact isolated delta/checks, and merge it as `d4e2979b8`; no deployment.
 
 ## Slice D — unified paid/free dispatch authorization
 
@@ -110,13 +110,22 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 - [x] Prove only configured local fake endpoints were contacted, real stores were unchanged, and exact test processes stopped.
 - [x] Freeze reviewer-readable evidence and SHA-256 manifest under `.omo/evidence/20261101-dispatch-authorization/`.
 - [x] Update durable state, commit atomically, verify exact Slice C/canonical merge bases and the 23-file dependent diff, push, and open clean mergeable stacked PR #4.
-- [!] Merge PR #4 with a merge commit after #1–#3 and all active gates pass. Human CLA action remains outside Codex authority; no deployment.
+- [x] Prove merged PR #4 is included exactly once in #3 by tree and patch identity; no redundant open PR remains to close.
 
 ## Slice E — reliability gate and reproducible release
 
-- [ ] Build a sequential, time-bounded real OpenCode fake-provider regression matrix with cleanup and resource assertions.
-- [ ] Run repeated unattended scenarios and record CPU, memory, filesystem-watch, process, and artifact-growth observations.
-- [ ] Add clean-checkout build manifest and regression gate automation.
-- [ ] Prove reproducible versioned artifact and rollback metadata from a clean commit.
-- [ ] Update final architecture/state/release docs, PR, verify, and merge.
+- [x] Verify PR #1-#4 live state, exact ancestry, checks, mergeability, and #4 exact-once inclusion before integration.
+- [x] Merge #1, retarget/revalidate/merge #2, retarget/revalidate/merge #3, and prove the final release tree matches #3/#4 exactly.
+- [x] Re-run the post-merge combined 385-test scope and scoped OpenCode typecheck.
+- [x] Re-run real isolated OpenCode guard, normal completion, free stall recovery, bounded exhaustion, restart/deleted-child replay, paid denial, and one synthetic approved paid scenario on the merged bundle.
+- [x] Reproduce generated-artifact drift with host Bun 1.3.14 and with isolated CI-pinned Bun 1.4.3; identify missing toolchain declaration/fail-fast and stale committed outputs.
+- [>] Add an exact Bun 1.4.3 package/toolchain contract and RED/GREEN tests; wire every tracked generator to fail before writing on mismatch.
+- [ ] Regenerate only the declared Codex/native/Senpi tracked artifacts with Bun 1.4.3 and prove a second generation is byte-identical.
+- [ ] Add a clean-tree release-candidate verifier that records commit, tool versions, lockfile hash, artifact hash/size, evidence hashes, and explicit rollback target.
+- [ ] Prove two clean-checkout builds from one commit leave no tracked diff and emit matching artifact/manifest identity.
+- [ ] Build a committed sequential, time-bounded real OpenCode fake-provider regression matrix with cleanup and resource assertions.
+- [ ] Add standalone empty-response, explicit-cancellation, compaction, and repeated unattended scenarios.
+- [ ] Record CPU, memory, filesystem-watch, process, wall-time, and artifact-growth observations across repeated unattended runs.
+- [ ] Run scoped OpenCode, Codex, and Senpi real-harness QA required by the build surfaces; keep evidence local and ignored.
+- [ ] Update final architecture/state/release docs, open the Slice E PR against `release/canonical-20261029`, verify all gates, and merge only when green.
 - [ ] Stop before production deployment and request explicit human approval for any future switch.

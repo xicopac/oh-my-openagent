@@ -1,17 +1,19 @@
 # OMO Stabilization State
 
-Last updated: 2026-11-02 Europe/Madrid
-Status: Slice A PR #1, Slice B PR #2, Slice C PR #3, and Slice D PR #4 form a clean mergeable stack. Earlier PR automation is green except the human CLA signature; PR #4 checks are newly queued. No production changes.
+Last updated: 2026-11-03 Europe/Madrid
+Status: PRs #1, #2, and #3 are merged in order into `release/canonical-20261029`; #4 is included exactly once through #3. Post-merge source and real OpenCode runtime gates pass. Release acceptance remains blocked on stale generated artifacts and the unfinished Slice E matrix. No production changes.
 
 ## Repository state
 
-- Canonical source: `/srv/dev/omo-canonical-release-rc` at `4d1961c7e` on `release/canonical-20261029`.
+- Canonical source: `/srv/dev/omo-canonical-release-rc` at `d4e2979b8` on `release/canonical-20261029`.
+- Integrated merge commits: #1 `876cff5e0`, #2 `61f887117`, #3 `d4e2979b8`. Each merge's second parent is the exact reviewed PR head.
+- PR #4 original head `63e83c488` and integrated #3 head `1dbe9fcfe` share tree `d408007c6b21230dea0713e9cd62575cea4e9abe`; the release tree is the same, so Slice D appears exactly once.
 - Slice A worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-omo-core` on `fix/stabilize-omo-core`, based on `4d1961c7e`.
 - Production plugin: `/srv/dev/oh-my-openagent`; untouched.
 - Existing guard candidate: `/srv/dev/omo-guard-consistency-rc` at `af1b246ee`; preserved and not edited.
 - Existing evidence and historical worktrees: preserved; none deleted.
 - Goal registered: stabilize OMO through architecture, core reliability, real runtime proof, and reproducible release safeguards; stop before deployment.
-- Remote task branch: `origin/fix/stabilize-omo-core`; tracks this checkpoint branch and was pushed without changing `origin/dev` or the production checkout.
+- Active Slice E worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-slice-e-release-gate` on `fix/stabilize-slice-e-release-gate`, created from merged release head `d4e2979b8`.
 - Slice A PR: `https://github.com/xicopac/oh-my-openagent/pull/1`, base `release/canonical-20261029`, exact merge base `4d1961c7e`, 7 commits and 16 intended files. Structural checks pass; CLA is the only failed gate and requires the human `xicopac` account to sign.
 - Active Slice B worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-worker-ledger` on `fix/stabilize-worker-ledger`, stacked from `e66143235` without modifying the Slice A worktree.
 - Slice B PR: `https://github.com/xicopac/oh-my-openagent/pull/2`, base `fix/stabilize-omo-core`, exact Slice A merge base `e66143235`, exact canonical merge base `4d1961c7e`, five implementation/evidence commits and 16 intended files before this final status-only checkpoint. GitHub reports the PR mergeable; every active automation check passes except CLA.
@@ -25,7 +27,19 @@ Status: Slice A PR #1, Slice B PR #2, Slice C PR #3, and Slice D PR #4 form a cl
 - Active Slice D worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-dispatch-authorization` on `fix/stabilize-dispatch-authorization`, stacked from Slice C status commit `6784d7a61`.
 - Slice D evidence: `.omo/evidence/20261101-dispatch-authorization/`; local and gitignored.
 - Slice D candidate bundle: SHA-256 `c9efff12498a282b330db709154fea16997ac30faa94d7787547a527ad5079f0`; ignored build artifact only, not production.
-- Slice D PR: `https://github.com/xicopac/oh-my-openagent/pull/4`, base `fix/stabilize-worker-supervisor`, exact Slice C merge base `6784d7a61`, exact canonical merge base `4d1961c7e`, six implementation/evidence commits and 23 intended files before this status-only checkpoint. GitHub reports the PR clean and mergeable.
+- PRs #1-#4 all report `MERGED`; no open stabilization PR became redundant, so none required manual closure.
+
+## Integration and post-merge gate — 2026-11-03
+
+- Before every merge, GitHub reported the pinned head `CLEAN`/`MERGEABLE`; CLA and every active check passed. The release branch has no required-status rule to bypass, and no bypass was used.
+- #2 and #3 were retargeted through the GitHub REST API only after their predecessor merged. Their isolated deltas remained exactly 6 commits / 16 files (+623/-65) and 11 commits / 27 files (+740/-272), respectively.
+- First-parent release history is exactly #1 -> #2 -> #3. Release tree `d408007c6b21230dea0713e9cd62575cea4e9abe` matches both final #3 and original #4.
+- Post-merge combined regression gate: 385 tests across 35 files pass, 0 fail, 1,422 assertions; scoped OpenCode adapter typecheck exits 0.
+- Canonical build succeeds and imports `default` plus `omoPlugin`; `dist/index.js` is 6,569,164 bytes, SHA-256 `626b8f4486c999ffbeb09d5f5f5bb77bb3da583c3efca56134ce5dbcab450350`.
+- Real OpenCode 1.19.3 on that exact merged bundle passes normal completion, free-provider stall recovery, bounded BLOCKED exhaustion, restart/deleted-child result replay, paid denial, one synthetic explicit paid approval, and guard authorization. No scenario needed a second human message.
+- Runtime isolation remains intact: real OpenCode DB stayed at 2,351 sessions, real worker store stayed at 93 records, only local fake providers were contacted, and all exact test processes stopped.
+- Evidence: `.omo/evidence/20261103-post-merge-stack/` in the active worktree; local and gitignored.
+- Reproducibility root cause: CI/release workflows pin Bun 1.4.3 but package metadata does not. The host default Bun 1.3.14 rewrites 12 tracked artifacts; an isolated clean checkout using Bun 1.4.3 still rewrites 17 tracked artifacts, proving the committed generated outputs are stale and the build has no clean-tree gate.
 
 ## Confirmed findings
 
@@ -77,22 +91,22 @@ Status: Slice A PR #1, Slice B PR #2, Slice C PR #3, and Slice D PR #4 form a cl
 
 ## Current decision
 
-Slice D is ready for atomic commits and a stacked PR against Slice C. Cost authority is now path-independent: initial dispatch and every effective-model switch use one decision, automatic fallback/recovery is free-only, and paid approval is exact and single-use.
+The A-D stabilization stack is integrated and runtime-green. It is not yet a release candidate because tracked generated artifacts do not reproduce from the declared CI toolchain and the remaining Slice E scenarios are not committed or repeated.
 
-Final focused evidence is 119 passing tests with 355 assertions plus a clean scoped typecheck. The 2,163-module candidate bundle imports with required assets at SHA-256 `c9efff12498a282b330db709154fea16997ac30faa94d7787547a527ad5079f0`. Real OpenCode 1.19.3 runs prove free completion and parent wake, zero unattended paid requests, and exactly one paid request after one synthetic explicit approval.
-
-All final runtime runs used only local fake endpoints, left the real OpenCode DB at 2,351 sessions and the real worker store at 93 records, and stopped their isolated OpenCode/provider processes. Production source, build, branch, configuration, and services remain untouched.
+The next implementation is deliberately narrow: declare and enforce Bun 1.4.3 at all tracked generator boundaries, regenerate the declared artifacts under that toolchain, add a clean-tree release manifest/rollback gate, then finish the missing runtime scenarios. No deployment work is authorized.
 
 ## Next checkpoint
 
-1. Observe PR #4 automation and repair any real finding with fresh scoped QA.
-2. The human `xicopac` account signs the CLA so PRs #1–#4 can satisfy their non-automatable gate.
-3. Merge the stack in dependency order with merge commits after gates pass; never synchronize `dev` or deploy.
-4. Continue with the remaining Slice E runtime/release matrix.
+1. Pin Bun 1.4.3 in package metadata and reject mismatched tracked-generator invocations before any output is written.
+2. Regenerate the tracked Codex, native, and Senpi artifacts with the pinned toolchain and prove a second generation is byte-stable.
+3. Add and prove a clean-checkout manifest/rollback gate.
+4. Commit the sequential runtime harness and finish empty-response, explicit cancellation, compaction, and repeated unattended resource scenarios.
+5. Open and verify the Slice E PR against `release/canonical-20261029`; do not deploy.
 
 ## Honest remaining gaps
 
 - Compaction-specific runtime proof, standalone empty-response and explicit-cancellation scenarios, and repeated unattended resource measurements remain for Slice E. Provider-stall success and recovery exhaustion are now proven in a real isolated runtime.
-- Slices A–D are committed, pushed, and open as PRs #1–#4. The earlier stack is CLA-blocked by required human action; Codex cannot satisfy or bypass that gate.
+- Slices A–D are merged into the release branch; no production branch or deployment changed.
 - The fork task branch is safely pushed, but `origin/dev` remains 6,429 commits behind local production `dev`. This is a separate housekeeping task; no force-push, rewrite, synchronization, or production checkout mutation is authorized.
+- The committed generated artifacts are stale under the CI-pinned Bun 1.4.3 and the build does not fail on a mismatched local Bun. This is the active release blocker.
 - Milestone 2 now has durable terminal/outbox behavior, autonomous parent wake, one live supervision/recovery authority, and unified dispatch authorization. Slice E still owns the complete repeated runtime matrix and reproducible-release gate; Milestones 3–4 remain incomplete.
