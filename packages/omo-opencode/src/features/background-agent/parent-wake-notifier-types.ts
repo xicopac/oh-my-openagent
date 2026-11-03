@@ -32,6 +32,7 @@ export type ParentWakeNotifierDeps = {
   readonly onPendingWakeRequeued?: (sessionID: string) => void
   readonly onScheduledFlushSettled?: (sessionID: string) => void
   readonly onWakeDispatched?: (sessionID: string, wake: PendingParentWake) => void
+  readonly onWakeAcknowledged?: (sessionID: string, wake: PendingParentWake) => void
 }
 
 export type ParentWakeNotifierOptions = {

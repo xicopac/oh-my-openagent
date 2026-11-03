@@ -1,4 +1,8 @@
-import { cloneParentWake, type PendingParentWake } from "./parent-wake-dedupe"
+import {
+  cloneParentWake,
+  mergeParentWakeNotifications,
+  type PendingParentWake,
+} from "./parent-wake-dedupe"
 import { unrefTimerHandle } from "./parent-wake-timer-handle"
 
 type ParentWakeDispatchedTrackerOptions = {
@@ -73,18 +77,32 @@ export class ParentWakeDispatchedTracker {
   }
 
 
-  clearWake(sessionID: string): void {
+  clearWake(sessionID: string): PendingParentWake | undefined {
     const timer = this.dispatchedParentWakeTimers.get(sessionID)
     if (timer) {
       clearTimeout(timer)
       this.dispatchedParentWakeTimers.delete(sessionID)
     }
+    const wake = this.dispatchedParentWakes.get(sessionID)
     this.dispatchedParentWakes.delete(sessionID)
+    return wake
   }
 
   trackWake(sessionID: string, wake: PendingParentWake, dispatchedAt: number): void {
-    this.clearWake(sessionID)
+    const previousWake = this.clearWake(sessionID)
     const dispatchedWake = cloneParentWake(wake)
+    if (previousWake) {
+      dispatchedWake.notifications = previousWake.notifications.reduce(
+        (notifications, notification) => mergeParentWakeNotifications(notifications, notification),
+        dispatchedWake.notifications,
+      )
+      dispatchedWake.shouldReply ||= previousWake.shouldReply
+      dispatchedWake.workerIDs = mergeWorkerIDs(previousWake.workerIDs, dispatchedWake.workerIDs)
+      dispatchedWake.queuedAt = Math.min(
+        previousWake.queuedAt ?? dispatchedAt,
+        dispatchedWake.queuedAt ?? dispatchedAt,
+      )
+    }
     dispatchedWake.dispatchedAt = dispatchedAt
     this.dispatchedParentWakes.set(sessionID, dispatchedWake)
     this.scheduleFailureWindowTimer(sessionID)
@@ -123,4 +141,12 @@ export class ParentWakeDispatchedTracker {
     this.inFlightDispatches.clear()
     this.notificationPreparations.clear()
   }
+}
+
+function mergeWorkerIDs(
+  previous: readonly string[] | undefined,
+  current: readonly string[] | undefined,
+): string[] | undefined {
+  if ((!previous || previous.length === 0) && (!current || current.length === 0)) return undefined
+  return [...new Set([...(previous ?? []), ...(current ?? [])])]
 }

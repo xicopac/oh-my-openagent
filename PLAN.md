@@ -1,9 +1,9 @@
 # OMO Stabilization Plan
 
-Last updated: 2026-10-30 (Europe/Madrid)
+Last updated: 2026-11-01 (Europe/Madrid)
 Owner: Codex
 Canonical base: `4d1961c7e45223590768cce43093a839198eb28a`
-Implementation worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-omo-core`
+Implementation worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-worker-ledger` (Slice B, stacked on reviewed Slice A commit `e66143235`)
 Production boundary: `/srv/dev/oh-my-openagent` is read-only and must not be built, edited, restarted, or deployed by this plan.
 
 ## Objective
@@ -100,8 +100,10 @@ Changes:
 
 Verification:
 
-- Real completion, session deletion, compaction, restart, and duplicate-event scenarios.
-- Exactly one terminal result and one actionable wake per assignment.
+- Focused lifecycle scope: 79 tests pass with terminal first-writer, monotonic wake state, cancellation-abort, duplicate ownership, retention, and restart cases.
+- Real OpenCode normal completion: durable result precedes cleanup, the idle parent resumes without another human message, and output acknowledges the exact wake.
+- Real OpenCode restart/deleted-child recovery: a 48-hour-old outbox replays, `background_output` retrieves the result, acknowledgement survives a second restart, and completed work is not repeated.
+- Compaction-specific runtime proof remains in the wider Slice C/E matrix; Slice B does not claim that deferred scenario is complete.
 
 ### Slice C — Single supervision and bounded retry authority
 

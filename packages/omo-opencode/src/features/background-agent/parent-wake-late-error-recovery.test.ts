@@ -23,6 +23,7 @@ const FINAL_WAKE = "<system-reminder>\n[BACKGROUND TASK COMPLETED]\n[ALL BACKGRO
 function createNotifier(args: {
   readonly sessionMessagesImpl?: (attempt: number) => Promise<unknown>
   readonly promptAsyncImpl?: (call: PromptAsyncCall, attempt: number) => Promise<unknown>
+  readonly onWakeAcknowledged?: (workerIDs: readonly string[]) => void
 } = {}): {
   readonly notifier: ParentWakeNotifier
   readonly promptAsyncCalls: PromptAsyncCall[]
@@ -58,6 +59,9 @@ function createNotifier(args: {
       enqueueNotificationForParent: async (_sessionID, operation) => {
         await operation()
       },
+      ...(args.onWakeAcknowledged
+        ? { onWakeAcknowledged: (_sessionID, wake) => args.onWakeAcknowledged?.(wake.workerIDs ?? []) }
+        : {}),
     },
     {
       pendingRetryMs: 1_000,
@@ -217,6 +221,7 @@ describe("ParentWakeNotifier late error recovery", () => {
   test("#given assistant output appears after the recovery window #when the wake timer inspects history #then the dispatched wake is cleared", async () => {
     // given
     let showAcceptedAssistantOutput = false
+    const acknowledgedWorkerIDs: string[][] = []
     const { notifier, promptAsyncCalls } = createNotifier({
       sessionMessagesImpl: async () => ({
         data: [
@@ -232,9 +237,10 @@ describe("ParentWakeNotifier late error recovery", () => {
             : []),
         ] satisfies readonly SessionMessageStub[],
       }),
+      onWakeAcknowledged: (workerIDs) => acknowledgedWorkerIDs.push([...workerIDs]),
     })
     const sessionID = "parent-late-window-accepted-output"
-    notifier.queuePendingParentWake(sessionID, FINAL_WAKE, { agent: "sisyphus" }, true)
+    notifier.queuePendingParentWake(sessionID, FINAL_WAKE, { agent: "sisyphus" }, true, undefined, ["bg_timer_ack"])
 
     try {
       await notifier.flushPendingParentWake(sessionID)
@@ -248,6 +254,7 @@ describe("ParentWakeNotifier late error recovery", () => {
       // then
       expect(notifier.getDispatchedParentWakes().has(sessionID)).toBe(false)
       expect(notifier.getDispatchedParentWakeTimers().has(sessionID)).toBe(false)
+      expect(acknowledgedWorkerIDs).toEqual([["bg_timer_ack"]])
     } finally {
       notifier.shutdown()
       releaseAllPromptAsyncReservationsForTesting()

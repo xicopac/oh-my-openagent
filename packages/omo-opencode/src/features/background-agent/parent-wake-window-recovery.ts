@@ -12,6 +12,7 @@ type ParentWakeWindowRecoveryInput = {
   readonly sessionInspector: ParentWakeSessionInspector
   readonly requeueWake: (wake: PendingParentWake) => void
   readonly scheduleFlush: () => void
+  readonly onWakeAcknowledged?: (wake: PendingParentWake) => void
 }
 
 export async function handleDispatchedParentWakeWindowElapsed(
@@ -23,6 +24,7 @@ export async function handleDispatchedParentWakeWindowElapsed(
   }
 
   if (await input.sessionInspector.hasAssistantOrToolOutputAfterDispatchedWake(input.sessionID, input.wake)) {
+    input.onWakeAcknowledged?.(input.wake)
     input.dispatchedTracker.clearWake(input.sessionID)
     log("[background-agent] Cleared dispatched parent wake after observing assistant output:", {
       sessionID: input.sessionID,

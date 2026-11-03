@@ -10,7 +10,10 @@ import type {
   WorkerRecordState,
   WorkerRecordStore,
   WorkerRecordStoreOptions,
+  WorkerTerminalTransition,
+  WorkerTerminalTransitionResult,
   WorkerTerminalOutcome,
+  WorkerWakeState,
 } from "./worker-record-types"
 
 export type {
@@ -20,12 +23,32 @@ export type {
   WorkerRecordState,
   WorkerRecordStore,
   WorkerRecordStoreOptions,
+  WorkerTerminalTransition,
+  WorkerTerminalTransitionResult,
   WorkerTerminalOutcome,
+  WorkerWakeState,
 } from "./worker-record-types"
 
 const DEFAULT_MAX_RESULT_CHARS = 64_000
 const RECORD_SUFFIX = ".json"
 const DISABLED_ENV = "OMO_DISABLE_WORKER_RECORDS"
+const TERMINAL_RECORD_FIELDS = new Set<keyof WorkerRecord>([
+  "state",
+  "terminalAt",
+  "terminalOutcome",
+  "terminalEventID",
+  "terminalAttemptID",
+  "terminalReason",
+  "result",
+  "resultTruncated",
+  "attempts",
+  "recoveryEpisodeID",
+])
+const WAKE_STATE_RANK: Record<WorkerWakeState, number> = {
+  pending: 0,
+  dispatched: 1,
+  acknowledged: 2,
+}
 
 export function resolveWorkerRecordRoot(rootDir?: string): string {
   return rootDir ?? join(process.env.HOME || homedir(), ".omo", "workers")
@@ -45,6 +68,8 @@ export function createWorkerRecordStore(options: WorkerRecordStoreOptions = {}):
   const rootDir = resolveWorkerRecordRoot(options.rootDir)
   const now = options.now ?? (() => new Date())
   const maxResultChars = options.maxResultChars ?? DEFAULT_MAX_RESULT_CHARS
+  const createEventID = options.createEventID
+    ?? (() => `wake_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`)
 
   function read(workerID: string): WorkerRecord | undefined {
     try {
@@ -78,18 +103,69 @@ export function createWorkerRecordStore(options: WorkerRecordStoreOptions = {}):
   function update(workerID: string, patch: WorkerRecordPatch): WorkerRecord | undefined {
     const existing = read(workerID)
     if (!existing) return undefined
+    const safePatch = existing.terminalAt ? omitTerminalFields(patch) : patch
     const next: WorkerRecord = {
       ...existing,
-      ...patch,
-      updatedAt: (patch.updatedAt ?? now().toISOString()),
+      ...safePatch,
+      updatedAt: (safePatch.updatedAt ?? now().toISOString()),
     }
-    return save(next) ? next : undefined
+    return save(next) ? read(workerID) : undefined
+  }
+
+  function terminalize(
+    workerID: string,
+    transition: WorkerTerminalTransition,
+  ): WorkerTerminalTransitionResult | undefined {
+    const existing = read(workerID)
+    if (!existing) return undefined
+    if (existing.terminalAt) return { record: existing, committed: false }
+
+    const terminalEventID = createEventID()
+    const next: WorkerRecord = {
+      ...existing,
+      ...transition,
+      terminalEventID,
+      wakeEventID: terminalEventID,
+      wakeState: "pending",
+      wakePendingAt: transition.terminalAt,
+      updatedAt: transition.terminalAt,
+    }
+    if (!save(next)) return undefined
+    const committed = read(workerID)
+    return committed ? { record: committed, committed: true } : undefined
+  }
+
+  function transitionWake(workerID: string, target: WorkerWakeState, at?: Date): WorkerRecord | undefined {
+    const existing = read(workerID)
+    if (!existing?.terminalAt) return existing
+    const legacyAcknowledged = existing.wakeState === undefined && existing.notificationDeliveredAt !== undefined
+    const current: WorkerWakeState = legacyAcknowledged ? "acknowledged" : (existing.wakeState ?? "pending")
+    if (WAKE_STATE_RANK[target] < WAKE_STATE_RANK[current]) return existing
+
+    const timestamp = (at ?? now()).toISOString()
+    const eventID = existing.terminalEventID ?? existing.wakeEventID ?? createEventID()
+    const patch: WorkerRecordPatch = {
+      terminalEventID: eventID,
+      wakeEventID: eventID,
+      wakeState: target,
+      wakePendingAt: existing.wakePendingAt ?? existing.terminalAt,
+      ...(target === "dispatched" && existing.wakeDispatchedAt === undefined
+        ? { wakeDispatchedAt: timestamp }
+        : {}),
+      ...(target === "acknowledged" && existing.wakeAcknowledgedAt === undefined
+        ? { wakeAcknowledgedAt: timestamp, notificationDeliveredAt: timestamp }
+        : {}),
+      updatedAt: timestamp,
+    }
+    const next = { ...existing, ...patch }
+    return save(next) ? read(workerID) : undefined
   }
 
   return {
     rootDir,
     save,
     update,
+    terminalize,
     get: read,
     list() {
       if (process.env[DISABLED_ENV] === "1") return []
@@ -108,16 +184,18 @@ export function createWorkerRecordStore(options: WorkerRecordStoreOptions = {}):
       return records
     },
     markNotificationQueued(workerID, at) {
-      update(workerID, {
-        notificationQueuedAt: (at ?? now()).toISOString(),
-        updatedAt: now().toISOString(),
-      })
+      const timestamp = (at ?? now()).toISOString()
+      transitionWake(workerID, "pending", at)
+      update(workerID, { notificationQueuedAt: timestamp, updatedAt: timestamp })
+    },
+    markWakeDispatched(workerID, at) {
+      transitionWake(workerID, "dispatched", at)
+    },
+    markWakeAcknowledged(workerID, at) {
+      transitionWake(workerID, "acknowledged", at)
     },
     markNotificationDelivered(workerID, at) {
-      update(workerID, {
-        notificationDeliveredAt: (at ?? now()).toISOString(),
-        updatedAt: now().toISOString(),
-      })
+      transitionWake(workerID, "acknowledged", at)
     },
     prune(maxAgeMs, at) {
       const cutoff = (at ?? now()).getTime() - maxAgeMs
@@ -125,7 +203,9 @@ export function createWorkerRecordStore(options: WorkerRecordStoreOptions = {}):
       for (const record of this.list()) {
         const terminalAt = Date.parse(record.terminalAt ?? record.updatedAt)
         if (!Number.isFinite(terminalAt) || terminalAt > cutoff) continue
-        if (record.notificationDeliveredAt === undefined) continue
+        const acknowledged = record.wakeState === "acknowledged"
+          || (record.wakeState === undefined && record.notificationDeliveredAt !== undefined)
+        if (!acknowledged) continue
         try {
           rmSync(workerRecordPath(rootDir, record.workerID), { force: true })
           removed += 1
@@ -136,6 +216,12 @@ export function createWorkerRecordStore(options: WorkerRecordStoreOptions = {}):
       return removed
     },
   }
+}
+
+function omitTerminalFields(patch: WorkerRecordPatch): WorkerRecordPatch {
+  const safe = { ...patch } as Record<string, unknown>
+  for (const field of TERMINAL_RECORD_FIELDS) delete safe[field]
+  return safe as WorkerRecordPatch
 }
 
 export function terminalOutcomeForStatus(status: string): WorkerTerminalOutcome | undefined {

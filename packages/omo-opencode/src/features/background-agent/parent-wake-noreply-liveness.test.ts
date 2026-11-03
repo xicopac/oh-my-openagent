@@ -95,6 +95,7 @@ const SAFE_MESSAGES: SessionMessageStub[] = [
 function createNotifier(args: {
   sessionStatuses?: Record<string, { type: string }>
   messagesProvider: () => SessionMessageStub[]
+  onWakeAcknowledged?: (workerIDs: readonly string[]) => void
 }): {
   notifier: ParentWakeNotifier
   promptAsyncCalls: PromptAsyncCall[]
@@ -119,6 +120,9 @@ function createNotifier(args: {
       enqueueNotificationForParent: async (_sessionID, operation) => {
         await operation()
       },
+      ...(args.onWakeAcknowledged
+        ? { onWakeAcknowledged: (_sessionID, wake) => args.onWakeAcknowledged?.(wake.workerIDs ?? []) }
+        : {}),
     },
     {
       pendingRetryMs: 1_000,
@@ -325,6 +329,54 @@ describe("parent wake noReply admission liveness (issues #4874/#5086)", () => {
 })
 
 describe("parent wake admitted-consumption drop (duplicate ALL-COMPLETE regression)", () => {
+  test("#given admitted and dispatched wakes own different workers #when parent output consumes them #then every worker debt is acknowledged", async () => {
+    const originalDateNow = Date.now
+    Date.now = () => 100_000
+    const acknowledgedWorkerIDs: string[][] = []
+    const { notifier } = createNotifier({
+      sessionStatuses: { "parent-1": { type: "idle" } },
+      messagesProvider: () => [
+        ...SAFE_MESSAGES,
+        {
+          info: { role: "assistant", finish: "stop", time: { created: 101_000 } },
+          parts: [{ type: "text", text: "consumed worker results" }],
+        },
+      ],
+      onWakeAcknowledged: (workerIDs) => acknowledgedWorkerIDs.push([...workerIDs]),
+    })
+    notifier.queuePendingParentWake(
+      "parent-1",
+      FINAL_WAKE,
+      { agent: "sisyphus" },
+      true,
+      undefined,
+      ["bg_admitted"],
+    )
+    const admittedWake = notifier.getPendingParentWakes().get("parent-1")
+    expect(admittedWake).toBeDefined()
+    if (!admittedWake) throw new Error("missing admitted wake")
+    admittedWake.noReplyAdmittedAt = 100_000
+    notifier.getDispatchedParentWakes().set("parent-1", {
+      promptContext: { agent: "sisyphus" },
+      notifications: [SECOND_FINAL_WAKE],
+      shouldReply: true,
+      workerIDs: ["bg_dispatched"],
+      dispatchedAt: 99_000,
+    })
+
+    try {
+      await notifier.flushPendingParentWake("parent-1")
+
+      expect(notifier.getPendingParentWakes().has("parent-1")).toBe(false)
+      expect(notifier.getDispatchedParentWakes().has("parent-1")).toBe(false)
+      expect(acknowledgedWorkerIDs).toEqual([["bg_admitted", "bg_dispatched"]])
+    } finally {
+      Date.now = originalDateNow
+      notifier.shutdown()
+      releaseAllPromptAsyncReservationsForTesting()
+    }
+  })
+
   test("#given admitted wake consumed by live turn output #when stale tool-call deferral would force a resume #then no duplicate reply dispatch and the wake is dropped", async () => {
     // given: reproduce ses_14a3ab27bffe — admit-only deposit at T, parent's live
     // turn keeps producing output after the admission, then the stale tool-call

@@ -41,9 +41,9 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 - [x] Update `PLAN.md`, `STATE.md`, and `TODO.md` with observed behavior and remaining risks.
 - [x] Commit documentation/plan, tests, and implementation in five atomic commits according to repository commit-count policy.
 - [x] Push `fix/stabilize-omo-core` to the fork without altering production.
-- [>] Push the canonical base and open a reviewer-readable stacked PR against `release/canonical-20261029`; first prove the merge base is exactly `4d1961c7e` and the diff contains only Slice A stabilization files.
+- [x] Push the canonical base and open reviewer-readable PR #1 against `release/canonical-20261029`; exact merge base is `4d1961c7e` and the diff contains only Slice A stabilization files.
 - [ ] Resolve CI and review findings with fresh QA for behavior-changing fixes.
-- [>] Merge the stacked PR into `release/canonical-20261029` with a merge commit after its active gates pass. Do not update `dev` or deploy.
+- [!] Merge PR #1 into `release/canonical-20261029` with a merge commit after its active gates pass. Blocked only on the human CLA signature; do not update `dev` or deploy.
 
 ## Separate housekeeping — fork Git history
 
@@ -51,10 +51,29 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 
 ## Slice B — durable terminal result/outbox
 
-- [ ] Write failing tests for terminal compare-and-set, result-before-delete, outbox replay, duplicate terminal events, and completed-attempt retry suppression.
-- [ ] Implement the durable terminal/outbox contract in the smallest reviewable modules.
-- [ ] Prove completion, deletion, compaction, restart, and duplicate-event behavior on real isolated OpenCode.
-- [ ] Update durable state, commit atomically, PR, verify, and merge without deployment.
+- [x] Map the current record, terminalization, session-deletion, retention, wake dispatch, wake acknowledgement, and startup-recovery call paths without redoing the completed architecture audit.
+- [x] Capture the smallest existing worker-recovery and parent-wake tests under `.omo/evidence/20261030-worker-ledger/baseline/` before source edits.
+- [x] Add a RED worker-record test proving the first terminal transition wins and a late failed/cancelled/completed event cannot overwrite its outcome, result, event id, or attempt id.
+- [x] Add a RED worker-record test proving terminal payload and a pending wake outbox entry are persisted in one synchronous commit.
+- [x] Add RED state-transition tests proving pending -> dispatched -> acknowledged is monotonic, duplicate transitions are idempotent, and pruning requires acknowledgement.
+- [x] Add a RED manager test proving completion captures and commits the result/outbox before child abort or deletion.
+- [x] Add RED restart tests proving pending and unacknowledged dispatched outbox entries replay, while acknowledged entries do not.
+- [x] Add a RED parent-output test proving an observed assistant/tool response acknowledges the exact worker wake instead of treating prompt dispatch as delivery.
+- [x] Add a cancellation-abort regression proving a failed abort does not commit a provisional terminal outcome that blocks later truthful completion.
+- [x] Add an admitted/dispatched ownership regression proving parent consumption acknowledges every coalesced worker debt.
+- [x] Implement terminal compare-and-set and explicit durable wake-outbox fields in `worker-record-types.ts` and `worker-record.ts`, retaining backward reads of existing schema-1 records.
+- [x] Make nonterminal persistence refuse to overwrite a terminal record and route every terminal path through the same compare-and-set helper.
+- [x] Mark wake dispatch and acknowledgement separately; keep legacy notification timestamps read-compatible but stop using dispatch as delivery.
+- [x] Replay only pending/unacknowledged terminal outbox records on startup without creating a replacement worker or repeating completed work.
+- [x] Re-run the focused record/manager/wake test group sequentially and capture final GREEN output (79 pass, 0 fail, 319 assertions).
+- [x] Run the scoped OpenCode adapter typecheck only below 90°C and capture output (exit 0).
+- [x] Build the candidate with the resource-bounded single-entry bundle command and materialize required skill assets.
+- [x] Run real isolated OpenCode fake-provider scenarios for normal completion, child-session deletion, restart replay, result retrieval, and parent idle wake without a human message.
+- [x] Prove real DB count unchanged, fake free model only, bounded replay, exact process cleanup, and no orphan test process.
+- [x] Freeze reviewer-readable evidence and SHA-256 manifest under `.omo/evidence/20261030-worker-ledger/`.
+- [x] Update `PLAN.md`, `STATE.md`, and `TODO.md` with observed behavior and residual risks.
+- [x] Commit Slice B in five atomic commits, verify exact merge bases and the 16-file intended diff, push the dependent branch, and open reviewer-readable PR #2.
+- [!] Merge PR #2 with a merge commit after #1 and active gates pass. Blocked only on the human CLA signature; no deployment.
 
 ## Slice C — single supervision authority
 

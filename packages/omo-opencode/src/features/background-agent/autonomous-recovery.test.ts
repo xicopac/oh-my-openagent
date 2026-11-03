@@ -9,8 +9,9 @@ import { createDelegationFirstRuntime } from "../delegation-first/runtime"
 import { createRootWorkerState } from "../delegation-first/root-worker-state"
 import { createRecoveryCoordinator } from "../worker-supervisor"
 import { createWatchdog } from "../worker-supervisor/watchdog"
+import { releaseAllPromptAsyncReservationsForTesting } from "../../shared/prompt-async-gate"
 import { BackgroundManager } from "./manager"
-import { createWorkerRecordStore, type WorkerRecordStore } from "./worker-record"
+import { createWorkerRecordStore, type WorkerRecord, type WorkerRecordStore } from "./worker-record"
 import type { BackgroundTask } from "./types"
 
 const managers: BackgroundManager[] = []
@@ -25,6 +26,7 @@ afterEach(async () => {
     rmSync(tempDirs.pop()!, { recursive: true, force: true })
   }
   stores.length = 0
+  releaseAllPromptAsyncReservationsForTesting()
 })
 
 type FakeClient = {
@@ -144,11 +146,124 @@ describe("autonomous worker lifecycle", () => {
     const record = store.get("bg_done")
     expect(record?.terminalOutcome).toBe("completed")
     expect(record?.result).toBe("worker answer")
-    expect(record?.notificationDeliveredAt).toBeDefined()
+    expect(record?.wakeState).toBe("dispatched")
+    expect(record?.wakeDispatchedAt).toBeDefined()
+    expect(record?.notificationDeliveredAt).toBeUndefined()
     expect(fake.promptAsyncCalls).toHaveLength(1)
     const body = fake.promptAsyncCalls[0]?.body as { noReply?: boolean; parts?: Array<{ text?: string }> } | undefined
     expect(body?.noReply).toBe(false)
     expect(body?.parts?.[0]?.text).toContain("[BACKGROUND TASK COMPLETED]")
+
+    manager.handleEvent({
+      type: "message.updated",
+      properties: { sessionID: "ses_parent", info: { sessionID: "ses_parent", role: "assistant", finish: "stop" } },
+    })
+    expect(store.get("bg_done")?.wakeState).toBe("acknowledged")
+    expect(store.get("bg_done")?.wakeAcknowledgedAt).toBeDefined()
+  })
+
+  test("#given a completed worker #when child teardown starts #then result and pending outbox already exist on disk", async () => {
+    const fake = createFakeClient({
+      messages: {
+        ses_child: [{ info: { role: "assistant" }, parts: [{ type: "text", text: "answer before teardown" }] }],
+      },
+    })
+    const store = createStore()
+    let recordAtAbort: WorkerRecord | undefined
+    ;(fake.client.session as unknown as { abort: (input: { path: { id: string } }) => Promise<unknown> }).abort = async () => {
+      recordAtAbort = store.get("bg_ordered")
+      return { data: true }
+    }
+    const manager = createManager(fake.client, store)
+    const value = task({ id: "bg_ordered", parentSessionId: "ses_parent", sessionId: "ses_child" })
+    addTask(manager, value)
+
+    const complete = Reflect.get(manager, "tryCompleteTask") as (task: BackgroundTask, source: string) => Promise<boolean>
+    await complete.call(manager, value, "ordering proof")
+
+    expect(recordAtAbort).toMatchObject({
+      terminalOutcome: "completed",
+      result: "answer before teardown",
+      wakeState: "pending",
+    })
+  })
+
+  test("#given cancellation abort fails for a live child #when completion later wins #then no provisional terminal record blocks the truthful outcome", async () => {
+    const fake = createFakeClient({
+      messages: {
+        ses_child: [{ info: { role: "assistant" }, parts: [{ type: "text", text: "eventual answer" }] }],
+      },
+    })
+    ;(fake.client.session as unknown as { abort: () => Promise<unknown> }).abort = async () => ({
+      error: { message: "session still active" },
+    })
+    const store = createStore()
+    const manager = createManager(fake.client, store)
+    const value = task({ id: "bg_abort_failed", parentSessionId: "ses_parent", sessionId: "ses_child" })
+    addTask(manager, value)
+
+    expect(await manager.cancelTask(value.id, { source: "test", skipNotification: true })).toBe(false)
+    expect(value.status).toBe("running")
+    expect(store.get(value.id)?.terminalAt).toBeUndefined()
+
+    const complete = Reflect.get(manager, "tryCompleteTask") as (task: BackgroundTask, source: string) => Promise<boolean>
+    expect(await complete.call(manager, value, "completion after failed cancellation")).toBe(true)
+    expect(store.get(value.id)).toMatchObject({
+      terminalOutcome: "completed",
+      result: "eventual answer",
+      wakeState: "pending",
+    })
+  })
+
+  test("#given pending or unacknowledged dispatched outbox #when manager restarts #then replay continues until parent output acknowledges it", async () => {
+    const fake = createFakeClient()
+    const store = createStore()
+    store.save({
+      schemaVersion: 1,
+      workerID: "bg_restart",
+      sessionID: "ses_deleted",
+      parentSessionID: "ses_parent",
+      parentMessageID: "msg_parent",
+      agent: "explore",
+      description: "restart worker",
+      state: "running",
+      createdAt: new Date(Date.now() - 120_000).toISOString(),
+      updatedAt: new Date(Date.now() - 120_000).toISOString(),
+    })
+    store.terminalize("bg_restart", {
+      state: "completed",
+      terminalOutcome: "completed",
+      terminalAt: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+      terminalAttemptID: "att_restart",
+      result: "restart answer",
+    })
+
+    const first = createManager(fake.client, store)
+    const recoverFirst = Reflect.get(first, "recoverTerminalWorkerRecords") as () => Promise<void>
+    await recoverFirst.call(first)
+    expect(pendingWakes(first).get("ses_parent")?.workerIDs).toEqual(["bg_restart"])
+    await flushWake(first, "ses_parent")
+    expect(store.get("bg_restart")?.wakeState).toBe("dispatched")
+
+    await first.shutdown()
+    releaseAllPromptAsyncReservationsForTesting()
+    const second = createManager(fake.client, store)
+    const recoverSecond = Reflect.get(second, "recoverTerminalWorkerRecords") as () => Promise<void>
+    await recoverSecond.call(second)
+    expect(pendingWakes(second).get("ses_parent")?.workerIDs).toEqual(["bg_restart"])
+    await flushWake(second, "ses_parent")
+    second.handleEvent({
+      type: "message.updated",
+      properties: { sessionID: "ses_parent", info: { sessionID: "ses_parent", role: "assistant", finish: "stop" } },
+    })
+    expect(store.get("bg_restart")?.wakeState).toBe("acknowledged")
+
+    await second.shutdown()
+    releaseAllPromptAsyncReservationsForTesting()
+    const third = createManager(fake.client, store)
+    const recoverThird = Reflect.get(third, "recoverTerminalWorkerRecords") as () => Promise<void>
+    await recoverThird.call(third)
+    expect(pendingWakes(third).has("ses_parent")).toBe(false)
   })
 
   test("#given a busy worker ends on an empty assistant turn #when the poller checks it #then the task becomes BLOCKED and the parent is notified", async () => {
