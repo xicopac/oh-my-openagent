@@ -131,5 +131,6 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 - [x] Prove explicit cancellation reaches a running child and releases only that task's owned session/process resources.
 - [x] Record CPU, memory, filesystem-watch, process, wall-time, and artifact-growth observations across repeated unattended runs.
 - [x] Run scoped OpenCode, Codex, and Senpi real-harness QA required by the build surfaces; keep evidence local and ignored.
-- [ ] Update final architecture/state/release docs, open the Slice E PR against `release/canonical-20261029`, verify all gates, and merge only when green.
-- [ ] After the exact Slice E commit is merged and all gates are green, deploy its verified versioned artifact atomically with a recorded rollback target and smoke test; do not rewrite production Git history.
+- [x] Update final architecture/state/release docs, open Slice E PR #5 against `release/canonical-20261029`, verify all gates, and merge it as `4ed0ee31d` with a merge commit.
+- [x] Build the exact merged Slice E commit, preserve the prior bundle, deploy the versioned artifact atomically, and pass the post-deployment real OpenCode smoke test without rewriting production Git history.
+- [ ] Publish the prepared deployment SOP/change record to Wiki.js after an operator grants executable access to the root-owned wiki helper scripts; this does not block the verified runtime deployment.
