@@ -1,17 +1,17 @@
 # OMO Stabilization State
 
 Last updated: 2026-11-05 Europe/Madrid
-Status: Slices A-D are merged into `release/canonical-20261029`. Slice E implementation and all local gates are green. Production remains unchanged until the Slice E PR is merged and the exact merged artifact passes final preflight.
+Status: Slices A-E are merged into `release/canonical-20261029`. The exact merged Slice E artifact passed final preflight, was deployed atomically, and passed the post-deployment real OpenCode smoke test.
 
 ## Git and release state
 
 - Canonical release base and rollback target: `d4e2979b80de9d04768f380828bfca4b428276ae`.
 - Integrated merge commits: PR #1 `876cff5e0`, PR #2 `61f887117`, PR #3 `d4e2979b8`.
 - PR #4 is included exactly once: original #4 head `63e83c488`, integrated #3 head `1dbe9fcfe`, and the release head share tree `d408007c6b21230dea0713e9cd62575cea4e9abe`.
-- Active Slice E worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-slice-e-release-gate`.
-- Active branch: `fix/stabilize-slice-e-release-gate`, based directly on the merged release head.
+- Slice E PR #5 merged as `4ed0ee31d3c5676397b88507ff724f94a19d55fb`; its merge tree exactly matches verified feature head `ffef6e1023e3990317ce8165ea22b8a12b522a90`.
+- `origin/release/canonical-20261029` and the verified release worktree both resolve to `4ed0ee31d3c5676397b88507ff724f94a19d55fb`.
 - Slice E commits before the final runtime checkpoint: `707b6b4d8` (durable plan/state) and `eaba2c2de` (reproducible adapter builds).
-- Production plugin: `/srv/dev/oh-my-openagent`; no source, Git history, configuration, bundle, or running service has been changed.
+- Production plugin: `/srv/dev/oh-my-openagent`. Its source, Git history, configuration, and unrelated dirty files were not changed; only the ignored runtime bundle `dist/index.js` was replaced atomically.
 - The user explicitly authorized an atomic, rollback-capable deployment of the exact merged green artifact. This does not authorize rewriting or synchronizing production Git history, deploying to `dev`, bypassing checks, or contacting a real paid provider.
 
 ## Core reliability architecture now implemented
@@ -71,16 +71,17 @@ Status: Slices A-D are merged into `release/canonical-20261029`. Slice E impleme
 - Two clean builds from commit `eaba2c2de` produce identical artifact SHA-256 `47949e129764ebc8748fd02fe3b1b2ebb7059a459d8cb726e9038960b635b969`.
 - Their manifests are identical after normalizing the intentionally different output path.
 - Both builds start and finish with a clean tracked tree.
-- The final merged Slice E commit will receive a fresh release-candidate manifest before deployment.
+- Exact merged commit `4ed0ee31d` produced artifact SHA-256 `e8553ce477384e4eccdbca6a558a6bcf3313b5147b87f170242a21edf73fc341` (6,536,818 bytes) under Bun 1.4.3; the clean-tree verifier recorded rollback target `d4e2979b80de9d04768f380828bfca4b428276ae`.
+- The versioned deployed artifact is `/srv/dev/omo-releases/oh-my-openagent/4ed0ee31d3c5676397b88507ff724f94a19d55fb/index.js`; its hash is byte-identical to `/srv/dev/oh-my-openagent/dist/index.js`.
+- The previous live bundle is preserved at `/srv/dev/omo-releases/oh-my-openagent/rollback-e5b545d70b0686bbb560381c46ed7005d4953e06939e66190f581f44f032f94a/index.js`.
+- Post-deployment real OpenCode smoke passed normal completion, durable acknowledged wake, autonomous parent continuation, free local fake-provider enforcement, unchanged real stores, and no orphan processes. Evidence: ignored `.omo/evidence/20261105-production-deploy/normal/`.
 
 ## Current decision and next actions
 
-1. Commit the verified runtime matrix, empty-output repair, and durable documentation.
-2. Push the branch and open the Slice E PR against `release/canonical-20261029`.
-3. Verify exact merge base, intended diff, CLA, CI, and merge readiness; merge with a merge commit only if every required check passes.
-4. Build and verify the exact merged commit with rollback target `d4e2979b8`.
-5. Inspect production read-only, preserve the current bundle as the rollback artifact, atomically switch only `dist/index.js` to the verified versioned artifact, and run an isolated local smoke test.
-6. Do not rewrite production Git history, merge to `dev`, deploy a different commit, or contact a real paid provider.
+1. Stabilization Slice E and its production bundle deployment are complete; future OpenCode launches load the verified bundle. No OpenCode process was running during deployment, so no unrelated Codex/tmux process was restarted.
+2. Keep production Git history and source untouched. Roll back by atomically restoring the preserved `e5b545d7...` bundle only if a post-release incident demonstrates the need.
+3. Wiki.js publication remains an operational-documentation follow-up: the required local helpers are root-owned mode `0700`, and passwordless sudo is unavailable. Draft SOP/change text is preserved in ignored `.omo/evidence/20261105-production-deploy/` without reading or exposing credentials.
+4. Do not reconcile `dev`, deploy another commit, or contact a real paid provider as part of this completed stabilization release.
 
 ## Separate housekeeping and deferred work
 
