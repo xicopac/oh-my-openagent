@@ -1,112 +1,89 @@
 # OMO Stabilization State
 
-Last updated: 2026-11-03 Europe/Madrid
-Status: PRs #1, #2, and #3 are merged in order into `release/canonical-20261029`; #4 is included exactly once through #3. Post-merge source and real OpenCode runtime gates pass. Release acceptance remains blocked on stale generated artifacts and the unfinished Slice E matrix. No production changes.
+Last updated: 2026-11-05 Europe/Madrid
+Status: Slices A-D are merged into `release/canonical-20261029`. Slice E implementation and all local gates are green. Production remains unchanged until the Slice E PR is merged and the exact merged artifact passes final preflight.
 
-## Repository state
+## Git and release state
 
-- Canonical source: `/srv/dev/omo-canonical-release-rc` at `d4e2979b8` on `release/canonical-20261029`.
-- Integrated merge commits: #1 `876cff5e0`, #2 `61f887117`, #3 `d4e2979b8`. Each merge's second parent is the exact reviewed PR head.
-- PR #4 original head `63e83c488` and integrated #3 head `1dbe9fcfe` share tree `d408007c6b21230dea0713e9cd62575cea4e9abe`; the release tree is the same, so Slice D appears exactly once.
-- Slice A worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-omo-core` on `fix/stabilize-omo-core`, based on `4d1961c7e`.
-- Production plugin: `/srv/dev/oh-my-openagent`; untouched.
-- Existing guard candidate: `/srv/dev/omo-guard-consistency-rc` at `af1b246ee`; preserved and not edited.
-- Existing evidence and historical worktrees: preserved; none deleted.
-- Goal registered: stabilize OMO through architecture, core reliability, real runtime proof, and reproducible release safeguards; stop before deployment.
-- Active Slice E worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-slice-e-release-gate` on `fix/stabilize-slice-e-release-gate`, created from merged release head `d4e2979b8`.
-- Slice A PR: `https://github.com/xicopac/oh-my-openagent/pull/1`, base `release/canonical-20261029`, exact merge base `4d1961c7e`, 7 commits and 16 intended files. Structural checks pass; CLA is the only failed gate and requires the human `xicopac` account to sign.
-- Active Slice B worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-worker-ledger` on `fix/stabilize-worker-ledger`, stacked from `e66143235` without modifying the Slice A worktree.
-- Slice B PR: `https://github.com/xicopac/oh-my-openagent/pull/2`, base `fix/stabilize-omo-core`, exact Slice A merge base `e66143235`, exact canonical merge base `4d1961c7e`, five implementation/evidence commits and 16 intended files before this final status-only checkpoint. GitHub reports the PR mergeable; every active automation check passes except CLA.
-- Slice B verification: final lifecycle/wake scope is green (79 pass, 0 fail, 319 assertions), scoped OpenCode adapter typecheck exits 0, the 2,168-module candidate bundle imports successfully, and both final real OpenCode runtime scenarios pass.
-- Slice B bundle: `dist/index.js`, 6,585,323 bytes, SHA-256 `054a992efab1e87c43c17e34225466d4600e1f5e409bb635c08d809d49621715`; ignored build artifact only, not production.
-- Slice B evidence: `.omo/evidence/20261030-worker-ledger/README.md` and `SHA256SUMS`; local and gitignored.
-- Active Slice C worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-worker-supervisor` on `fix/stabilize-worker-supervisor`, stacked from Slice B status commit `22e99e7fa`.
-- Slice C evidence: `.omo/evidence/20261101-worker-supervisor/README.md` and `SHA256SUMS`; local and gitignored.
-- Slice C candidate bundle: 6,564,676 bytes, SHA-256 `5404e1b2d36906b3f516435e721f1f64339d6b489b2ae5422fc41a5a906ebd50`; ignored build artifact only, not production.
-- Slice C PR: `https://github.com/xicopac/oh-my-openagent/pull/3`, base `fix/stabilize-worker-ledger`, exact Slice B merge base `22e99e7fa`, exact canonical merge base `4d1961c7e`, three implementation/evidence commits and eight intended files before this status-only checkpoint. GitHub reports the PR clean and mergeable; ensure-labels, label-pull-request, review-claim, and signal checks pass, while CLA is the only failed gate.
-- Active Slice D worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-dispatch-authorization` on `fix/stabilize-dispatch-authorization`, stacked from Slice C status commit `6784d7a61`.
-- Slice D evidence: `.omo/evidence/20261101-dispatch-authorization/`; local and gitignored.
-- Slice D candidate bundle: SHA-256 `c9efff12498a282b330db709154fea16997ac30faa94d7787547a527ad5079f0`; ignored build artifact only, not production.
-- PRs #1-#4 all report `MERGED`; no open stabilization PR became redundant, so none required manual closure.
+- Canonical release base and rollback target: `d4e2979b80de9d04768f380828bfca4b428276ae`.
+- Integrated merge commits: PR #1 `876cff5e0`, PR #2 `61f887117`, PR #3 `d4e2979b8`.
+- PR #4 is included exactly once: original #4 head `63e83c488`, integrated #3 head `1dbe9fcfe`, and the release head share tree `d408007c6b21230dea0713e9cd62575cea4e9abe`.
+- Active Slice E worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-slice-e-release-gate`.
+- Active branch: `fix/stabilize-slice-e-release-gate`, based directly on the merged release head.
+- Slice E commits before the final runtime checkpoint: `707b6b4d8` (durable plan/state) and `eaba2c2de` (reproducible adapter builds).
+- Production plugin: `/srv/dev/oh-my-openagent`; no source, Git history, configuration, bundle, or running service has been changed.
+- The user explicitly authorized an atomic, rollback-capable deployment of the exact merged green artifact. This does not authorize rewriting or synchronizing production Git history, deploying to `dev`, bypassing checks, or contacting a real paid provider.
 
-## Integration and post-merge gate — 2026-11-03
+## Core reliability architecture now implemented
 
-- Before every merge, GitHub reported the pinned head `CLEAN`/`MERGEABLE`; CLA and every active check passed. The release branch has no required-status rule to bypass, and no bypass was used.
-- #2 and #3 were retargeted through the GitHub REST API only after their predecessor merged. Their isolated deltas remained exactly 6 commits / 16 files (+623/-65) and 11 commits / 27 files (+740/-272), respectively.
-- First-parent release history is exactly #1 -> #2 -> #3. Release tree `d408007c6b21230dea0713e9cd62575cea4e9abe` matches both final #3 and original #4.
-- Post-merge combined regression gate: 385 tests across 35 files pass, 0 fail, 1,422 assertions; scoped OpenCode adapter typecheck exits 0.
-- Canonical build succeeds and imports `default` plus `omoPlugin`; `dist/index.js` is 6,569,164 bytes, SHA-256 `626b8f4486c999ffbeb09d5f5f5bb77bb3da583c3efca56134ce5dbcab450350`.
-- Real OpenCode 1.19.3 on that exact merged bundle passes normal completion, free-provider stall recovery, bounded BLOCKED exhaustion, restart/deleted-child result replay, paid denial, one synthetic explicit paid approval, and guard authorization. No scenario needed a second human message.
-- Runtime isolation remains intact: real OpenCode DB stayed at 2,351 sessions, real worker store stayed at 93 records, only local fake providers were contacted, and all exact test processes stopped.
-- Evidence: `.omo/evidence/20261103-post-merge-stack/` in the active worktree; local and gitignored.
-- Reproducibility root cause: CI/release workflows pin Bun 1.4.3 but package metadata does not. The host default Bun 1.3.14 rewrites 12 tracked artifacts; an isolated clean checkout using Bun 1.4.3 still rewrites 17 tracked artifacts, proving the committed generated outputs are stale and the build has no clean-tree gate.
+- Terminal worker records are first-writer-wins and persist outcome, bounded result/error, attempt/event identity, and a pending wake outbox before child teardown.
+- Wake delivery is monotonic `pending -> dispatched -> acknowledged`. Startup replays unacknowledged terminal events without repeating completed work.
+- The watchdog is the single live stall detector; the recovery coordinator is the single retry/exhaustion authority. The removed liveness integration no longer independently retries, blocks, cancels, or wakes.
+- The independent watchdog timer runs without parent LLM activity. Bounded free recovery either completes or terminalizes `blocked` and wakes the parent.
+- Initial dispatch, background/sync fallback, and recovery evaluate the effective model through the same cost boundary. Unknown cost is paid; unattended fallback/recovery is free-only; exact paid approval is single-use and identity-bound.
+- Tool authorization classifies normalized effect rather than transport spelling. Native `apply_patch`, wrappers, opaque shell paths, substitutions, and redirections fail closed consistently.
+- Task process ownership terminates only exact recorded task scopes. Cleanup is idempotent and does not enumerate unrelated processes.
+- A provider-completed empty assistant turn gets a 15-second event-settle grace, then terminalizes `blocked` and wakes the parent instead of polling forever.
+- Sync execution still returns through its attached tool call rather than the durable background outbox. This is a documented future simplification, not a demonstrated release blocker.
 
-## Confirmed findings
+## Slice E implementation
 
-1. The canonical release commit reconstructs the deployed plugin source and reproduces the deployed bundle byte-for-byte with Bun 1.3.14. It is not deployed or merged into the live `dev` checkout.
-2. Prior runtime QA demonstrated that worker results can be durably recorded and parents can wake after completion or retry exhaustion, but the implementation still contains overlapping watchdog/liveness/background mechanisms and conservative restart handling.
-3. `createManagers()` runs a periodic watchdog sweep; `createDelegationFirstRuntime()` owns watchdog, recovery coordinator, and liveness supervisor; the liveness callback can call `reclaimStalled()`, while the same runtime sweep also calls it. A cancel set deduplicates effects, but ownership is still distributed and hard to reason about.
-4. BackgroundManager remains a second lifecycle center: it launches sessions, polls them, detects empty turns/staleness, persists records, captures results, notifies parents, cleans sessions, and cancels tasks.
-5. Parent wake delivery is in-memory queued/dispatched state layered over durable worker records. Existing evidence proves selected recovery cases, not every restart/compaction/deletion interleaving.
-6. Paid authorization exists in ordinary dispatch and recovery relaunch paths, but it is implemented through multiple modules and must be proven equivalent for sync/background/retry/fallback paths.
-7. Real guard QA proved a legitimate single-file `cat` is blocked after the root enters `worker_required`, while an offset+limit `read` is allowed.
-8. Real OpenCode 1.19.3 exposes `apply_patch` as its mutation tool. Canonical `classifyOperation()` recognizes only `edit`/`write`, and unknown tools default to `control`; therefore `apply_patch` can bypass the worker-first authorization decision.
-9. Canonical shell classification treats unknown commands as `control`, so mutations such as `rm`, `mv`, `touch`, `chmod`, `tee`, command substitution, and unhandled wrappers can receive weaker authorization than direct mutation tools.
-10. The unfinished guard commit `af1b246ee` improves shell wrapper parsing and selective diagnostics but does not close the demonstrated `apply_patch` gap or all opaque-shell paths.
-11. Worker terminal persistence is now first-writer-wins in the durable store. Terminal result, outcome, attempt identity, event identity, and pending wake outbox are written before session teardown.
-12. Parent wake state is explicit and monotonic: pending -> dispatched -> acknowledged. Dispatch no longer means delivery; actual parent assistant/tool output or history proof acknowledges the exact worker IDs.
-13. Startup recovery replays pending and unacknowledged dispatched terminal outboxes regardless of age for new records, remains backward-compatible with legacy records, and never recreates or reruns completed work.
-14. A failed cancellation abort no longer writes a provisional cancelled terminal record. This preserves the later truthful completion path when the child remains alive.
-15. Coalesced/admitted wake consumption now acknowledges the union of retained and dispatched worker ownership, preventing a completed worker from being stranded behind another wake.
-16. Slice C trace confirms the live delegation runtime still embeds `worker-liveness-supervisor`, whose internal `attemptRecovery()` and `wake_parent` events can independently block/retry/wake beside the watchdog/recovery coordinator.
-17. The periodic watchdog sweep currently calls exact process cleanup after every timed-out result even when `reclaimStalled()` returns false, and duplicates cleanup after an accepted reclaim. Cleanup must follow the confirmed BackgroundManager terminal transition instead.
-18. Slice C removes `worker-liveness-supervisor` from the live delegation runtime. The watchdog is now the only live stall detector, the recovery coordinator is the only retry-budget decision authority, and liveness can no longer independently retry, block, or wake a parent.
-19. The independent manager timer now performs a metadata-only sweep and calls only `reclaimStalled()`. It has no process-cleanup dependency; declined recovery has no cleanup side effect, while accepted recovery reaches exact task-owned cleanup only through the confirmed BackgroundManager terminal path.
-20. Real OpenCode provider-stall proof covers both bounded alternate success and bounded exhaustion: each used one human root prompt, produced an acknowledged durable terminal record, and autonomously resumed the parent.
-21. Slice D trace confirms ordinary task dispatch requests and consumes exact paid consent in `tools/delegate-task/tools.ts`, while BackgroundManager fallback retries bypass that boundary and mutate the effective model before queueing a new attempt.
-22. Sync fallback can change the effective model both inside the existing session and while creating a replacement session without re-running the paid-consent boundary.
-23. Recovery relaunch uses a separate persistent approval-file policy instead of the single-use in-memory operator approval registry. This is inconsistent with initial dispatch and can authorize repeated paid recovery attempts from one static entry.
-24. Slice D replaces the split cost gates with one final effective-model decision. Missing pricing is unknown/paid, free models require catalog or retained-record verification, and paid models require exact single-use root/worker/model/task approval.
-25. Background and sync fallback now authorize the next effective model before aborting, mutating task state, queueing, prompting, or creating a replacement session. Automatic fallback has no approval nonce and therefore remains free-only.
-26. Automatic recovery no longer reads a static approval file as spending authority. Paid or unknown recovery terminalizes blocked; verified-free recovery retains bounded autonomous relaunch.
-27. Real approved-path QA exposed and fixed a second consent owner: Resource Governor rejected an already-approved paid launch. Exact approval now satisfies only the same dispatch-level governor evaluation and never persists as reusable session consent.
-28. On the final candidate bundle, real OpenCode requested zero paid models without interactive availability and exactly one paid model after synthetic explicit approval. Free completion also persisted and acknowledged its terminal result and woke the parent unattended.
+- Package metadata and every tracked generator enforce exact Bun 1.4.3 before writing.
+- Build concurrency is bounded by `OMO_BUILD_JOBS`.
+- Declared Codex, native, service-auth, and Senpi generated artifacts were regenerated under Bun 1.4.3 and proved byte-stable.
+- Codex cache installs remove cache-local build-only `node_modules` after dependency/skill preparation; Codex 0.166 no longer rejects npm shims or workspace symlinks before hooks execute.
+- Generated Senpi ESM fixtures create their own module boundary and no longer inherit unrelated ancestor `/tmp/package.json` metadata.
+- `script/release-candidate.ts` requires a clean checkout, validates the rollback ancestor, runs the pinned build, rechecks cleanliness, and emits a versioned artifact plus deterministic manifest with commit, Bun/Node, lockfile, generated artifacts, evidence hashes, and rollback target.
+- `script/qa/worker-runtime-matrix/` is the one committed, sequential real-OpenCode runtime gate for normal, stall, empty, cancellation, compaction, and repeated unattended scenarios.
 
-## Current call graph and ownership
+## Verification evidence
 
-- `createDelegateTask()` resolves the initial model, prefers free candidates, obtains any exact paid approval, and calls the shared final cost decision. `BackgroundManager.launch()` consumes the trusted in-process decision marker and performs the separate Resource Governor budget/backstop decision before queue/session/prompt work.
-- Background fallback and both sync fallback forms call the same final cost decision before changing model, aborting an attempt, queueing, prompting, or creating a replacement session. They carry no paid nonce and are therefore free-only.
-- Recovery relaunch accepts only catalog or retained-record verified-free candidates. A paid or unknown candidate exhausts to the existing blocked terminal path and parent wake; static approval files are no longer part of recovery authority.
-- `createManagers()` drives the one watchdog sweep on an independent unref'd timer. The watchdog detects stalls, the recovery coordinator owns bounded retry/exhaustion, and the removed live liveness supervisor no longer retries, blocks, or wakes independently.
-- Background terminal observations converge on first-writer-wins durable terminal records and a monotonic pending/dispatched/acknowledged wake outbox. Startup replay never repeats completed work.
-- Sync execution still returns through the live tool call rather than the durable background worker ledger/outbox. Restart recovery therefore remains intentionally different by execution mode and is a future simplification candidate.
-- Process ownership records exact ai-job units/process groups and is idempotent per record. It remains the only component that signals recorded task-owned scopes.
-- `docs/reference/worker-reliability-architecture.md` records the invariants, ownership boundaries, migration sequence, runtime matrix, and release boundary.
+### OpenCode
 
-## Safety and resource state
+- Final combined scope on Bun 1.4.3: 386 tests, 0 failures, 1,425 assertions across 35 files.
+- Scoped `packages/omo-opencode` typecheck exits 0.
+- Real OpenCode 1.19.3 post-merge coverage includes guard policy, normal completion, provider stall recovery, bounded recovery exhaustion, deleted-child/restart replay, paid denial, and one synthetic single-use paid approval.
+- Final seven-run matrix on bundle SHA-256 `e8553ce477384e4eccdbca6a558a6bcf3313b5147b87f170242a21edf73fc341` passes normal, stall, empty, cancellation, compaction, and three repeated unattended normal runs.
+- Empty output reaches durable `blocked`, its wake is acknowledged, and the parent resumes without another human message.
+- Running-child cancellation closes the owned provider request while an unrelated sentinel remains alive; both test-owned processes are then cleaned exactly.
+- Compaction completes through the real summarize endpoint while the worker is in flight; the recovered result survives and wakes the parent once.
+- Every run keeps the real OpenCode database at 2,351 sessions and the real worker store at 93 records. Only local zero-cost fake models are requested.
+- Repeated-run bounds: RSS 673,336–772,176 KiB; FDs 85–89; inotify FDs exactly 2; sandbox bytes 228,569,797–228,571,230; CPU at most 1,966 ticks; wall time at most 37 seconds; no orphan process.
+- Evidence: ignored `.omo/evidence/20261105-worker-runtime-final/`.
 
-- One orphaned isolated QA server from the previous guard run (PID 918547, port 4199) was confirmed to use the synthetic XDG sandbox and stopped with SIGTERM. No matching QA process remains.
-- No credentials were read. No real provider was contacted.
-- No production process, config, bundle, source checkout, or service was modified.
+### Codex
 
-## Current decision
+- Source/generated focused tests pass.
+- Installer verification passes with nine command links and the real `~/.codex/config.toml` unchanged.
+- Real `codex app-server` with the local mock model completes and emits `hook/started` / `hook/completed` for the plugin.
+- Full `bun run test:codex`: 520 pass, 0 fail.
+- Evidence: ignored `.omo/evidence/20261103-codex-slice-e/`.
 
-The A-D stabilization stack is integrated and runtime-green. It is not yet a release candidate because tracked generated artifacts do not reproduce from the declared CI toolchain and the remaining Slice E scenarios are not committed or repeated.
+### Senpi
 
-The next implementation is deliberately narrow: declare and enforce Bun 1.4.3 at all tracked generator boundaries, regenerate the declared artifacts under that toolchain, add a clean-tree release manifest/rollback gate, then finish the missing runtime scenarios. No deployment work is authorized.
+- Real local Senpi driver passes with `isolationCertified=true`, `realSenpiUntouched=true`, and `realOmoUntouched=true`.
+- Focused descriptor/build/RPC reruns pass.
+- Full `bun run test:senpi`: 5,809 pass, 0 fail, 4 platform skips, 49,948 assertions across 673 files. Evidence-path resolver: 10 pass.
+- Evidence: ignored `.omo/evidence/omo-senpi-adapter/20261103-stabilization-slice-e/`.
 
-## Next checkpoint
+### Reproducible release
 
-1. Pin Bun 1.4.3 in package metadata and reject mismatched tracked-generator invocations before any output is written.
-2. Regenerate the tracked Codex, native, and Senpi artifacts with the pinned toolchain and prove a second generation is byte-stable.
-3. Add and prove a clean-checkout manifest/rollback gate.
-4. Commit the sequential runtime harness and finish empty-response, explicit cancellation, compaction, and repeated unattended resource scenarios.
-5. Open and verify the Slice E PR against `release/canonical-20261029`; do not deploy.
+- Two clean builds from commit `eaba2c2de` produce identical artifact SHA-256 `47949e129764ebc8748fd02fe3b1b2ebb7059a459d8cb726e9038960b635b969`.
+- Their manifests are identical after normalizing the intentionally different output path.
+- Both builds start and finish with a clean tracked tree.
+- The final merged Slice E commit will receive a fresh release-candidate manifest before deployment.
 
-## Honest remaining gaps
+## Current decision and next actions
 
-- Compaction-specific runtime proof, standalone empty-response and explicit-cancellation scenarios, and repeated unattended resource measurements remain for Slice E. Provider-stall success and recovery exhaustion are now proven in a real isolated runtime.
-- Slices A–D are merged into the release branch; no production branch or deployment changed.
-- The fork task branch is safely pushed, but `origin/dev` remains 6,429 commits behind local production `dev`. This is a separate housekeeping task; no force-push, rewrite, synchronization, or production checkout mutation is authorized.
-- The committed generated artifacts are stale under the CI-pinned Bun 1.4.3 and the build does not fail on a mismatched local Bun. This is the active release blocker.
-- Milestone 2 now has durable terminal/outbox behavior, autonomous parent wake, one live supervision/recovery authority, and unified dispatch authorization. Slice E still owns the complete repeated runtime matrix and reproducible-release gate; Milestones 3–4 remain incomplete.
+1. Commit the verified runtime matrix, empty-output repair, and durable documentation.
+2. Push the branch and open the Slice E PR against `release/canonical-20261029`.
+3. Verify exact merge base, intended diff, CLA, CI, and merge readiness; merge with a merge commit only if every required check passes.
+4. Build and verify the exact merged commit with rollback target `d4e2979b8`.
+5. Inspect production read-only, preserve the current bundle as the rollback artifact, atomically switch only `dist/index.js` to the verified versioned artifact, and run an isolated local smoke test.
+6. Do not rewrite production Git history, merge to `dev`, deploy a different commit, or contact a real paid provider.
+
+## Separate housekeeping and deferred work
+
+- Fork history divergence remains separate: `origin/dev` is 6,429 commits behind local production `dev`. No stabilization operation may force-push, rewrite, synchronize, or mutate that history.
+- Deferred, non-blocking features: per-child TUI model/token/cost display, aggregate accounting without double counting, a shared 150k-token context governor, upgrade automation, and obsolete-worktree cleanup.
+- Historical worktrees, original incident evidence, and the unfinished guard candidate remain preserved.

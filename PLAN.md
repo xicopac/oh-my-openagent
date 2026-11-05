@@ -199,14 +199,16 @@ Changes:
 - Regenerate only declared tracked artifacts with the CI-pinned Bun version; add a gate that starts and ends with a clean tracked tree.
 - Preserve external command links through the installer-owned bin directory, but never expose build-only npm dependencies, shims, or workspace symlinks inside the plugin cache scanned by Codex.
 - Make Senpi release tests hermetic to ancestor `/tmp/package.json` files by giving generated ESM fixtures their own module boundary; rerun the descriptor diagnostic at a non-starving bounded CPU quota because it passes unchanged outside the 25% whole-suite throttle.
-- Emit a deterministic release-candidate manifest containing commit, Bun/Node versions, lockfile hash, artifact hash/size, evidence hashes, and an explicit rollback target. No production switch.
+- Emit a deterministic release-candidate manifest containing commit, Bun/Node versions, lockfile hash, artifact hash/size, evidence hashes, and an explicit rollback target. Production switching remains a separate post-merge operation.
 
 Verification:
 
-- Post-merge combined scope: 385 tests / 1,422 assertions and scoped OpenCode typecheck.
+- Final combined scope: 386 tests / 1,425 assertions and scoped OpenCode typecheck.
 - Real OpenCode 1.19.3 matrix on the exact merged bundle: guard policy, normal completion, free stall recovery, bounded BLOCKED exhaustion, restart/deleted-child replay, paid denial, and one synthetic explicit paid approval.
-- Standalone empty-response, explicit cancellation, compaction, and repeated unattended resource scenarios remain to be added to the committed matrix.
-- Two clean rebuilds from the same commit must leave the tracked tree unchanged and produce the same artifact hash and manifest fields.
+- The committed real-runtime matrix passes normal completion, free stall recovery, empty-response BLOCKED terminalization, running-child cancellation, in-flight compaction recovery, and three repeated unattended normal runs.
+- Cancellation closes the worker-owned provider request without touching an unrelated sentinel. Every run leaves the real stores unchanged and exits without orphan processes.
+- Repeated runs have bounded RSS, CPU, file descriptors, inotify watchers, wall time, and evidence growth.
+- Two clean rebuilds from commit `eaba2c2de` leave the tracked tree unchanged and emit artifact SHA-256 `47949e129764ebc8748fd02fe3b1b2ebb7059a459d8cb726e9038960b635b969` with identical normalized manifest fields. The final merged commit receives a fresh manifest before deployment.
 
 ## Execution rules
 
@@ -232,4 +234,4 @@ Milestone 2 exits only when the core invariants above are implemented and every 
 
 Milestone 3 exits only when the full controlled-provider matrix passes repeatedly without human input, lost results, abandoned tasks, unauthorized paid routes, orphan processes, or resource growth.
 
-Milestone 4 exits when a clean commit reproducibly builds a versioned artifact and rollback manifest. Deployment remains pending explicit human approval.
+Milestone 4 exits when a clean commit reproducibly builds a versioned artifact and rollback manifest. The user has explicitly authorized deployment of the exact merged, green artifact with atomic rollback; that operation remains separate from the PR.

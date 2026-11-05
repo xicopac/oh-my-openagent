@@ -121,13 +121,15 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 - [x] Reproduce generated-artifact drift with host Bun 1.3.14 and with isolated CI-pinned Bun 1.4.3; identify missing toolchain declaration/fail-fast and stale committed outputs.
 - [x] Add an exact Bun 1.4.3 package/toolchain contract and RED/GREEN tests; wire every tracked generator to fail before writing on mismatch.
 - [x] Regenerate only the declared Codex/native/Senpi tracked artifacts with Bun 1.4.3 and prove a second generation is byte-identical.
-- [>] Fix the Codex 0.166 live-hook failure by removing build-only cache-local `node_modules` after skill synchronization; prove install links still work and live hooks complete.
+- [x] Fix the Codex 0.166 live-hook failure by removing build-only cache-local `node_modules` after skill synchronization; prove install links still work and live hooks complete.
 - [x] Add a clean-tree release-candidate verifier that records commit, tool versions, lockfile hash, artifact hash/size, evidence hashes, and explicit rollback target.
-- [>] Make the Senpi release gate hermetic to ancestor temp-package metadata; rerun the exact failed files (including the unchanged descriptor diagnostic), then the combined Senpi gate without timeout-inducing over-throttling.
-- [ ] Prove two clean-checkout builds from one commit leave no tracked diff and emit matching artifact/manifest identity.
-- [ ] Build a committed sequential, time-bounded real OpenCode fake-provider regression matrix with cleanup and resource assertions.
-- [ ] Add standalone empty-response, explicit-cancellation, compaction, and repeated unattended scenarios.
-- [ ] Record CPU, memory, filesystem-watch, process, wall-time, and artifact-growth observations across repeated unattended runs.
-- [ ] Run scoped OpenCode, Codex, and Senpi real-harness QA required by the build surfaces; keep evidence local and ignored.
+- [x] Make the Senpi release gate hermetic to ancestor temp-package metadata; rerun the exact failed files (including the unchanged descriptor diagnostic), then the combined Senpi gate without timeout-inducing over-throttling.
+- [x] Prove two clean-checkout builds from one commit leave no tracked diff and emit matching artifact/manifest identity.
+- [x] Build a committed sequential, time-bounded real OpenCode fake-provider regression matrix with cleanup and resource assertions.
+- [x] Add standalone empty-response, explicit-cancellation, compaction, and repeated unattended scenarios.
+- [x] Add a RED/GREEN manager regression for a terminal empty assistant turn and bound empty-output terminalization to 15 seconds.
+- [x] Prove explicit cancellation reaches a running child and releases only that task's owned session/process resources.
+- [x] Record CPU, memory, filesystem-watch, process, wall-time, and artifact-growth observations across repeated unattended runs.
+- [x] Run scoped OpenCode, Codex, and Senpi real-harness QA required by the build surfaces; keep evidence local and ignored.
 - [ ] Update final architecture/state/release docs, open the Slice E PR against `release/canonical-20261029`, verify all gates, and merge only when green.
 - [ ] After the exact Slice E commit is merged and all gates are green, deploy its verified versioned artifact atomically with a recorded rollback target and smoke test; do not rewrite production Git history.
