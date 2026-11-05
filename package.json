@@ -1,6 +1,7 @@
 {
   "name": "oh-my-opencode",
   "version": "5.1.38",
+  "packageManager": "bun@1.4.3",
   "description": "The Best AI Agent Harness - Batteries-Included OpenCode Plugin with Multi-Model Orchestration, Parallel Background Agents, and Crafted LSP/AST Tools",
   "main": "./dist/index.js",
   "types": "dist/index.d.ts",
@@ -113,6 +114,8 @@
   },
   "scripts": {
     "build": "bun run script/build.ts",
+    "release:candidate": "bun script/release-candidate.ts",
+    "qa:worker-runtime": "bash script/qa/worker-runtime-matrix/matrix.sh",
     "build:cli-node": "bun run script/build-cli-node.ts",
     "build:codex-install": "bun run script/build-codex-install.ts",
     "install:codex-dev": "bun run script/build-codex-install.ts && bun run script/install-codex-dev.ts",

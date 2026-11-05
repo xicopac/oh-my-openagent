@@ -2,10 +2,13 @@
 import { spawn, spawnSync } from "node:child_process";
 import { availableParallelism } from "node:os";
 import { fileURLToPath } from "node:url";
-import { BUILD_NODES, selectBuildNodes, type BuildNode } from "./build-nodes";
+import { BUILD_NODES, resolveBuildConcurrency, selectBuildNodes, type BuildNode } from "./build-nodes";
+import { assertCurrentBunVersion } from "./bun-toolchain.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const isWindows = process.platform === "win32";
+
+assertCurrentBunVersion("root build");
 
 // Detach each child on POSIX so it leads its own process group, letting us SIGKILL the whole
 // group (child + any grandchildren it spawned, e.g. `npm ci` / `bun build` sub-processes) on
@@ -56,7 +59,7 @@ async function materializeOnce() {
 async function runGraph(graph: BuildNode[], env: NodeJS.ProcessEnv) {
 	const done = new Set<string>();
 	const running = new Map<string, Promise<void>>();
-	const limit = Math.max(1, availableParallelism());
+	const limit = resolveBuildConcurrency(availableParallelism(), process.env.OMO_BUILD_JOBS);
 	const pending = new Set(graph.map((node) => node.id));
 	const byId = new Map(graph.map((node) => [node.id, node]));
 	const liveChildren = new Set<ReturnType<typeof spawn>>();

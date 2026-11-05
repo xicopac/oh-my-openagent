@@ -3,6 +3,7 @@ import { chmod, mkdir, readFile, readdir, writeFile } from "node:fs/promises"
 import { builtinModules } from "node:module"
 import { basename, dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
+import { assertCurrentBunVersion } from "./bun-toolchain.mjs"
 
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url))
 const generatedEntrypoint = join(repositoryRoot, "packages", "omo-codex", "scripts", "install-dist", "install-local.mjs")
@@ -81,6 +82,7 @@ export function parseCodexInstallerArtifact(
 // The output path is a parameter so the freshness guard can build a throwaway copy and compare it
 // against the committed bundle without clobbering the working tree.
 export async function buildCodexInstaller(options: { readonly outputPath?: string } = {}): Promise<string> {
+  assertCurrentBunVersion("Codex installer generator")
   const outputPath = options.outputPath ?? generatedEntrypoint
   await mkdir(dirname(outputPath), { recursive: true })
 

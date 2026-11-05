@@ -21,6 +21,8 @@ describe("agent dev-environment scripts", () => {
 
     test("#given the CI-pinned Bun version #when setup.sh, the devcontainer image, and CI are compared #then all three pin the same version", () => {
       // given
+      const packageManagerPin = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8"))
+        .packageManager?.match(/^bun@(\d+\.\d+\.\d+)$/)?.[1]
       const setupPin = readFileSync(setup, "utf8").match(/expected_bun="([^"]+)"/)?.[1]
       const dockerfilePin = readFileSync(join(REPO_ROOT, ".devcontainer", "Dockerfile"), "utf8").match(
         /bash -s "bun-v([^"]+)"/,
@@ -32,6 +34,7 @@ describe("agent dev-environment scripts", () => {
       ].map((match) => match[1])
 
       // then
+      expect(packageManagerPin, "package.json must pin an exact Bun packageManager").toBeDefined()
       expect(setupPin, "setup.sh must declare expected_bun").toBeDefined()
       expect(dockerfilePin, ".devcontainer/Dockerfile must pin an explicit bun-v<version>").toBeDefined()
       expect(ciPins.length, "ci.yml must pin bun-version").toBeGreaterThan(0)
@@ -39,6 +42,7 @@ describe("agent dev-environment scripts", () => {
       for (const ciPin of new Set(ciPins)) {
         expect(ciPin, "every ci.yml bun-version must match the devcontainer pin").toBe(dockerfilePin as string)
       }
+      expect(packageManagerPin).toBe(dockerfilePin as string)
       expect(setupPin).toBe(dockerfilePin as string)
     })
   })

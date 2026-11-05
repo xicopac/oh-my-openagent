@@ -1,7 +1,7 @@
 import { cp, mkdir, readFile, readdir, rename, rm } from "node:fs/promises"
 import { basename, dirname, join, sep } from "node:path"
 import { copyBundledMcpRuntimeDists } from "./codex-cache-bundled-mcps"
-import { removeCachedManagedNpmBinShims } from "./codex-cache-bins"
+import { removeCachedBuildDependencies } from "./codex-cache-bins"
 import { fileExistsStrict, isPlainRecord } from "./codex-cache-fs"
 import { rewriteCachedPackageLocalFileDependencies } from "./codex-cache-local-dependencies"
 import { rewriteCachedManifestRoot, rewriteCachedMcpManifest } from "./codex-cache-mcp-manifest"
@@ -45,8 +45,8 @@ export async function installCachedPlugin(input: {
       ? ["install", "--omit=dev", "--no-audit", "--no-fund"]
       : ["ci", "--omit=dev"]
     await maybeRunNpmInstall(tempPath, input.runCommand, npmInstallEnv, installArgs)
-    await removeCachedManagedNpmBinShims(tempPath)
     if (input.buildSource === false) await maybeRunNpmSyncSkills(tempPath, input.runCommand, env)
+    await removeCachedBuildDependencies(tempPath)
     await assertNoRemovedSparkshellPromptReferences(tempPath)
     await rewriteCachedMcpManifest(tempPath, input.sourcePath)
     await rewriteCachedManifestRoot(tempPath, tempPath, targetPath)

@@ -233,11 +233,17 @@ The controlled local provider must exercise these scenarios sequentially:
 | Worker/session disappearance | Durable blocked/failed result and parent wake survive deletion. |
 | Plugin restart | Live attempt reattaches or expires once; terminal outbox replays once. |
 | Cancellation | Exact owned resources released; unrelated processes remain alive. |
+| Compaction during child work | Terminal result/wake survives root compaction and the parent resumes once. |
 | Parent idle | Parent starts a follow-up turn without a human message. |
 | Authorization denial | No child session/provider request is created. |
 | Paid model without approval | Zero paid-route requests. |
 | Retry exhaustion | One blocked outcome; no abandoned running attempt. |
 | Repeated unattended runs | Stable process count, memory, CPU, watchers, and evidence growth. |
+
+The Slice E gate implements this matrix in
+`script/qa/worker-runtime-matrix/`. A provider-completed assistant turn with no
+text, reasoning, or tool output receives a 15-second event-settle grace and then
+terminalizes `blocked`; it cannot remain a running worker indefinitely.
 
 The harness must isolate HOME and every XDG directory, use only local fake providers, compare the real OpenCode database session count before and after, enforce per-scenario timeouts, and prove all spawned processes exited. Heavy suites run sequentially and stop when sustained package temperature reaches 90°C.
 

@@ -286,8 +286,11 @@ export type OnSubagentModelUnavailable = (sessionID: string, providerModel: stri
 const MAX_TASK_REMOVAL_RESCHEDULES = 6
 const MAX_COMPLETED_TASK_ARCHIVE_SIZE = 100
 const PARENT_WAKE_FAILURE_REQUEUE_WINDOW_MS = 5_000
-const EMPTY_TURN_PROBE_AFTER_MS = 45_000
-const EMPTY_TURN_TERMINAL_MS = 90_000
+// A provider-completed assistant turn with no text, reasoning, or tool output
+// is terminal evidence, not an indefinitely running task. Keep a short grace
+// window for OpenCode's message/status events to settle, then fail closed.
+const EMPTY_TURN_PROBE_AFTER_MS = 5_000
+const EMPTY_TURN_TERMINAL_MS = 15_000
 
 export interface BackgroundManagerConfig {
   pluginContext: PluginInput

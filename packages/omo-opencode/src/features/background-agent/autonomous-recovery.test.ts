@@ -293,6 +293,32 @@ describe("autonomous worker lifecycle", () => {
     expect(notification).toContain("ALL BACKGROUND TASKS FINISHED")
   })
 
+  test("#given an idle empty assistant turn is quiet for 15 seconds #when the poller checks it #then it terminalizes instead of waiting indefinitely", async () => {
+    const fake = createFakeClient({
+      status: { ses_child: { type: "idle" } },
+      messages: {
+        ses_child: [{ info: { role: "assistant", finish: "stop", tokens: { input: 10, output: 0, reasoning: 0 } }, parts: [] }],
+      },
+    })
+    const store = createStore()
+    const manager = createManager(fake.client, store)
+    const value = task({
+      id: "bg_empty_idle",
+      parentSessionId: "ses_parent",
+      sessionId: "ses_child",
+      progress: { toolCalls: 0, lastUpdate: new Date(Date.now() - 16_000) },
+    })
+    addTask(manager, value)
+
+    const poll = Reflect.get(manager, "pollRunningTasks") as () => Promise<void>
+    await poll.call(manager)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(value.status).toBe("blocked")
+    expect(store.get(value.id)?.terminalOutcome).toBe("blocked")
+    expect(pendingWakes(manager).get("ses_parent")?.shouldReply).toBe(true)
+  })
+
   test("#given a worker session disappears without a terminal result #when session.deleted is handled #then the task is BLOCKED and the parent is woken", async () => {
     // given
     const fake = createFakeClient()

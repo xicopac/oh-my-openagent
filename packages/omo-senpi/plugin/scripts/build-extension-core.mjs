@@ -10,6 +10,7 @@ import {
   normalizeBuiltinImports,
 } from "./build-artifact.mjs"
 import { stageRuntimePersonas } from "./persona-artifacts.mjs"
+import { assertBunExecutableVersion, expectedBunVersion } from "../../../../script/bun-toolchain.mjs"
 
 export function resolveBunExecutable(platform = process.platform) {
   return platform === "win32" ? "bun.exe" : "bun"
@@ -163,6 +164,7 @@ export function resolveOutputs(options) {
 }
 
 export async function buildExtension(options = {}) {
+  assertBunExecutableVersion(resolveBunExecutable(), expectedBunVersion(), "Senpi extension generator")
   const packageManifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"))
   if (typeof packageManifest.version !== "string" || packageManifest.version.length === 0) {
     throw new Error("omo-senpi package manifest must contain a version")

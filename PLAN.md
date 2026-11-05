@@ -1,10 +1,10 @@
 # OMO Stabilization Plan
 
-Last updated: 2026-11-02 (Europe/Madrid)
+Last updated: 2026-11-03 (Europe/Madrid)
 Owner: Codex
-Canonical base: `4d1961c7e45223590768cce43093a839198eb28a`
-Implementation worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-dispatch-authorization` (Slice D, stacked on reviewed Slice C commit `6784d7a61`)
-Production boundary: `/srv/dev/oh-my-openagent` is read-only and must not be built, edited, restarted, or deployed by this plan.
+Canonical base: `d4e2979b80de9d04768f380828bfca4b428276ae` (merged PR stack on `release/canonical-20261029`)
+Implementation worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-slice-e-release-gate` (Slice E, based directly on the merged release head)
+Production boundary: `/srv/dev/oh-my-openagent` remains untouched until the exact merged release-candidate commit passes every gate. The user has authorized a later atomic, rollback-capable deployment of that verified artifact only; production Git history must not be rewritten or synchronized.
 
 ## Objective
 
@@ -185,31 +185,42 @@ Verification checkpoint (2026-11-02):
 
 Files:
 
+- `package.json` plus a shared script helper: declare Bun `1.4.3` as the release toolchain and reject mismatched generator invocations before they can rewrite tracked outputs.
+- `script/build.ts`, `script/build-codex-install.ts`, `script/build-service-auth.ts`, and the Senpi extension build entry: enforce the same exact Bun version at every tracked generator boundary.
+- `packages/omo-codex/src/install/codex-cache-bins.ts` and cache-install tests: remove build-only cache-local `node_modules` after dependency installation and skill synchronization because Codex 0.166 rejects its npm shims and workspace symlinks before hooks execute.
+- Focused toolchain and clean-build tests under `script/` and `packages/omo-senpi/plugin/scripts/`.
 - Resource-bounded isolated runtime harness under repository test/script conventions.
-- CI workflow/package scripts for the named reliability gate.
-- Release manifest/build verification helper and architecture/release documentation.
+- Release-candidate manifest/build verification helper and architecture/release documentation.
 
 Changes:
 
-- Sequential fake-provider matrix, bounded timeouts, cleanup traps, process-leak assertions, DB isolation proof, CPU/temperature preflight documentation.
-- Clean-checkout build manifest and artifact verification. No production switch.
+- Preserve the integrated A-D stack exactly: PRs #1, #2, and #3 are merge commits on the release line; #4 is present exactly once through #3's tree-identical rewritten commits.
+- Sequential fake-provider matrix, bounded timeouts, cleanup traps, process-leak assertions, DB isolation proof, and no real provider traffic.
+- Regenerate only declared tracked artifacts with the CI-pinned Bun version; add a gate that starts and ends with a clean tracked tree.
+- Preserve external command links through the installer-owned bin directory, but never expose build-only npm dependencies, shims, or workspace symlinks inside the plugin cache scanned by Codex.
+- Make Senpi release tests hermetic to ancestor `/tmp/package.json` files by giving generated ESM fixtures their own module boundary; rerun the descriptor diagnostic at a non-starving bounded CPU quota because it passes unchanged outside the 25% whole-suite throttle.
+- Emit a deterministic release-candidate manifest containing commit, Bun/Node versions, lockfile hash, artifact hash/size, evidence hashes, and an explicit rollback target. Production switching remains a separate post-merge operation.
 
 Verification:
 
-- Repeated unattended matrix with stable process count, bounded wall time, bounded artifact growth, and temperature below 90°C.
-- Clean rebuild from commit with matching artifact hash and evidence manifest.
+- Final combined scope: 386 tests / 1,425 assertions and scoped OpenCode typecheck.
+- Real OpenCode 1.19.3 matrix on the exact merged bundle: guard policy, normal completion, free stall recovery, bounded BLOCKED exhaustion, restart/deleted-child replay, paid denial, and one synthetic explicit paid approval.
+- The committed real-runtime matrix passes normal completion, free stall recovery, empty-response BLOCKED terminalization, running-child cancellation, in-flight compaction recovery, and three repeated unattended normal runs.
+- Cancellation closes the worker-owned provider request without touching an unrelated sentinel. Every run leaves the real stores unchanged and exits without orphan processes.
+- Repeated runs have bounded RSS, CPU, file descriptors, inotify watchers, wall time, and evidence growth.
+- Two clean rebuilds from commit `eaba2c2de` leave the tracked tree unchanged and emit artifact SHA-256 `47949e129764ebc8748fd02fe3b1b2ebb7059a459d8cb726e9038960b635b969` with identical normalized manifest fields. The final merged commit receives a fresh manifest before deployment.
 
 ## Execution rules
 
 - Work only in fresh task-owned worktrees based on the canonical release line.
 - Use `GIT_MASTER=1` for every Git command.
-- Never edit, build, restart, or deploy `/srv/dev/oh-my-openagent`.
+- Do not touch `/srv/dev/oh-my-openagent` before the release PR is merged and its exact artifact is verified. Any authorized deployment must preserve the current artifact as a rollback target and must not rewrite production Git history.
 - Never delete historical worktrees or original evidence.
 - No real model/provider probes; fake local providers only.
 - Heavy test suites run sequentially and only when package temperature is below 90°C. Stop immediately at or above 90°C.
 - Every OpenCode-connected source change requires real isolated OpenCode QA and local evidence under `.omo/evidence/<slug>/` before commit.
 - Evidence stays untracked. PR bodies include sanitized decisive excerpts and SHA-256 lines.
-- Each slice is the smallest independently reviewable PR. Production deployment is explicitly out of scope.
+- Each slice is the smallest independently reviewable PR. Deployment is a separate final operation after the merged release candidate passes preflight and smoke checks.
 
 ## Separate housekeeping task
 
@@ -223,4 +234,4 @@ Milestone 2 exits only when the core invariants above are implemented and every 
 
 Milestone 3 exits only when the full controlled-provider matrix passes repeatedly without human input, lost results, abandoned tasks, unauthorized paid routes, orphan processes, or resource growth.
 
-Milestone 4 exits when a clean commit reproducibly builds a versioned artifact and rollback manifest. Deployment remains pending explicit human approval.
+Milestone 4 exits when a clean commit reproducibly builds a versioned artifact and rollback manifest. The user has explicitly authorized deployment of the exact merged, green artifact with atomic rollback; that operation remains separate from the PR.
