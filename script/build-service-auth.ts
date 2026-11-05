@@ -1,9 +1,11 @@
 import { fileURLToPath } from "node:url"
+import { assertCurrentBunVersion } from "./bun-toolchain.mjs"
 
 const root = fileURLToPath(new URL("..", import.meta.url))
 const target = `${root}packages/omo-native/bin/lib/service-auth.generated.js`
 
 export async function buildServiceAuth(check = false): Promise<void> {
+  assertCurrentBunVersion("service-auth generator")
   const result = await Bun.build({
     entrypoints: [`${root}packages/omo-opencode/src/cli/service-auth/commands.ts`],
     target: "node", format: "esm", minify: { whitespace: true, syntax: true },

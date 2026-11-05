@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, setDefaultTimeout, test } from "bun:test"
-import { cp, mkdir, mkdtemp, rm } from "node:fs/promises"
+import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { spawn } from "node:child_process"
 import { join } from "node:path"
@@ -113,6 +113,7 @@ describe("thread SDK runtime", () => {
     const outputs = await sharedOutputs()
     const plugin = await mkdtemp(join(tmpdir(), "omo-thread-sdk-built-"))
     perTestRoots.push(plugin)
+    await writeFile(join(plugin, "package.json"), '{"type":"module"}\n')
     await mkdir(join(plugin, "runtime", "thread-sdk"), { recursive: true })
     await mkdir(join(plugin, "extensions"), { recursive: true })
     await cp(outputs.threadSdkOutputPath, join(plugin, "runtime", "thread-sdk", "sdk.js"))

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
 import test from "node:test";
 
@@ -87,7 +87,7 @@ test("#given cached file dependency is rewritten #when lockfile exists #then pac
 	assert.equal(cachedPackageLock.packages["node_modules/@scope/lsp-tools"].resolved, packageLockDependencyPath);
 });
 
-test("#given npm creates workspace bin shims in the cache #when caching plugin #then plugin-owned shims are removed", async () => {
+test("#given npm creates build-only dependencies in the cache #when caching plugin #then scanner-visible node_modules is removed", async () => {
 	// given
 	const root = await makeTempDir();
 	const codexHome = join(root, "codex-home");
@@ -128,14 +128,13 @@ test("#given npm creates workspace bin shims in the cache #when caching plugin #
 				join(npmBinDir, "omo-ulw-loop.cmd"),
 				'@echo off\r\nnode "%~dp0\\..\\@code-yeongyu\\codex-ulw-loop\\dist\\cli.js" %*\r\n',
 			);
-			await writeFile(join(npmBinDir, "other-tool.cmd"), "@echo off\r\necho preserved\r\n");
+			await writeFile(join(npmBinDir, "comment-checker"), "#!/bin/sh\n");
 		},
 	});
 
 	// then
-	await assert.rejects(stat(join(installed.path, "node_modules", ".bin", "omo-ulw-loop")));
-	await assert.rejects(stat(join(installed.path, "node_modules", ".bin", "omo-ulw-loop.cmd")));
-	assert.equal(await readFile(join(installed.path, "node_modules", ".bin", "other-tool.cmd"), "utf8"), "@echo off\r\necho preserved\r\n");
+	await assert.rejects(stat(join(installed.path, "node_modules")));
+	await rm(root, { recursive: true, force: true });
 });
 
 test("#given packaged root CLI runtimes #when caching omo plugin #then root dist is materialized into the plugin cache", async () => {

@@ -282,7 +282,7 @@ describe("codex-cache install", () => {
     expect((await readdir(join(codexHome, "plugins", "cache", "debug", "omo"))).sort()).toEqual(["0.1.0", "local"])
   })
 
-  test("#given npm creates workspace bin shims in the cache #when caching plugin #then plugin-owned shims are removed", async () => {
+  test("#given npm creates build-only dependencies in the cache #when caching plugin #then scanner-visible node_modules is removed", async () => {
     // given
     const root = await mkdtemp(join(tmpdir(), "omo-codex-cache-npm-bin-"))
     const codexHome = join(root, "codex-home")
@@ -323,14 +323,13 @@ describe("codex-cache install", () => {
           join(npmBinDir, "omo-ulw-loop.cmd"),
           '@echo off\r\nnode "%~dp0\\..\\@code-yeongyu\\codex-ulw-loop\\dist\\cli.js" %*\r\n',
         )
-        await writeFile(join(npmBinDir, "other-tool.cmd"), "@echo off\r\necho preserved\r\n")
+        await writeFile(join(npmBinDir, "comment-checker"), "#!/bin/sh\n")
       },
     })
 
     // then
-    await expect(stat(join(installed.path, "node_modules", ".bin", "omo-ulw-loop"))).rejects.toThrow()
-    await expect(stat(join(installed.path, "node_modules", ".bin", "omo-ulw-loop.cmd"))).rejects.toThrow()
-    expect(await readFile(join(installed.path, "node_modules", ".bin", "other-tool.cmd"), "utf8")).toBe("@echo off\r\necho preserved\r\n")
+    await expect(stat(join(installed.path, "node_modules"))).rejects.toThrow()
+    await rm(root, { recursive: true, force: true })
   })
 
   test(

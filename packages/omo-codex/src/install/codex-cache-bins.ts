@@ -39,18 +39,12 @@ export async function linkCachedPluginBins(input: {
   return linked
 }
 
-export async function removeCachedManagedNpmBinShims(pluginRoot: string): Promise<void> {
-  const binLinks = await discoverPackageBins(pluginRoot)
-  if (binLinks.length === 0) return
-  const npmBinDir = join(pluginRoot, "node_modules", ".bin")
-  if (!(await isFileSystemEntry(npmBinDir))) return
-
-  const managedBinNames = new Set(binLinks.map((link) => link.name))
-  for (const name of managedBinNames) {
-    for (const suffix of ["", ".cmd", ".ps1"] as const) {
-      await rm(join(npmBinDir, `${name}${suffix}`), { force: true })
-    }
-  }
+export async function removeCachedBuildDependencies(pluginRoot: string): Promise<void> {
+  // Codex scans every entry inside a plugin cache and, as of 0.166, rejects npm's command
+  // shims and workspace symlinks as unsupported plugin entry types before any hook can run.
+  // Hook/component runtimes are bundled, and their commands are linked separately into the
+  // installer-owned bin directory, so node_modules is build-only after skill synchronization.
+  await rm(join(pluginRoot, "node_modules"), { recursive: true, force: true })
 }
 
 export async function linkRootRuntimeBin(input: {
@@ -103,16 +97,6 @@ async function linkCachedPluginBin(
 async function isFile(path: string): Promise<boolean> {
   try {
     return (await stat(path)).isFile()
-  } catch (error) {
-    if (isNodeErrorWithCode(error) && error.code === "ENOENT") return false
-    throw error
-  }
-}
-
-async function isFileSystemEntry(path: string): Promise<boolean> {
-  try {
-    await stat(path)
-    return true
   } catch (error) {
     if (isNodeErrorWithCode(error) && error.code === "ENOENT") return false
     throw error

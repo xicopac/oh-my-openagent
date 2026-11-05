@@ -65,3 +65,12 @@ export function selectBuildNodes(
 	for (const id of requested) visit(id)
 	return graph.filter((node) => keep.has(node.id))
 }
+
+export function resolveBuildConcurrency(available: number, configured: string | undefined): number {
+	const hostLimit = Math.max(1, Math.floor(available))
+	if (configured === undefined || configured === "") return hostLimit
+	if (!/^\d+$/.test(configured) || Number(configured) < 1) {
+		throw new Error(`OMO_BUILD_JOBS must be a positive integer, received: ${configured}`)
+	}
+	return Math.min(hostLimit, Number(configured))
+}

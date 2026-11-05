@@ -4,7 +4,7 @@ Last updated: 2026-11-03 (Europe/Madrid)
 Owner: Codex
 Canonical base: `d4e2979b80de9d04768f380828bfca4b428276ae` (merged PR stack on `release/canonical-20261029`)
 Implementation worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-slice-e-release-gate` (Slice E, based directly on the merged release head)
-Production boundary: `/srv/dev/oh-my-openagent` is read-only and must not be built, edited, restarted, or deployed by this plan.
+Production boundary: `/srv/dev/oh-my-openagent` remains untouched until the exact merged release-candidate commit passes every gate. The user has authorized a later atomic, rollback-capable deployment of that verified artifact only; production Git history must not be rewritten or synchronized.
 
 ## Objective
 
@@ -187,6 +187,7 @@ Files:
 
 - `package.json` plus a shared script helper: declare Bun `1.4.3` as the release toolchain and reject mismatched generator invocations before they can rewrite tracked outputs.
 - `script/build.ts`, `script/build-codex-install.ts`, `script/build-service-auth.ts`, and the Senpi extension build entry: enforce the same exact Bun version at every tracked generator boundary.
+- `packages/omo-codex/src/install/codex-cache-bins.ts` and cache-install tests: remove build-only cache-local `node_modules` after dependency installation and skill synchronization because Codex 0.166 rejects its npm shims and workspace symlinks before hooks execute.
 - Focused toolchain and clean-build tests under `script/` and `packages/omo-senpi/plugin/scripts/`.
 - Resource-bounded isolated runtime harness under repository test/script conventions.
 - Release-candidate manifest/build verification helper and architecture/release documentation.
@@ -196,6 +197,8 @@ Changes:
 - Preserve the integrated A-D stack exactly: PRs #1, #2, and #3 are merge commits on the release line; #4 is present exactly once through #3's tree-identical rewritten commits.
 - Sequential fake-provider matrix, bounded timeouts, cleanup traps, process-leak assertions, DB isolation proof, and no real provider traffic.
 - Regenerate only declared tracked artifacts with the CI-pinned Bun version; add a gate that starts and ends with a clean tracked tree.
+- Preserve external command links through the installer-owned bin directory, but never expose build-only npm dependencies, shims, or workspace symlinks inside the plugin cache scanned by Codex.
+- Make Senpi release tests hermetic to ancestor `/tmp/package.json` files by giving generated ESM fixtures their own module boundary; rerun the descriptor diagnostic at a non-starving bounded CPU quota because it passes unchanged outside the 25% whole-suite throttle.
 - Emit a deterministic release-candidate manifest containing commit, Bun/Node versions, lockfile hash, artifact hash/size, evidence hashes, and an explicit rollback target. No production switch.
 
 Verification:
@@ -209,13 +212,13 @@ Verification:
 
 - Work only in fresh task-owned worktrees based on the canonical release line.
 - Use `GIT_MASTER=1` for every Git command.
-- Never edit, build, restart, or deploy `/srv/dev/oh-my-openagent`.
+- Do not touch `/srv/dev/oh-my-openagent` before the release PR is merged and its exact artifact is verified. Any authorized deployment must preserve the current artifact as a rollback target and must not rewrite production Git history.
 - Never delete historical worktrees or original evidence.
 - No real model/provider probes; fake local providers only.
 - Heavy test suites run sequentially and only when package temperature is below 90°C. Stop immediately at or above 90°C.
 - Every OpenCode-connected source change requires real isolated OpenCode QA and local evidence under `.omo/evidence/<slug>/` before commit.
 - Evidence stays untracked. PR bodies include sanitized decisive excerpts and SHA-256 lines.
-- Each slice is the smallest independently reviewable PR. Production deployment is explicitly out of scope.
+- Each slice is the smallest independently reviewable PR. Deployment is a separate final operation after the merged release candidate passes preflight and smoke checks.
 
 ## Separate housekeeping task
 

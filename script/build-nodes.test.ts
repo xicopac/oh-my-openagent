@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { BUILD_NODES, BUILD_PROFILES, selectBuildNodes } from "./build-nodes"
+import { BUILD_NODES, BUILD_PROFILES, resolveBuildConcurrency, selectBuildNodes } from "./build-nodes"
 
 describe("selectBuildNodes", () => {
 	test("#given no profile #when the graph is selected #then every node runs", () => {
@@ -43,6 +43,20 @@ describe("selectBuildNodes", () => {
 		const ids = new Set(BUILD_NODES.map((node) => node.id))
 		for (const node of BUILD_NODES) {
 			for (const dep of node.deps) expect(ids).toContain(dep)
+		}
+	})
+})
+
+describe("resolveBuildConcurrency", () => {
+	test("#given an explicit job cap #when the build starts #then concurrency never exceeds it or the host", () => {
+		expect(resolveBuildConcurrency(8, "1")).toBe(1)
+		expect(resolveBuildConcurrency(2, "8")).toBe(2)
+		expect(resolveBuildConcurrency(4, undefined)).toBe(4)
+	})
+
+	test("#given an invalid job cap #when resolved #then the build fails closed", () => {
+		for (const value of ["0", "-1", "1.5", "all"]) {
+			expect(() => resolveBuildConcurrency(8, value)).toThrow("positive integer")
 		}
 	})
 })
