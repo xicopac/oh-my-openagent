@@ -9,7 +9,7 @@ Status: Slices A-E are merged into `release/canonical-20261029`. The exact merge
 - Integrated merge commits: PR #1 `876cff5e0`, PR #2 `61f887117`, PR #3 `d4e2979b8`.
 - PR #4 is included exactly once: original #4 head `63e83c488`, integrated #3 head `1dbe9fcfe`, and the release head share tree `d408007c6b21230dea0713e9cd62575cea4e9abe`.
 - Slice E PR #5 merged as `4ed0ee31d3c5676397b88507ff724f94a19d55fb`; its merge tree exactly matches verified feature head `ffef6e1023e3990317ce8165ea22b8a12b522a90`.
-- `origin/release/canonical-20261029` and the verified release worktree both resolve to `4ed0ee31d3c5676397b88507ff724f94a19d55fb`.
+- The deployed code-bearing release commit is `4ed0ee31d3c5676397b88507ff724f94a19d55fb`; subsequent documentation-only merge commits do not change the verified bundle identity.
 - Slice E commits before the final runtime checkpoint: `707b6b4d8` (durable plan/state) and `eaba2c2de` (reproducible adapter builds).
 - Production plugin: `/srv/dev/oh-my-openagent`. Its source, Git history, configuration, and unrelated dirty files were not changed; only the ignored runtime bundle `dist/index.js` was replaced atomically.
 - The user explicitly authorized an atomic, rollback-capable deployment of the exact merged green artifact. This does not authorize rewriting or synchronizing production Git history, deploying to `dev`, bypassing checks, or contacting a real paid provider.
