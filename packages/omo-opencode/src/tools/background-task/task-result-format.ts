@@ -11,6 +11,9 @@ function getTimeString(value: unknown): string {
 }
 
 export async function formatTaskResult(task: BackgroundTask, client: BackgroundOutputClient): Promise<string> {
+  if (hasDurableTerminalResult(task)) {
+    return formatDurableResult(task)
+  }
   if (!task.sessionId) {
     return formatDurableResult(task)
   }
@@ -22,19 +25,19 @@ export async function formatTaskResult(task: BackgroundTask, client: BackgroundO
       getBackgroundOutputFetchTimeoutMs(),
     )
   } catch (error) {
-    if (task.result) return formatDurableResult(task)
+    if (hasDurableTerminalResult(task)) return formatDurableResult(task)
     return `Error fetching messages: ${error instanceof Error ? error.message : String(error)}`
   }
 
   const errorMessage = getErrorMessage(messagesResult)
   if (errorMessage) {
-    if (task.result) return formatDurableResult(task)
+    if (hasDurableTerminalResult(task)) return formatDurableResult(task)
     return `Error fetching messages: ${errorMessage}`
   }
 
   const messages = extractMessages(messagesResult)
   if (!Array.isArray(messages) || messages.length === 0) {
-    if (task.result) return formatDurableResult(task)
+    if (hasDurableTerminalResult(task)) return formatDurableResult(task)
     return `Task Result
 
 Task ID: ${task.id}
@@ -156,5 +159,10 @@ Session ID: ${task.sessionId ?? "unavailable"}
 
 ---
 
-${task.result?.trim() || "(No terminal result was persisted before the worker session was cleaned up)"}`
+${task.result?.trim() || task.error?.trim() || "(No terminal result was persisted before the worker session was cleaned up)"}`
+}
+
+function hasDurableTerminalResult(task: BackgroundTask): boolean {
+  return Boolean(task.result?.trim())
+    || (task.status !== "running" && task.status !== "pending" && Boolean(task.error?.trim()))
 }

@@ -38,6 +38,8 @@ export type FallbackRetryHandlerDeps = {
   isProviderExhaustionFallbackEligible: (error: unknown) => boolean
 }
 
+export type FallbackRetryEligibility = "classified_error" | "terminal_empty_output"
+
 const defaultFallbackRetryHandlerDeps: FallbackRetryHandlerDeps = {
   log,
   readProviderModelsCache,
@@ -54,6 +56,7 @@ export async function tryFallbackRetry(args: {
   task: BackgroundTask
   errorInfo: { name?: string; message?: string; statusCode?: number }
   source: string
+  eligibility?: FallbackRetryEligibility
   concurrencyManager: ConcurrencyManager
   client: OpencodeClient
   idleDeferralTimers: Map<string, ReturnType<typeof setTimeout>>
@@ -79,8 +82,11 @@ export async function tryFallbackRetry(args: {
   const deps = { ...defaultFallbackRetryHandlerDeps, ...args.deps }
   const fallbackChain = task.fallbackChain
   const canUseProviderExhaustionFallback = deps.isProviderExhaustionFallbackEligible(errorInfo)
+  const retryEligible = args.eligibility === "terminal_empty_output"
+    || deps.shouldRetryError(errorInfo)
+    || canUseProviderExhaustionFallback
   const canRetry =
-    (deps.shouldRetryError(errorInfo) || canUseProviderExhaustionFallback) &&
+    retryEligible &&
     fallbackChain &&
     fallbackChain.length > 0 &&
     deps.hasMoreFallbacks(fallbackChain, task.attemptCount ?? 0)

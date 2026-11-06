@@ -35,6 +35,7 @@ import {
 } from "./features/delegation-first"
 import { DEFAULT_RESOURCE_GOVERNOR_CONFIG } from "./config/schema/resource-governor"
 import { createRecoveryRelaunchHandler } from "./features/background-agent/recovery-relaunch"
+import { isTerminalEmptyAssistantTurnReason } from "./features/background-agent/terminal-empty-turn"
 import { getCachedPricingForDelegateTask } from "./tools/delegate-task/available-models"
 
 type CreateManagersDeps = {
@@ -399,10 +400,29 @@ export function createManagers(args: {
     onSubagentRequestStarted: (sessionID: string) => {
       delegationFirstRuntime?.markRequestStarted(sessionID)
     },
-    onTaskTerminal: ({ taskId, sessionId, parentSessionId, status, recoveryProbe }) => {
+    onTaskTerminal: ({ taskId, sessionId, parentSessionId, status, reason, recoveryProbe }) => {
       const ownerID = sessionId ?? taskId
       if (recoveryProbe && parentSessionId && delegationFirstRuntime) {
         recordRecoveryProbeTerminalFailure(delegationFirstRuntime, parentSessionId, status)
+      } else if (parentSessionId && delegationFirstRuntime && status === "completed") {
+        // A completed background task has passed the manager's non-empty output
+        // validation. This—not request_started—is proof that a degraded
+        // delegation path is healthy again.
+        delegationFirstRuntime.noteDelegationHealthy(parentSessionId)
+      } else if (
+        parentSessionId
+        && delegationFirstRuntime
+        && status === "blocked"
+        && isTerminalEmptyAssistantTurnReason(reason)
+      ) {
+        delegationFirstRuntime.recordDelegationFailure(parentSessionId, {
+          id: `provider-empty-output:${taskId}`,
+          kind: "provider_empty_output",
+          reason: reason ?? "provider completed without output",
+          observedAtMs: Date.now(),
+          taskID: taskId,
+          childSessionID: sessionId ?? null,
+        })
       }
       void taskProcessOwnership.cleanupTask(ownerID, `task-${status}`).catch((error) => {
         log("[create-managers] task process cleanup failed:", {

@@ -82,7 +82,10 @@ import {
 } from "./error-classifier"
 import { isEmptyNoProgressAssistantTurnInfo } from "./empty-assistant-turn"
 import { tryFallbackRetry } from "./fallback-retry-handler"
-import { messageUpdatedInfoHasParentWakeOutput } from "./message-updated-parent-wake-output"
+import {
+  messageUpdatedInfoHasParentWakeOutput,
+  parentWakeOutputIsCausallyNewer,
+} from "./message-updated-parent-wake-output"
 import {
   type CircuitBreakerSettings,
   detectRepetitiveToolUse,
@@ -108,6 +111,7 @@ import {
   SESSION_NEXT_EVENT_PREFIX,
 } from "./session-stream-activity"
 import { isActiveSessionStatus, isTerminalSessionStatus } from "./session-status-classifier"
+import { formatTerminalEmptyAssistantTurnReason } from "./terminal-empty-turn"
 import { buildFallbackBody, FALLBACK_AGENT, isAgentNotFoundError } from "./spawner"
 import { invokeTmuxSessionCreatedCallback } from "./spawner/tmux-callback-invoker"
 import {
@@ -465,6 +469,11 @@ export class BackgroundManager {
         onWakeAcknowledged: (_sessionID, wake) => {
           for (const workerID of wake.workerIDs ?? []) {
             this.workerRecordStore.markWakeAcknowledged(workerID, new Date())
+          }
+        },
+        onWakeDeliveryExhausted: (_sessionID, wake) => {
+          for (const workerID of wake.workerIDs ?? []) {
+            this.workerRecordStore.markWakeDeliveryExhausted(workerID, new Date())
           }
         },
       },
@@ -2103,7 +2112,8 @@ The fallback retry session is now created and can be inspected directly.
       }
       this.parentWakeNotifier.recordParentSessionActivity(sessionID)
 
-      if (messageUpdatedInfoHasParentWakeOutput(info, role)) {
+      const dispatchedWake = this.parentWakeNotifier.getDispatchedParentWakes().get(sessionID)
+      if (messageUpdatedInfoHasParentWakeOutput(info, role, dispatchedWake)) {
         this.clearDispatchedParentWake(sessionID)
       }
 
@@ -2153,6 +2163,7 @@ The fallback retry session is now created and can be inspected directly.
         && !isUserPart
         && !isInternalWakePart
         && !holdDispatchedWakeForTextDelta
+        && parentWakeOutputIsCausallyNewer(partInfo?.messageID, dispatchedWake)
       if (hasParentWakeOutput) {
         this.clearDispatchedParentWake(sessionID)
       }
@@ -2636,6 +2647,7 @@ The fallback retry session is now created and can be inspected directly.
     task: BackgroundTask,
     errorInfo: { name?: string; message?: string; statusCode?: number },
     source: string,
+    eligibility?: "terminal_empty_output",
   ): Promise<boolean> {
     const previousSessionID = task.sessionId
     let retryingNotification: string | undefined
@@ -2643,6 +2655,7 @@ The fallback retry session is now created and can be inspected directly.
       task,
       errorInfo,
       source,
+      ...(eligibility ? { eligibility } : {}),
       concurrencyManager: this.concurrencyManager,
       client: this.client,
       idleDeferralTimers: this.idleDeferralTimers,
@@ -2801,7 +2814,7 @@ The task was re-queued on a fallback model after a retryable failure.
 **Worker:** \`${input.sessionID ?? "unknown"}\`
 **Reason:** ${input.reason}
 
-Recovery exhausted or the worker vanished without a terminal result. This worker will not be retried automatically. Read-only diagnostics and result retrieval remain available.
+This worker reached a terminal blocked state for the exact reason above. Read-only diagnostics and result retrieval remain available.
 </system-reminder>`
     const promptContext = await this.resolveParentWakePromptContext({
       parentSessionId: parentSessionID,
@@ -2842,6 +2855,7 @@ Recovery exhausted or the worker vanished without a terminal result. This worker
         continue
       }
       const wakeAcknowledged = record.wakeState === "acknowledged"
+        || record.wakeState === "delivery_exhausted"
         || (record.wakeState === undefined && record.notificationDeliveredAt !== undefined)
       if (wakeAcknowledged) continue
       const terminalAt = Date.parse(record.terminalAt)
@@ -3885,13 +3899,16 @@ Recovery exhausted or the worker vanished without a terminal result. This worker
               const terminalTurn = await this.detectTerminalAssistantTurn(sessionID)
               if (terminalTurn.error || terminalTurn.empty) {
                 if (quietMs >= EMPTY_TURN_TERMINAL_MS) {
-                  await this.failCrashedTask(
+                  const terminalReason = formatTerminalEmptyAssistantTurnReason(terminalTurn.error)
+                  if (await this.tryFallbackRetry(
                     task,
-                    terminalTurn.error
-                      ? `BLOCKED: assistant turn ended without output: ${terminalTurn.error}`
-                      : "BLOCKED: assistant turn completed with no output",
-                    "blocked",
-                  )
+                    { name: "TerminalEmptyAssistantTurn", message: terminalReason },
+                    "polling:active-empty-turn",
+                    "terminal_empty_output",
+                  )) {
+                    continue
+                  }
+                  await this.failCrashedTask(task, terminalReason, "blocked")
                   continue
                 }
                 log("[background-agent] Active session ended on an empty/aborted assistant turn; bounded wait:", {
@@ -3943,13 +3960,16 @@ Recovery exhausted or the worker vanished without a terminal result. This worker
             const quietMs = lastProgressAt > 0 ? Date.now() - lastProgressAt : 0
             const terminalTurn = await this.detectTerminalAssistantTurn(sessionID)
             if ((terminalTurn.empty || terminalTurn.error) && quietMs >= EMPTY_TURN_TERMINAL_MS) {
-              await this.failCrashedTask(
+              const terminalReason = formatTerminalEmptyAssistantTurnReason(terminalTurn.error)
+              if (await this.tryFallbackRetry(
                 task,
-                terminalTurn.error
-                  ? `BLOCKED: assistant turn ended without output: ${terminalTurn.error}`
-                  : "BLOCKED: assistant turn completed with no output",
-                "blocked",
-              )
+                { name: "TerminalEmptyAssistantTurn", message: terminalReason },
+                "polling:idle-empty-turn",
+                "terminal_empty_output",
+              )) {
+                continue
+              }
+              await this.failCrashedTask(task, terminalReason, "blocked")
               continue
             }
             if (sessionGoneThresholdReached) {

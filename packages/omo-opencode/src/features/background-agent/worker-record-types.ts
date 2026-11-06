@@ -9,7 +9,7 @@ export type WorkerRecordState =
   | "blocked"
 
 export type WorkerTerminalOutcome = "completed" | "failed" | "stalled" | "cancelled" | "blocked"
-export type WorkerWakeState = "pending" | "dispatched" | "acknowledged"
+export type WorkerWakeState = "pending" | "dispatched" | "delivery_exhausted" | "acknowledged"
 
 export type WorkerRecordModel = {
   providerID: string
@@ -46,6 +46,7 @@ export type WorkerRecord = {
   wakePendingAt?: string
   wakeDispatchedAt?: string
   wakeAcknowledgedAt?: string
+  wakeDeliveryExhaustedAt?: string
   /** Legacy compatibility: actual in-memory queue insertion time. */
   notificationQueuedAt?: string
   /** Legacy compatibility: now written only when parent output acknowledges the wake. */
@@ -80,6 +81,7 @@ export type WorkerRecordStore = {
   markNotificationQueued(workerID: string, at?: Date): void
   markWakeDispatched(workerID: string, at?: Date): void
   markWakeAcknowledged(workerID: string, at?: Date): void
+  markWakeDeliveryExhausted(workerID: string, at?: Date): void
   /** @deprecated Use markWakeAcknowledged; retained for older callers. */
   markNotificationDelivered(workerID: string, at?: Date): void
   prune(maxAgeMs: number, now?: Date): number

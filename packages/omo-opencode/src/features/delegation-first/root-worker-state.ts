@@ -43,6 +43,7 @@ export type DelegationFailureKind =
   | "child_lost"
   | "watchdog_reclaim_exhausted"
   | "routing_exhausted"
+  | "provider_empty_output"
   | "evidence_pipeline_failure"
   | "control_plane_failure"
   | "circular_deadlock"

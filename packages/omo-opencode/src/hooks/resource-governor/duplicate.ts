@@ -78,6 +78,7 @@ export function checkDuplicate(
 
   let best: { matched: WorkerTrace; score: number } | null = null
   for (const w of workers) {
+    if (w.status === "failed") continue
     if (normalize(w.role) !== candRole) continue
     const score = jaccard(candTokens, tokenSet(w.question))
     if (score < threshold) continue

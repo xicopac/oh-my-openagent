@@ -54,7 +54,11 @@ describe("ParentWakeNotifier — assistant history deferral", () => {
       const decision = await notifier["shouldDeferParentWakeForSessionHistory"]("parent-message-error", pendingWake)
 
       // then
-      expect(decision).toEqual({ defer: true, skipPromptGateToolStateCheck: false })
+      expect(decision).toEqual({
+        defer: true,
+        skipPromptGateToolStateCheck: false,
+        reason: "messages_unavailable",
+      })
     } finally {
       notifier.shutdown()
       releaseAllPromptAsyncReservationsForTesting()
@@ -126,7 +130,11 @@ describe("ParentWakeNotifier — assistant history deferral", () => {
       const decision = await notifier["shouldDeferParentWakeForSessionHistory"]("parent-fresh-tool-activity", pendingWake)
 
       // then
-      expect(decision).toEqual({ defer: true, skipPromptGateToolStateCheck: false })
+      expect(decision).toEqual({
+        defer: true,
+        skipPromptGateToolStateCheck: false,
+        reason: "blocking_assistant_turn",
+      })
     } finally {
       Date.now = originalDateNow
       notifier.shutdown()
@@ -201,7 +209,11 @@ describe("ParentWakeNotifier — assistant history deferral", () => {
       )
 
       // then
-      expect(decision).toEqual({ defer: true, skipPromptGateToolStateCheck: false })
+      expect(decision).toEqual({
+        defer: true,
+        skipPromptGateToolStateCheck: false,
+        reason: "blocking_assistant_turn",
+      })
     } finally {
       Date.now = originalDateNow
       notifier.shutdown()

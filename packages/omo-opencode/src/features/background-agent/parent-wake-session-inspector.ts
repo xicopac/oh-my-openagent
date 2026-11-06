@@ -76,6 +76,18 @@ export class ParentWakeSessionInspector {
     })
   }
 
+  async latestAssistantMessageID(sessionID: string): Promise<string | undefined> {
+    const messages = await this.loadMessages(sessionID)
+    if (!messages) return undefined
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index]
+      const role = message?.info?.role ?? message?.role
+      if (role !== "assistant") continue
+      return message?.info?.id ?? message?.id
+    }
+    return undefined
+  }
+
   async hasRecordedPromptMessageAfterDispatchedWake(sessionID: string, wake: PendingParentWake): Promise<boolean> {
     const messages = await this.loadMessages(sessionID)
     return hasRecordedParentWakePromptMessage({

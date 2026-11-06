@@ -47,7 +47,8 @@ const TERMINAL_RECORD_FIELDS = new Set<keyof WorkerRecord>([
 const WAKE_STATE_RANK: Record<WorkerWakeState, number> = {
   pending: 0,
   dispatched: 1,
-  acknowledged: 2,
+  delivery_exhausted: 2,
+  acknowledged: 3,
 }
 
 export function resolveWorkerRecordRoot(rootDir?: string): string {
@@ -155,6 +156,9 @@ export function createWorkerRecordStore(options: WorkerRecordStoreOptions = {}):
       ...(target === "acknowledged" && existing.wakeAcknowledgedAt === undefined
         ? { wakeAcknowledgedAt: timestamp, notificationDeliveredAt: timestamp }
         : {}),
+      ...(target === "delivery_exhausted" && existing.wakeDeliveryExhaustedAt === undefined
+        ? { wakeDeliveryExhaustedAt: timestamp }
+        : {}),
       updatedAt: timestamp,
     }
     const next = { ...existing, ...patch }
@@ -193,6 +197,9 @@ export function createWorkerRecordStore(options: WorkerRecordStoreOptions = {}):
     },
     markWakeAcknowledged(workerID, at) {
       transitionWake(workerID, "acknowledged", at)
+    },
+    markWakeDeliveryExhausted(workerID, at) {
+      transitionWake(workerID, "delivery_exhausted", at)
     },
     markNotificationDelivered(workerID, at) {
       transitionWake(workerID, "acknowledged", at)

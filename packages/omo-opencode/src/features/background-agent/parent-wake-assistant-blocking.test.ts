@@ -84,7 +84,7 @@ describe("ParentWakeNotifier — assistant turn blocking", () => {
     expect(promptAsyncCalls).toHaveLength(1)
     expect(promptAsyncCalls[0]?.body.noReply).toBe(true)
     expect(notifier.getPendingParentWakes().has("parent-local-unknown")).toBe(true)
-    expect(messageReads).toBe(1)
+    expect(messageReads).toBe(2)
 
     notifier.shutdown()
     releaseAllPromptAsyncReservationsForTesting()
@@ -166,6 +166,97 @@ describe("ParentWakeNotifier — assistant turn blocking", () => {
       expect(promptAsyncCalls).toHaveLength(1)
       expect(promptAsyncCalls[0]?.body.noReply).toBe(true)
       expect(notifier.getPendingParentWakes().has("parent-question-unanswered")).toBe(true)
+    } finally {
+      Date.now = originalDateNow
+      notifier.shutdown()
+      releaseAllPromptAsyncReservationsForTesting()
+    }
+  })
+
+  test("#given an idle unanswered question holds a terminal failure beyond the wake ceiling #when flushing #then the exact failure wake resumes the parent", async () => {
+    // given
+    const originalDateNow = Date.now
+    Date.now = () => 100_000
+    const promptAsyncCalls: PromptAsyncCall[] = []
+    const client = unsafeTestValue<ParentWakeClient>({
+      session: {
+        messages: async () => ({
+          data: [
+            {
+              info: {
+                id: "msg_user",
+                role: "user",
+                time: { created: 10_000 },
+              },
+              parts: [{ type: "text", text: "start work" }],
+            },
+            {
+              info: {
+                id: "msg_unanswered_question",
+                role: "assistant",
+                finish: "tool-calls",
+                time: { created: 20_000, completed: 30_000 },
+              },
+              parts: [
+                {
+                  type: "tool",
+                  tool: "question",
+                  state: { status: "error" },
+                },
+              ],
+            },
+          ],
+        }),
+        status: async () => ({ data: { "parent-terminal-failure": { type: "idle" } } }),
+        promptAsync: async (call: PromptAsyncCall) => {
+          promptAsyncCalls.push(call)
+          return { data: {} }
+        },
+      },
+    })
+    const notifier = new ParentWakeNotifier(
+      {
+        client,
+        directory: "/tmp/test-omo",
+        enqueueNotificationForParent: async (_sessionID, operation) => {
+          await operation()
+        },
+      },
+      {
+        pendingRetryMs: 1_000,
+        acceptedMessageSkewMs: 5_000,
+        toolCallDeferMaxMs: 5_000,
+        failureRequeueWindowMs: 5_000,
+        userMessageInProgressWindowMs: 2_000,
+      },
+    )
+    notifier.queuePendingParentWake(
+      "parent-terminal-failure",
+      "[BACKGROUND TASK BLOCKED]\n**ID:** `bg_empty`\n**Reason:** empty output",
+      { agent: "sisyphus" },
+      true,
+      undefined,
+      ["bg_empty"],
+    )
+    const pendingWake = notifier.getPendingParentWakes().get("parent-terminal-failure")
+    expect(pendingWake).toBeDefined()
+    if (!pendingWake) {
+      throw new Error("Missing pending parent wake")
+    }
+    pendingWake.queuedAt = 1_000
+    pendingWake.toolCallDeferralStartedAt = 1_000
+
+    try {
+      // when
+      await notifier.flushPendingParentWake("parent-terminal-failure")
+
+      // then
+      expect(promptAsyncCalls).toHaveLength(1)
+      expect(promptAsyncCalls[0]?.body.noReply).not.toBe(true)
+      expect(notifier.getPendingParentWakes().has("parent-terminal-failure")).toBe(false)
+      expect(notifier.getDispatchedParentWakes().get("parent-terminal-failure")?.workerIDs).toEqual([
+        "bg_empty",
+      ])
     } finally {
       Date.now = originalDateNow
       notifier.shutdown()

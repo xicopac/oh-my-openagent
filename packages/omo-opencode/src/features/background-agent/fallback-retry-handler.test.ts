@@ -438,6 +438,27 @@ describe("tryFallbackRetry", () => {
 
       expect(result).toBe(false)
     })
+
+    test("terminal empty output uses the bounded fallback chain without weakening model authorization", async () => {
+      shouldRetryErrorMock.mockImplementation(() => false)
+      const args = createDefaultArgs()
+      const authorize = mock(() => ({
+        allowed: true as const,
+        kind: "free",
+        model: "provider-a/fallback-model-1",
+      }))
+
+      const result = await tryFallbackRetry({
+        ...args,
+        eligibility: "terminal_empty_output",
+        authorizeEffectiveModelDispatch: authorize,
+      })
+
+      expect(result).toBe(true)
+      expect(authorize).toHaveBeenCalledTimes(1)
+      expect(args.task.attemptCount).toBe(1)
+      expect([...args.queuesByKey.values()].flat()).toHaveLength(1)
+    })
   })
 
   describe("#given no fallback chain", () => {

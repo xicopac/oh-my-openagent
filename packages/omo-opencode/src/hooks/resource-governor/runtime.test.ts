@@ -114,6 +114,24 @@ describe("runtime enforcement", () => {
     }
   })
 
+  test("settles the exact sibling trace so failed recovery workers do not remain false duplicates", () => {
+    const runtime = createResourceGovernorRuntime({ config: config(), pricing: catalog })
+    const common = { resolvedModelID: "vendor/cheap", rootModelID: "vendor/expensive" }
+
+    const first = runtime.enforce(enforcementInput({ ...common, subtask: "inspect authentication telemetry parser" }))
+    expect(first?.kind).toBe("approved")
+    if (first?.kind !== "approved") return
+    expect(runtime.settleChild("session-1", first.seed.escrow_id, "failed")).toBe(true)
+
+    const second = runtime.enforce(enforcementInput({ ...common, subtask: "inspect storage migration schema" }))
+    expect(second?.kind).toBe("approved")
+    if (second?.kind !== "approved") return
+    expect(runtime.settleChild("session-1", second.seed.escrow_id, "failed")).toBe(true)
+
+    const retry = runtime.enforce(enforcementInput({ ...common, subtask: "inspect storage migration schema" }))
+    expect(retry?.kind).toBe("approved")
+  })
+
   test("uses the live active child count for the concurrency gate", () => {
     const runtime = createResourceGovernorRuntime({
       config: config(),

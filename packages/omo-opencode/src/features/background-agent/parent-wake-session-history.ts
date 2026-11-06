@@ -16,6 +16,12 @@ import type { ParentWakeSessionMessage } from "./parent-wake-session-message"
 export type ToolWaitDeferralDecision = {
   readonly defer: boolean
   readonly skipPromptGateToolStateCheck: boolean
+  readonly reason:
+    | "messages_unavailable"
+    | "unanswered_question"
+    | "stale_tool_turn"
+    | "blocking_assistant_turn"
+    | null
 }
 
 export function parentWakeUserMessageIsInProgress(input: {
@@ -64,7 +70,7 @@ export function getParentWakeSessionHistoryDeferralDecision(input: {
     log("[background-agent] Deferred parent wake because parent messages could not be inspected:", {
       sessionID: input.sessionID,
     })
-    return { defer: true, skipPromptGateToolStateCheck: false }
+    return { defer: true, skipPromptGateToolStateCheck: false, reason: "messages_unavailable" }
   }
   const messages = [...input.messages]
   let strippedOwnAdmittedDeposit = false
@@ -88,19 +94,19 @@ export function getParentWakeSessionHistoryDeferralDecision(input: {
   if (!latestAssistantBlocksPrompt) {
     delete input.wake.toolCallDeferralStartedAt
     delete input.wake.allowEmptyAssistantTurnRetry
-    return { defer: false, skipPromptGateToolStateCheck: strippedOwnAdmittedDeposit }
+    return { defer: false, skipPromptGateToolStateCheck: strippedOwnAdmittedDeposit, reason: null }
   }
   const now = input.now ?? Date.now()
   input.wake.toolCallDeferralStartedAt ??= now
   if (input.wake.allowEmptyAssistantTurnRetry && latestAssistantTurnIsCompletedEmptyNoProgress(messages)) {
     log("[background-agent] Retrying parent wake after completed empty assistant turn:", { sessionID: input.sessionID })
-    return { defer: false, skipPromptGateToolStateCheck: true }
+    return { defer: false, skipPromptGateToolStateCheck: true, reason: null }
   }
   if (latestAssistantHasUnansweredQuestion) {
     log("[background-agent] Deferred parent wake because latest assistant question awaits user response:", {
       sessionID: input.sessionID,
     })
-    return { defer: true, skipPromptGateToolStateCheck: false }
+    return { defer: true, skipPromptGateToolStateCheck: false, reason: "unanswered_question" }
   }
   if (
     now - input.wake.toolCallDeferralStartedAt >= input.toolCallDeferMaxMs
@@ -112,7 +118,7 @@ export function getParentWakeSessionHistoryDeferralDecision(input: {
     // instance-scoped status). Defer so the wake is admitted as noReply at most
     // and resumed by the idle/consumption machinery (ses_14a3ab27bffe incident).
     log("[background-agent] Holding parent wake during stale tool-call deferral:", { sessionID: input.sessionID })
-    return { defer: true, skipPromptGateToolStateCheck: true }
+    return { defer: true, skipPromptGateToolStateCheck: true, reason: "stale_tool_turn" }
   }
   if (
     now - input.wake.toolCallDeferralStartedAt >= input.toolCallDeferMaxMs
@@ -121,12 +127,12 @@ export function getParentWakeSessionHistoryDeferralDecision(input: {
     log("[background-agent] Retrying parent wake after stale unknown-finish assistant output:", {
       sessionID: input.sessionID,
     })
-    return { defer: false, skipPromptGateToolStateCheck: true }
+    return { defer: false, skipPromptGateToolStateCheck: true, reason: null }
   }
   log("[background-agent] Deferred parent wake because latest assistant turn blocks internal prompts:", {
     sessionID: input.sessionID,
   })
-  return { defer: true, skipPromptGateToolStateCheck: false }
+  return { defer: true, skipPromptGateToolStateCheck: false, reason: "blocking_assistant_turn" }
 }
 
 export function hasRecordedParentWakePromptMessage(input: {
@@ -149,7 +155,7 @@ export function hasRecordedParentWakePromptMessage(input: {
     ) {
       return true
     }
-    return createdAt >= dispatchedAt && parentWakeMessageHasOutput(message)
+    return false
   })
 }
 
@@ -182,6 +188,7 @@ export function hasAssistantOrToolOutputAfterParentWake(input: {
     const createdAt = getParentWakeMessageCreatedAt(message)
     return createdAt !== undefined
       && createdAt >= dispatchedAt
+      && parentWakeMessageIsCausallyNewer(message, input.wake)
       && parentWakeMessageHasOutput(message)
   })
 }
@@ -201,7 +208,7 @@ function parentWakeMessageHasOutput(message: ParentWakeSessionMessage): boolean 
     return false
   }
   if (!message.parts || message.parts.length === 0) {
-    return role === "assistant"
+    return false
   }
   return message.parts.some((part) => {
     if (part.type === "text" || part.type === "reasoning") {
@@ -228,6 +235,16 @@ function parentWakeMessageHasOutput(message: ParentWakeSessionMessage): boolean 
     }
     return false
   })
+}
+
+function parentWakeMessageIsCausallyNewer(
+  message: ParentWakeSessionMessage,
+  wake: PendingParentWake,
+): boolean {
+  const baselineID = wake.preDispatchAssistantMessageID
+  if (!baselineID) return true
+  const messageID = message.info?.id ?? message.id
+  return messageID !== undefined && messageID !== baselineID
 }
 
 function parentWakeMessageContainsNotification(message: ParentWakeSessionMessage, wake: PendingParentWake): boolean {

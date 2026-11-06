@@ -73,7 +73,7 @@ export class ParentWakeFlushRunner {
       }
       await this.sendParentWakePrompt(sessionID, latestWake, {
         emptyAssistantTurnRetry: false,
-        toolWaitDecision: { defer: false, skipPromptGateToolStateCheck: true },
+        toolWaitDecision: { defer: false, skipPromptGateToolStateCheck: true, reason: null },
         forceNoReply: true,
         retainPendingWake: latestWake.shouldReply,
       })
@@ -87,7 +87,11 @@ export class ParentWakeFlushRunner {
     }
 
     const toolWaitDecision = await this.shouldDeferParentWakeForSessionHistory(sessionID, latestWake)
-    if (toolWaitDecision.defer) {
+    const forceIdleFailureQuestionWake = !sessionActive
+      && isFailureParentWake(latestWake)
+      && this.shouldForceDispatchAfterActiveDefer(latestWake)
+      && toolWaitDecision.reason === "unanswered_question"
+    if (toolWaitDecision.defer && !forceIdleFailureQuestionWake) {
       if (this.deferReplyWakeWhileUnsafe(sessionID, latestWake)) {
         return
       }
@@ -98,6 +102,12 @@ export class ParentWakeFlushRunner {
         retainPendingWake: latestWake.shouldReply,
       })
       return
+    }
+    if (forceIdleFailureQuestionWake) {
+      log("[background-agent] Dispatching terminal failure wake after idle unanswered-question defer ceiling:", {
+        sessionID,
+        queuedAgeMs: this.getQueuedAgeMs(latestWake),
+      })
     }
 
     if (await this.isUserMessageInProgress(sessionID)) {
@@ -112,7 +122,7 @@ export class ParentWakeFlushRunner {
       }
       await this.sendParentWakePrompt(sessionID, latestWake, {
         emptyAssistantTurnRetry,
-        toolWaitDecision: { defer: false, skipPromptGateToolStateCheck: true },
+        toolWaitDecision: { defer: false, skipPromptGateToolStateCheck: true, reason: null },
         forceNoReply: true,
         retainPendingWake: latestWake.shouldReply,
       })
@@ -122,11 +132,13 @@ export class ParentWakeFlushRunner {
       return
     }
 
-    const finalToolWaitDecision = await this.confirmParentWakeStillSafeForReply(
-      sessionID,
-      latestWake,
-      toolWaitDecision,
-    )
+    const finalToolWaitDecision = forceIdleFailureQuestionWake
+      ? { defer: false, skipPromptGateToolStateCheck: true, reason: null } as const
+      : await this.confirmParentWakeStillSafeForReply(
+        sessionID,
+        latestWake,
+        toolWaitDecision,
+      )
     if (finalToolWaitDecision.defer) {
       if (this.deferReplyWakeWhileUnsafe(sessionID, latestWake)) {
         return
@@ -224,6 +236,7 @@ export class ParentWakeFlushRunner {
       readonly skipPromptGateStatusCheck?: boolean
     },
   ): Promise<void> {
+    latestWake.preDispatchAssistantMessageID = await this.deps.sessionInspector.latestAssistantMessageID(sessionID)
     // Mark the dispatch in-flight BEFORE the pending entry is deleted so there is
     // never an observable instant where neither the pending queue, the dispatched
     // tracker, nor this marker reports an owed wake. The dispatch await below can

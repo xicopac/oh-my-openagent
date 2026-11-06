@@ -34,6 +34,19 @@ describe("duplicate", () => {
     if (result.duplicate) expect(result.reason).toBe("completed")
   })
 
+  test("does not reuse a failed worker with no result", () => {
+    const workers: WorkerTrace[] = [
+      { actor_id: "w1", role: "explorer", question: "inspect storage migration schema", status: "failed" },
+    ]
+
+    const result = checkDuplicate(
+      { role: "explorer", question: "inspect storage migration schema" },
+      workers,
+    )
+
+    expect(result.duplicate).toBe(false)
+  })
+
   test("does not flag different roles or unrelated topics", () => {
     // given a worker on a different question
     const workers: WorkerTrace[] = [

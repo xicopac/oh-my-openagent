@@ -13,6 +13,7 @@ type ParentWakeWindowRecoveryInput = {
   readonly requeueWake: (wake: PendingParentWake) => void
   readonly scheduleFlush: () => void
   readonly onWakeAcknowledged?: (wake: PendingParentWake) => void
+  readonly onWakeDeliveryExhausted?: (wake: PendingParentWake) => void
 }
 
 export async function handleDispatchedParentWakeWindowElapsed(
@@ -34,6 +35,7 @@ export async function handleDispatchedParentWakeWindowElapsed(
 
   const retryCount = input.wake.noAssistantOutputRetryCount ?? 0
   if (retryCount >= MAX_NO_ASSISTANT_OUTPUT_RETRIES) {
+    input.onWakeDeliveryExhausted?.(input.wake)
     input.dispatchedTracker.clearWake(input.sessionID)
     log("[background-agent] Stopped retrying parent wake after repeated no-output dispatch:", {
       sessionID: input.sessionID,

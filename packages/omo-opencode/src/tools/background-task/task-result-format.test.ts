@@ -45,4 +45,27 @@ describe("formatTaskResult", () => {
     expect(output).toContain("Session error")
     expect(output).toContain("Forbidden: Selected provider is forbidden")
   })
+
+  test("returns the durable blocked reason after the terminal worker session is gone", async () => {
+    let messageReads = 0
+    const task = createTask({
+      status: "blocked",
+      error: "BLOCKED: assistant turn completed with no output",
+    })
+    const client: BackgroundOutputClient = {
+      session: {
+        messages: async () => {
+          messageReads += 1
+          throw new Error("session deleted")
+        },
+      },
+    }
+
+    const output = await formatTaskResult(task, client)
+
+    expect(output).toContain("Task ID: task-1")
+    expect(output).toContain("BLOCKED: assistant turn completed with no output")
+    expect(output).not.toContain("Error fetching messages")
+    expect(messageReads).toBe(0)
+  })
 })

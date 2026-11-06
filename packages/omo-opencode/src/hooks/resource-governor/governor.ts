@@ -276,6 +276,7 @@ export function createResourceGovernor(config: ResourceGovernorConfig) {
   const escrows = new Map<string, ChildEscrow>()
   const childRecords = new Map<string, UsageRecord>()
   const workers: WorkerTrace[] = []
+  const workerByEscrow = new Map<string, WorkerTrace>()
   let spent_usd = 0
   let spent_tokens = 0
   let levels = config.levels
@@ -365,12 +366,14 @@ export function createResourceGovernor(config: ResourceGovernorConfig) {
         }
         recordUsage(ledger, record)
         childRecords.set(decision.seed.escrow_id, record)
-        workers.push({
+        const worker = {
           actor_id: decision.seed.actor_id,
           role: decision.seed.role,
           question: request.subtask,
           status: "active",
-        })
+        } satisfies WorkerTrace
+        workers.push(worker)
+        workerByEscrow.set(decision.seed.escrow_id, worker)
       }
       return decision
     },
@@ -398,7 +401,7 @@ export function createResourceGovernor(config: ResourceGovernorConfig) {
       escrows.set(escrow_id, settled)
       const record = childRecords.get(escrow_id)
       if (record) record.status = status === "completed" ? "completed" : "failed"
-      const trace = workers.find((w) => w.actor_id === escrow.actor_id)
+      const trace = workerByEscrow.get(escrow_id)
       if (trace) trace.status = status === "completed" ? "completed" : "failed"
       return true
     },
