@@ -1,18 +1,18 @@
 # OMO Stabilization State
 
-Last updated: 2026-11-05 Europe/Madrid
-Status: Slices A-D are merged into `release/canonical-20261029`. Slice E implementation and all local gates are green. Production remains unchanged until the Slice E PR is merged and the exact merged artifact passes final preflight.
+Last updated: 2026-11-06 Europe/Madrid
+Status: Slices A-E are merged through PR #5. The Garmin repeated-empty-worker incident follow-up is fixed and locally green on a real isolated OpenCode runtime; its follow-up PR and merge gates remain. Production is unchanged.
 
 ## Git and release state
 
 - Canonical release base and rollback target: `d4e2979b80de9d04768f380828bfca4b428276ae`.
-- Integrated merge commits: PR #1 `876cff5e0`, PR #2 `61f887117`, PR #3 `d4e2979b8`.
+- Integrated merge commits: PR #1 `876cff5e0`, PR #2 `61f887117`, PR #3 `d4e2979b8`, PR #5 `4ed0ee31d`.
 - PR #4 is included exactly once: original #4 head `63e83c488`, integrated #3 head `1dbe9fcfe`, and the release head share tree `d408007c6b21230dea0713e9cd62575cea4e9abe`.
 - Active Slice E worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-slice-e-release-gate`.
-- Active branch: `fix/stabilize-slice-e-release-gate`, based directly on the merged release head.
+- Active branch: `fix/stabilize-slice-e-release-gate`; incident implementation commit `187574414` follows merged PR #5 commit `4ed0ee31d`.
 - Slice E commits before the final runtime checkpoint: `707b6b4d8` (durable plan/state) and `eaba2c2de` (reproducible adapter builds).
 - Production plugin: `/srv/dev/oh-my-openagent`; no source, Git history, configuration, bundle, or running service has been changed.
-- The user explicitly authorized an atomic, rollback-capable deployment of the exact merged green artifact. This does not authorize rewriting or synchronizing production Git history, deploying to `dev`, bypassing checks, or contacting a real paid provider.
+- The current incident task explicitly prohibits production deployment. Any earlier deployment authorization is out of scope for this follow-up and must not be acted on here.
 
 ## Core reliability architecture now implemented
 
@@ -24,6 +24,9 @@ Status: Slices A-D are merged into `release/canonical-20261029`. Slice E impleme
 - Tool authorization classifies normalized effect rather than transport spelling. Native `apply_patch`, wrappers, opaque shell paths, substitutions, and redirections fail closed consistently.
 - Task process ownership terminates only exact recorded task scopes. Cleanup is idempotent and does not enumerate unrelated processes.
 - A provider-completed empty assistant turn gets a 15-second event-settle grace, then terminalizes `blocked` and wakes the parent instead of polling forever.
+- Empty terminal turns first consume the existing bounded, authorized fallback chain. Two distinct final empty-provider failures enter bounded recovery; two failed probes halt definitively while preserving read-only diagnostics and result retrieval.
+- Parent-wake acknowledgement is causal to post-dispatch assistant output. Idle unanswered-question history may delay a terminal-failure wake only to the existing 60-second ceiling; active/tool-running turns remain protected.
+- Resource-governor sibling traces settle by escrow identity. Failed workers are not reusable duplicate results, and request-start no longer erases preceding failure evidence.
 - Sync execution still returns through its attached tool call rather than the durable background outbox. This is a documented future simplification, not a demonstrated release blocker.
 
 ## Slice E implementation
@@ -35,6 +38,14 @@ Status: Slices A-D are merged into `release/canonical-20261029`. Slice E impleme
 - Generated Senpi ESM fixtures create their own module boundary and no longer inherit unrelated ancestor `/tmp/package.json` metadata.
 - `script/release-candidate.ts` requires a clean checkout, validates the rollback ancestor, runs the pinned build, rechecks cleanliness, and emits a versioned artifact plus deterministic manifest with commit, Bun/Node, lockfile, generated artifacts, evidence hashes, and rollback target.
 - `script/qa/worker-runtime-matrix/` is the one committed, sequential real-OpenCode runtime gate for normal, stall, empty, cancellation, compaction, and repeated unattended scenarios.
+
+## Garmin repeated-empty-worker incident follow-up
+
+- The old `empty` case was a false negative: it used one child and accepted any terminal plus any parent response. It did not reproduce idle unanswered-question history, repeated empty siblings, exact retrieval, causal acknowledgement, recovery entry/probes/halt, or definitive exit.
+- Production metadata showed a durable empty-output terminal wake delayed about 5h23m until parent reactivation. The staged 45s/90s source-drift conclusion was corrected: both the Slice E source and bundle use the intentional 5s/15s thresholds.
+- Root causes were unbounded unanswered-question wake deferral, non-causal acknowledgement, empty terminals bypassing fallback/recovery evidence, request-start clearing failure evidence, escrow settlement mutating the wrong sibling trace, failed duplicate reuse, silent wake-delivery exhaustion, and misleading generic blocked status.
+- The exact incident harness now binds bundle/source fingerprints, drives the real HTTP session API and SSE stream in isolated XDG/HOME/DB state, retrieves four exact terminal results, proves two failures and two bounded probes, requires halt rejection with no fifth worker, and requires a model-visible definitive exit.
+- Garmin source, production configuration/source/bundle/service, real providers, and paid models remain untouched.
 
 ## Verification evidence
 
@@ -50,6 +61,15 @@ Status: Slices A-D are merged into `release/canonical-20261029`. Slice E impleme
 - Every run keeps the real OpenCode database at 2,351 sessions and the real worker store at 93 records. Only local zero-cost fake models are requested.
 - Repeated-run bounds: RSS 673,336–772,176 KiB; FDs 85–89; inotify FDs exactly 2; sandbox bytes 228,569,797–228,571,230; CPU at most 1,966 ticks; wall time at most 37 seconds; no orphan process.
 - Evidence: ignored `.omo/evidence/20261105-worker-runtime-final/`.
+
+### Garmin incident follow-up
+
+- Exact incident candidate: bundle SHA-256 `c92b1a28597e44cdab5fca2267d6095904399e73ac9c0f978197b6b5ee411112`; final source fingerprint `c70084556802d8361db12677a8421c14de3e5199ce14b02d85eeff389d3757d8`.
+- Final affected-subsystem gate: 1,291 pass, 0 fail, 3,614 assertions across 132 files; scoped OpenCode typecheck exits 0.
+- Real OpenCode 1.19.3 incident: four exact empty workers are durable `blocked` and acknowledged; each result is retrieved before the next action; two provider failures plus two failed probes produce one halt; the fifth dispatch produces no provider request or worker record; the root exits definitively.
+- `session.idle` was observed through the isolated OpenCode QA SSE attach probe. The real DB stayed at 2,379 sessions and the real worker store at 155 records; isolated processes stopped.
+- Final eight-scenario matrix passes. Repeated normal bounds: RSS 685,008-793,180 KiB, FDs 83-87, inotify FDs 2, sandbox bytes 228,592,684-228,598,170, CPU <=2,115 ticks, wall <=39 seconds, no orphan process.
+- Evidence: ignored `.omo/evidence/20261105-blocked-worker-incident/`.
 
 ### Codex
 
@@ -75,12 +95,12 @@ Status: Slices A-D are merged into `release/canonical-20261029`. Slice E impleme
 
 ## Current decision and next actions
 
-1. Commit the verified runtime matrix, empty-output repair, and durable documentation.
-2. Push the branch and open the Slice E PR against `release/canonical-20261029`.
+1. Commit only the Garmin incident source, regression harness, and checkpoint updates; keep evidence ignored.
+2. Push the branch and open a follow-up PR against `release/canonical-20261029`.
 3. Verify exact merge base, intended diff, CLA, CI, and merge readiness; merge with a merge commit only if every required check passes.
-4. Build and verify the exact merged commit with rollback target `d4e2979b8`.
-5. Inspect production read-only, preserve the current bundle as the rollback artifact, atomically switch only `dist/index.js` to the verified versioned artifact, and run an isolated local smoke test.
-6. Do not rewrite production Git history, merge to `dev`, deploy a different commit, or contact a real paid provider.
+4. Build and verify the exact merged follow-up commit with rollback target `4ed0ee31d`.
+5. Stop before production deployment. This incident request explicitly prohibits deployment.
+6. Do not rewrite production Git history, merge to `dev`, bypass guards, allow unbounded retries, or contact a real paid provider.
 
 ## Separate housekeeping and deferred work
 

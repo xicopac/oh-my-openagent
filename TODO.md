@@ -131,5 +131,29 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 - [x] Prove explicit cancellation reaches a running child and releases only that task's owned session/process resources.
 - [x] Record CPU, memory, filesystem-watch, process, wall-time, and artifact-growth observations across repeated unattended runs.
 - [x] Run scoped OpenCode, Codex, and Senpi real-harness QA required by the build surfaces; keep evidence local and ignored.
-- [ ] Update final architecture/state/release docs, open the Slice E PR against `release/canonical-20261029`, verify all gates, and merge only when green.
-- [ ] After the exact Slice E commit is merged and all gates are green, deploy its verified versioned artifact atomically with a recorded rollback target and smoke test; do not rewrite production Git history.
+- [x] Update final architecture/state/release docs, open Slice E PR #5 against `release/canonical-20261029`, verify all gates, and merge with merge commit `4ed0ee31d`.
+- [ ] Deployment is explicitly prohibited by the Garmin incident follow-up; do not touch production as part of this task.
+
+## Slice E incident follow-up — Garmin repeated empty workers
+
+- [x] Read the preserved incident README, runtime evidence, staged PLAN_UPDATE, current STATE.md, ROADMAP, and applicable repository instructions before changing source.
+- [x] Trace the production provider, parent-session, delegation, child-terminal, parent-wake, recovery, and terminal-result retrieval paths end to end.
+- [x] Compare the existing empty-response matrix with the Garmin production sequence and enumerate every material topology and assertion gap.
+- [x] Inspect production metadata and logs read-only, without reading Garmin prompts/results or changing production configuration or source.
+- [x] Write the implementation and verification plan to `.omo/plans/20261105-blocked-worker-incident.md` before the first source edit.
+- [x] Add an exact repeated-empty-worker RED scenario that drives the real OpenCode runtime in an isolated XDG sandbox and preserves the failed pre-fix evidence.
+- [x] Verify the RED scenario reproduces the idle unanswered-question wake deferral, non-causal wake acknowledgement, repeated empty children, absent recovery transition, and autonomous-progress failure.
+- [x] Route terminal empty assistant turns through the existing bounded provider-fallback policy while preserving authorization and retry limits.
+- [x] Record final ordinary empty-worker failures as delegation failures so two independent failures enter recovery mode and recovery probes remain bounded.
+- [x] Make parent-wake history decisions machine-readable and allow only a bounded idle terminal-failure wake past an unanswered-question blocker, without bypassing active or tool-running turns.
+- [x] Make parent-wake acknowledgement causal to output created after the dispatched wake, including message identity in stream and history checks.
+- [x] Persist an explicit terminal wake-delivery-exhausted state when the bounded delivery retry is consumed, while keeping the worker result retrievable.
+- [x] Replace the generic blocked-task “automatic recovery exhausted” text with the task's actual terminal reason.
+- [x] Add focused unit regressions for bounded empty fallback, recovery-mode entry, definitive halt, causal wake acknowledgement, bounded history deferral, delivery exhaustion, durable terminal retrieval, escrow-specific sibling settlement, and failed-trace duplicate exclusion.
+- [x] Build the OpenCode plugin from the edited source and bind the final runtime evidence to source fingerprint `c700845...` and bundle SHA-256 `c92b1a...`.
+- [x] Run the exact repeated-empty-worker GREEN scenario in a fresh isolated real OpenCode runtime and capture terminal results, wake transitions, recovery transitions, bounded worker count, matching SSE event, and definitive autonomous exit.
+- [x] Run the 1,291-test affected-subsystem gate, scoped OpenCode typecheck, OpenCode server smoke, the exact SSE attach probe, and the final eight-scenario real-runtime matrix with unchanged real OpenCode DB/worker-store proof.
+- [x] Write reviewer-readable QA artifacts under `.omo/evidence/20261105-blocked-worker-incident/`, including commands, observations, sufficiency, omissions, and SHA-256 digests.
+- [x] Correct the staged PLAN_UPDATE and update PLAN.md, STATE.md, and TODO.md with the verified root cause, fix, gate results, residual risk, and explicit production-deployment omission.
+- [x] Commit only the intended source, regression, harness, and checkpoint files in atomic commits; never add `.omo/evidence/`.
+- [ ] Open a reviewer-readable English PR against the canonical release branch, complete CI and review loops, merge with a merge commit, and verify the merged release candidate without deploying it.
