@@ -131,8 +131,9 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 - [x] Prove explicit cancellation reaches a running child and releases only that task's owned session/process resources.
 - [x] Record CPU, memory, filesystem-watch, process, wall-time, and artifact-growth observations across repeated unattended runs.
 - [x] Run scoped OpenCode, Codex, and Senpi real-harness QA required by the build surfaces; keep evidence local and ignored.
-- [x] Update final architecture/state/release docs, open Slice E PR #5 against `release/canonical-20261029`, verify all gates, and merge with merge commit `4ed0ee31d`.
-- [ ] Deployment is explicitly prohibited by the Garmin incident follow-up; do not touch production as part of this task.
+- [x] Update final architecture/state/release docs, open Slice E PR #5 against `release/canonical-20261029`, verify all gates, and merge it as `4ed0ee31d` with a merge commit.
+- [x] Build the exact merged Slice E commit, preserve the prior bundle, deploy the versioned artifact atomically, and pass the post-deployment real OpenCode smoke test without rewriting production Git history.
+- [x] Preserve production unchanged during the Garmin incident follow-up; no follow-up deployment is authorized.
 
 ## Slice E incident follow-up — Garmin repeated empty workers
 
@@ -157,3 +158,5 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 - [x] Correct the staged PLAN_UPDATE and update PLAN.md, STATE.md, and TODO.md with the verified root cause, fix, gate results, residual risk, and explicit production-deployment omission.
 - [x] Commit only the intended source, regression, harness, and checkpoint files in atomic commits; never add `.omo/evidence/`.
 - [ ] Open a reviewer-readable English PR against the canonical release branch, complete CI and review loops, merge with a merge commit, and verify the merged release candidate without deploying it.
+
+- [ ] Publish the prepared deployment SOP/change record to Wiki.js after an operator grants executable access to the root-owned wiki helper scripts; this does not block the verified runtime deployment.

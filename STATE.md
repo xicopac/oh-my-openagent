@@ -1,18 +1,20 @@
 # OMO Stabilization State
 
-Last updated: 2026-11-06 Europe/Madrid
-Status: Slices A-E are merged through PR #5. The Garmin repeated-empty-worker incident follow-up is fixed and locally green on a real isolated OpenCode runtime; its follow-up PR and merge gates remain. Production is unchanged.
+Last updated: 2026-11-07 Europe/Madrid
+Status: Slices A-E are merged and the PR #5 artifact was deployed and verified before this incident task. The Garmin repeated-empty-worker follow-up is fixed and green on a real isolated OpenCode runtime; its follow-up PR and merge gates remain. This task has not changed production.
 
 ## Git and release state
 
 - Canonical release base and rollback target: `d4e2979b80de9d04768f380828bfca4b428276ae`.
 - Integrated merge commits: PR #1 `876cff5e0`, PR #2 `61f887117`, PR #3 `d4e2979b8`, PR #5 `4ed0ee31d`.
 - PR #4 is included exactly once: original #4 head `63e83c488`, integrated #3 head `1dbe9fcfe`, and the release head share tree `d408007c6b21230dea0713e9cd62575cea4e9abe`.
+- Slice E PR #5 merged as `4ed0ee31d3c5676397b88507ff724f94a19d55fb`; its merge tree exactly matches verified feature head `ffef6e1023e3990317ce8165ea22b8a12b522a90`.
+- The deployed code-bearing release commit is `4ed0ee31d3c5676397b88507ff724f94a19d55fb`; subsequent documentation-only merge commits do not change the verified bundle identity.
 - Active Slice E worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-slice-e-release-gate`.
-- Active branch: `fix/stabilize-slice-e-release-gate`; incident implementation commit `187574414` follows merged PR #5 commit `4ed0ee31d`.
+- Active branch: `fix/stabilize-slice-e-release-gate`; incident implementation commit `187574414` and checkpoint commit `026dda5fe` follow PR #5.
 - Slice E commits before the final runtime checkpoint: `707b6b4d8` (durable plan/state) and `eaba2c2de` (reproducible adapter builds).
-- Production plugin: `/srv/dev/oh-my-openagent`; no source, Git history, configuration, bundle, or running service has been changed.
-- The current incident task explicitly prohibits production deployment. Any earlier deployment authorization is out of scope for this follow-up and must not be acted on here.
+- Production plugin: `/srv/dev/oh-my-openagent`. Its source, Git history, configuration, and unrelated dirty files were not changed; only the ignored runtime bundle `dist/index.js` was replaced atomically.
+- That atomic deployment predates the Garmin incident follow-up. The current task explicitly prohibits another production deployment and does not authorize source/configuration mutation, Git-history rewriting, guard bypasses, or real paid-provider traffic.
 
 ## Core reliability architecture now implemented
 
@@ -91,16 +93,18 @@ Status: Slices A-E are merged through PR #5. The Garmin repeated-empty-worker in
 - Two clean builds from commit `eaba2c2de` produce identical artifact SHA-256 `47949e129764ebc8748fd02fe3b1b2ebb7059a459d8cb726e9038960b635b969`.
 - Their manifests are identical after normalizing the intentionally different output path.
 - Both builds start and finish with a clean tracked tree.
-- The final merged Slice E commit will receive a fresh release-candidate manifest before deployment.
+- Exact merged commit `4ed0ee31d` produced artifact SHA-256 `e8553ce477384e4eccdbca6a558a6bcf3313b5147b87f170242a21edf73fc341` (6,536,818 bytes) under Bun 1.4.3; the clean-tree verifier recorded rollback target `d4e2979b80de9d04768f380828bfca4b428276ae`.
+- The versioned deployed artifact is `/srv/dev/omo-releases/oh-my-openagent/4ed0ee31d3c5676397b88507ff724f94a19d55fb/index.js`; its hash is byte-identical to `/srv/dev/oh-my-openagent/dist/index.js`.
+- The previous live bundle is preserved at `/srv/dev/omo-releases/oh-my-openagent/rollback-e5b545d70b0686bbb560381c46ed7005d4953e06939e66190f581f44f032f94a/index.js`.
+- Post-deployment real OpenCode smoke passed normal completion, durable acknowledged wake, autonomous parent continuation, free local fake-provider enforcement, unchanged real stores, and no orphan processes. Evidence: ignored `.omo/evidence/20261105-production-deploy/normal/`.
 
 ## Current decision and next actions
 
-1. Commit only the Garmin incident source, regression harness, and checkpoint updates; keep evidence ignored.
-2. Push the branch and open a follow-up PR against `release/canonical-20261029`.
-3. Verify exact merge base, intended diff, CLA, CI, and merge readiness; merge with a merge commit only if every required check passes.
-4. Build and verify the exact merged follow-up commit with rollback target `4ed0ee31d`.
-5. Stop before production deployment. This incident request explicitly prohibits deployment.
-6. Do not rewrite production Git history, merge to `dev`, bypass guards, allow unbounded retries, or contact a real paid provider.
+1. Push the Garmin incident branch and open a follow-up PR against `release/canonical-20261029`.
+2. Verify the intended diff, CLA, CI, review, and merge readiness; merge with a merge commit only after every required check passes.
+3. Build and verify the exact merged follow-up commit with the pre-follow-up release head as rollback target.
+4. Stop before production deployment. Do not reconcile `dev`, mutate production source/configuration, bypass guards, allow unbounded retries, or contact a real paid provider.
+5. Wiki.js publication for the earlier PR #5 deployment remains a separate operational-documentation follow-up.
 
 ## Separate housekeeping and deferred work
 
