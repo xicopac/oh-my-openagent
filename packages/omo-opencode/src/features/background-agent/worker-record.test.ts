@@ -116,4 +116,28 @@ describe("worker record terminal compare-and-set", () => {
     })
     expect(store.prune(1, new Date("2026-10-31T08:00:00.000Z"))).toBe(1)
   })
+
+  test("bounded wake delivery exhaustion remains durable and cannot be replayed back to pending", () => {
+    const store = createStore()
+    store.save(runningRecord("bg_delivery_exhausted"))
+    store.terminalize("bg_delivery_exhausted", {
+      state: "blocked",
+      terminalOutcome: "blocked",
+      terminalAt: "2026-10-30T08:00:00.000Z",
+      terminalAttemptID: "att_empty",
+      terminalReason: "BLOCKED: assistant turn completed with no output",
+    })
+
+    store.markWakeDispatched("bg_delivery_exhausted", new Date("2026-10-30T08:01:00.000Z"))
+    store.markWakeDeliveryExhausted("bg_delivery_exhausted", new Date("2026-10-30T08:02:00.000Z"))
+    store.markNotificationQueued("bg_delivery_exhausted", new Date("2026-10-30T08:03:00.000Z"))
+
+    expect(store.get("bg_delivery_exhausted")).toMatchObject({
+      terminalOutcome: "blocked",
+      terminalReason: "BLOCKED: assistant turn completed with no output",
+      wakeState: "delivery_exhausted",
+      wakeDeliveryExhaustedAt: "2026-10-30T08:02:00.000Z",
+    })
+    expect(store.prune(1, new Date("2026-10-31T08:00:00.000Z"))).toBe(0)
+  })
 })

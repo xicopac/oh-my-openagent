@@ -156,7 +156,16 @@ describe("autonomous worker lifecycle", () => {
 
     manager.handleEvent({
       type: "message.updated",
-      properties: { sessionID: "ses_parent", info: { sessionID: "ses_parent", role: "assistant", finish: "stop" } },
+      properties: {
+        sessionID: "ses_parent",
+        info: {
+          id: "msg_parent_after_wake",
+          sessionID: "ses_parent",
+          role: "assistant",
+          finish: "stop",
+          tokens: { output: 1, reasoning: 0 },
+        },
+      },
     })
     expect(store.get("bg_done")?.wakeState).toBe("acknowledged")
     expect(store.get("bg_done")?.wakeAcknowledgedAt).toBeDefined()
@@ -254,7 +263,16 @@ describe("autonomous worker lifecycle", () => {
     await flushWake(second, "ses_parent")
     second.handleEvent({
       type: "message.updated",
-      properties: { sessionID: "ses_parent", info: { sessionID: "ses_parent", role: "assistant", finish: "stop" } },
+      properties: {
+        sessionID: "ses_parent",
+        info: {
+          id: "msg_parent_after_restart_wake",
+          sessionID: "ses_parent",
+          role: "assistant",
+          finish: "stop",
+          tokens: { output: 1, reasoning: 0 },
+        },
+      },
     })
     expect(store.get("bg_restart")?.wakeState).toBe("acknowledged")
 
@@ -291,6 +309,44 @@ describe("autonomous worker lifecycle", () => {
     const notification = pendingWakes(manager).get("ses_parent")?.notifications.join("\n") ?? ""
     expect(notification).toContain("BLOCKED")
     expect(notification).toContain("ALL BACKGROUND TASKS FINISHED")
+  })
+
+  test("#given terminal empty output has an authorized fallback #when the poller checks it #then the worker retries before terminalizing", async () => {
+    const fake = createFakeClient({
+      status: { ses_child: { type: "idle" } },
+      messages: {
+        ses_child: [{ info: { role: "assistant", finish: "stop", tokens: { input: 10, output: 0, reasoning: 0 } }, parts: [] }],
+      },
+    })
+    const store = createStore()
+    const manager = createManager(fake.client, store)
+    const value = task({
+      id: "bg_empty_retry",
+      parentSessionId: "ses_parent",
+      sessionId: "ses_child",
+      progress: { toolCalls: 0, lastUpdate: new Date(Date.now() - 16_000) },
+    })
+    addTask(manager, value)
+    const retries: Array<{ source: string; eligibility?: string }> = []
+    ;(manager as unknown as {
+      tryFallbackRetry: (
+        task: BackgroundTask,
+        errorInfo: { name?: string; message?: string },
+        source: string,
+        eligibility?: string,
+      ) => Promise<boolean>
+    }).tryFallbackRetry = async (_task, _errorInfo, source, eligibility) => {
+      retries.push({ source, eligibility })
+      return true
+    }
+
+    const poll = Reflect.get(manager, "pollRunningTasks") as () => Promise<void>
+    await poll.call(manager)
+
+    expect(retries).toEqual([{ source: "polling:idle-empty-turn", eligibility: "terminal_empty_output" }])
+    expect(value.status).toBe("running")
+    expect(store.get(value.id)?.terminalOutcome).toBeUndefined()
+    expect(pendingWakes(manager).has("ses_parent")).toBe(false)
   })
 
   test("#given an idle empty assistant turn is quiet for 15 seconds #when the poller checks it #then it terminalizes instead of waiting indefinitely", async () => {
@@ -366,6 +422,46 @@ describe("autonomous worker lifecycle", () => {
     expect(recovered?.status).toBe("completed")
     expect(recovered?.result).toBe("retained answer")
     expect(output).toContain("retained answer")
+  })
+
+  test("#given terminal wake delivery exhausts #when the manager restarts #then it does not replay forever and the exact blocked reason remains retrievable", async () => {
+    const fake = createFakeClient({ messagesError: new Error("session deleted") })
+    const store = createStore()
+    store.save({
+      schemaVersion: 1,
+      workerID: "bg_delivery_exhausted",
+      sessionID: "ses_deleted",
+      parentSessionID: "ses_parent",
+      agent: "explore",
+      description: "empty worker",
+      state: "running",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+    store.terminalize("bg_delivery_exhausted", {
+      state: "blocked",
+      terminalOutcome: "blocked",
+      terminalAt: new Date().toISOString(),
+      terminalAttemptID: "att_empty",
+      terminalReason: "BLOCKED: assistant turn completed with no output",
+    })
+    store.markWakeDispatched("bg_delivery_exhausted")
+    store.markWakeDeliveryExhausted("bg_delivery_exhausted")
+    const manager = createManager(fake.client, store)
+
+    const recover = Reflect.get(manager, "recoverTerminalWorkerRecords") as () => Promise<void>
+    await recover.call(manager)
+    const recovered = manager.getTask("bg_delivery_exhausted")
+    const format = await import("../../tools/background-task/task-result-format")
+    const output = recovered ? await format.formatTaskResult(recovered, fake.client) : ""
+
+    expect(pendingWakes(manager).has("ses_parent")).toBe(false)
+    expect(recovered).toMatchObject({
+      status: "blocked",
+      error: "BLOCKED: assistant turn completed with no output",
+    })
+    expect(output).toContain("BLOCKED: assistant turn completed with no output")
+    expect(store.get("bg_delivery_exhausted")?.wakeState).toBe("delivery_exhausted")
   })
 
   test("#given a provider request stops responding #when the watchdog checks past the response deadline #then it reports a provider response stall", () => {

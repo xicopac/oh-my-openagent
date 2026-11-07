@@ -6519,6 +6519,87 @@ describe("BackgroundManager.handleEvent - session.error", () => {
     manager.shutdown()
   })
 
+  test("keeps terminal debt for pre-dispatch assistant activity and acknowledges only a newer output message", async () => {
+    //#given
+    const client = {
+      session: {
+        status: async () => ({ data: { "parent-session-causal": { type: "idle" } } }),
+        messages: async () => ({
+          data: [{
+            info: {
+              id: "msg_existing",
+              role: "assistant",
+              finish: "stop",
+              time: { created: Date.now() - 10_000, completed: Date.now() - 9_000 },
+            },
+            parts: [{ type: "text", text: "existing parent output" }],
+          }],
+        }),
+        promptAsync: async () => ({}),
+        abort: async () => ({}),
+      },
+    }
+    const manager = new BackgroundManager({ pluginContext: createPluginInput(client) })
+    const managerInternals = cast<{
+      queuePendingParentWake: (
+        sessionID: string,
+        notification: string,
+        promptContext: Record<string, unknown>,
+        shouldReply: boolean,
+        delayMs?: number,
+      ) => void
+      flushPendingParentWake: (sessionID: string) => Promise<void>
+    }>(manager)
+    managerInternals.queuePendingParentWake(
+      "parent-session-causal",
+      "<system-reminder>[BACKGROUND TASK BLOCKED]</system-reminder>",
+      { agent: "sisyphus" },
+      true,
+      0,
+    )
+    await managerInternals.flushPendingParentWake("parent-session-causal")
+    expect(getDispatchedParentWakes(manager).get("parent-session-causal")?.preDispatchAssistantMessageID)
+      .toBe("msg_existing")
+
+    //#when: a late event from the assistant message that existed before dispatch arrives
+    manager.handleEvent({
+      type: "message.part.updated",
+      properties: {
+        sessionID: "parent-session-causal",
+        messageID: "msg_existing",
+        part: {
+          sessionID: "parent-session-causal",
+          messageID: "msg_existing",
+          role: "assistant",
+          type: "text",
+          text: "existing parent output",
+        },
+      },
+    })
+
+    //#then
+    expect(getDispatchedParentWakes(manager).has("parent-session-causal")).toBe(true)
+
+    //#when: the dispatched wake causes a new assistant output message
+    manager.handleEvent({
+      type: "message.part.updated",
+      properties: {
+        sessionID: "parent-session-causal",
+        messageID: "msg_after_wake",
+        part: {
+          sessionID: "parent-session-causal",
+          messageID: "msg_after_wake",
+          role: "assistant",
+          type: "text",
+          text: "retrieved the terminal worker",
+        },
+      },
+    })
+
+    expect(getDispatchedParentWakes(manager).has("parent-session-causal")).toBe(false)
+    manager.shutdown()
+  })
+
   test("requeues dispatched parent wake when a late error follows the injected user wake part", async () => {
     //#given
     const promptCalls: Array<{ path: { id: string }; body: Record<string, unknown> }> = []

@@ -1,10 +1,10 @@
 # OMO Stabilization Plan
 
-Last updated: 2026-11-03 (Europe/Madrid)
+Last updated: 2026-11-06 (Europe/Madrid)
 Owner: Codex
 Canonical base: `d4e2979b80de9d04768f380828bfca4b428276ae` (merged PR stack on `release/canonical-20261029`)
 Implementation worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-slice-e-release-gate` (Slice E, based directly on the merged release head)
-Production boundary: `/srv/dev/oh-my-openagent` remains untouched until the exact merged release-candidate commit passes every gate. The user has authorized a later atomic, rollback-capable deployment of that verified artifact only; production Git history must not be rewritten or synchronized.
+Production boundary: `/srv/dev/oh-my-openagent` remains untouched. The Garmin incident follow-up explicitly prohibits deployment; production Git history must not be rewritten or synchronized.
 
 ## Objective
 
@@ -210,11 +210,38 @@ Verification:
 - Repeated runs have bounded RSS, CPU, file descriptors, inotify watchers, wall time, and evidence growth.
 - Two clean rebuilds from commit `eaba2c2de` leave the tracked tree unchanged and emit artifact SHA-256 `47949e129764ebc8748fd02fe3b1b2ebb7059a459d8cb726e9038960b635b969` with identical normalized manifest fields. The final merged commit receives a fresh manifest before deployment.
 
+### Slice E follow-up — Garmin repeated empty workers
+
+Files:
+
+- Background manager fallback, terminal record, parent-wake, and session-event helpers under `packages/omo-opencode/src/features/background-agent/`.
+- Delegation failure/recovery state under `packages/omo-opencode/src/features/delegation-first/` and manager wiring in `create-managers.ts`.
+- Resource-governor duplicate/escrow tracking under `packages/omo-opencode/src/hooks/resource-governor/`.
+- Durable `background_output`/status formatting under `packages/omo-opencode/src/tools/background-task/`.
+- Exact incident scenario and source/bundle binding under `script/qa/worker-runtime-matrix/`.
+
+Changes:
+
+- Preserve the 5s probe / 15s terminal empty-turn policy. Route a terminal empty turn through the existing bounded authorized fallback chain before final `blocked` terminalization.
+- Record distinct final empty-provider failures. Do not treat request-start as recovery; only a validated non-empty result heals degraded delegation. Two failures enter recovery, two failed probes halt, and halt rejects later dispatch while retaining diagnostics/result retrieval.
+- Settle resource-governor worker traces by escrow identity and exclude failed traces from duplicate-result reuse.
+- Bound idle unanswered-question terminal wake deferral at 60 seconds without bypassing active/tool-running turns. Acknowledge only causally newer real assistant output; persist `delivery_exhausted` after the single retry.
+- Prefer durable terminal payloads for retrieval and report the actual blocked reason.
+- Reproduce the exact production sequence with one root prompt, an aborted question turn, four empty children, exact retrieval, bounded recovery/halt, no fifth worker, and definitive root exit.
+
+Verification:
+
+- Final affected-subsystem scope: 1,291 tests / 3,614 assertions across 132 files; scoped OpenCode typecheck exits 0.
+- Real OpenCode 1.19.3 exact incident on bundle SHA-256 `c92b1a28597e44cdab5fca2267d6095904399e73ac9c0f978197b6b5ee411112` and final source fingerprint `c70084556802d8361db12677a8421c14de3e5199ce14b02d85eeff389d3757d8`.
+- Matching `session.idle` observed on the isolated SSE stream; four durable acknowledged empty terminals; exact retrieval before each next action; two failures, two probes, one halt; no fifth provider request/record; definitive root exit.
+- Final eight-scenario runtime matrix passes with unchanged real DB/worker stores, bounded repeated resources, and no process leak.
+- Evidence stays ignored at `.omo/evidence/20261105-blocked-worker-incident/`. Production deployment is prohibited for this follow-up.
+
 ## Execution rules
 
 - Work only in fresh task-owned worktrees based on the canonical release line.
 - Use `GIT_MASTER=1` for every Git command.
-- Do not touch `/srv/dev/oh-my-openagent` before the release PR is merged and its exact artifact is verified. Any authorized deployment must preserve the current artifact as a rollback target and must not rewrite production Git history.
+- Do not touch `/srv/dev/oh-my-openagent`. Production deployment is explicitly prohibited for the Garmin incident follow-up.
 - Never delete historical worktrees or original evidence.
 - No real model/provider probes; fake local providers only.
 - Heavy test suites run sequentially and only when package temperature is below 90°C. Stop immediately at or above 90°C.
@@ -234,4 +261,4 @@ Milestone 2 exits only when the core invariants above are implemented and every 
 
 Milestone 3 exits only when the full controlled-provider matrix passes repeatedly without human input, lost results, abandoned tasks, unauthorized paid routes, orphan processes, or resource growth.
 
-Milestone 4 exits when a clean commit reproducibly builds a versioned artifact and rollback manifest. The user has explicitly authorized deployment of the exact merged, green artifact with atomic rollback; that operation remains separate from the PR.
+Milestone 4 exits when a clean commit reproducibly builds a versioned artifact and rollback manifest. Deployment remains a separate operation and is explicitly omitted from this incident follow-up.

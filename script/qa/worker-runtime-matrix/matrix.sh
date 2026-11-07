@@ -15,11 +15,13 @@ pass() { note "PASS: $*"; }
 run_case() {
   local scenario="$1"
   local label="$2"
+  local timeout_seconds="${3:-140}"
   local evidence="$EVID_ROOT/$label"
   note "RUN scenario=$scenario label=$label"
   if systemd-run --user --scope --quiet -p CPUQuota=75% \
-    timeout --signal=TERM --kill-after=10s 140s \
+    timeout --signal=TERM --kill-after=10s "${timeout_seconds}s" \
     env OMO_REPO="$REPO" PLUGIN_DIST="$PLUGIN_DIST" EVID="$evidence" \
+      EXPECTED_PLUGIN_SHA256="$PLUGIN_SHA256" EXPECTED_SOURCE_FINGERPRINT="$SOURCE_FINGERPRINT" \
     bash "$RUNNER" "$scenario" 2>&1 | tee "$EVID_ROOT/$label.console.txt"; then
     pass "scenario=$scenario label=$label"
   else
@@ -27,12 +29,16 @@ run_case() {
   fi
 }
 
-note "plugin_dist=$PLUGIN_DIST sha256=$(sha256sum "$PLUGIN_DIST" | awk '{print $1}')"
+PLUGIN_SHA256=$(sha256sum "$PLUGIN_DIST" | awk '{print $1}')
+SOURCE_FINGERPRINT=$(cd "$REPO" && find packages/omo-opencode/src -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')
+note "plugin_dist=$PLUGIN_DIST sha256=$PLUGIN_SHA256"
+note "source_fingerprint=$SOURCE_FINGERPRINT"
 note "started_at=$(date --iso-8601=seconds)"
 
 run_case normal normal-1
 run_case stall stall
 run_case empty empty
+run_case incident repeated-empty-incident 360
 run_case cancel cancel
 run_case compact compact
 run_case normal normal-2

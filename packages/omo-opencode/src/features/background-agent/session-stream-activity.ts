@@ -4,6 +4,7 @@ export const SESSION_NEXT_EVENT_PREFIX = "session.next."
 
 export interface MessagePartInfo {
   readonly id: string | undefined
+  readonly messageID: string | undefined
   readonly sessionID: string | undefined
   readonly role: string | undefined
   readonly type: string | undefined
@@ -60,6 +61,7 @@ function buildPartInfo(
 ): MessagePartInfo {
   return {
     id: getStringField(source, "id") ?? getStringField(source, "partID") ?? getStringField(source, "callID"),
+    messageID: getStringField(source, "messageID") ?? getStringField(fallback, "messageID"),
     sessionID: getStringField(source, "sessionID") ?? getStringField(fallback, "sessionID"),
     role: getStringField(source, "role") ?? getStringField(fallback, "role"),
     type: getStringField(source, "type") ?? getStringField(fallback, "type"),
@@ -118,6 +120,7 @@ export function resolveSessionNextPartInfo(eventType: string, properties: unknow
   if (eventType === "session.next.tool.called") {
     return {
       id: getStringField(props, "callID"),
+      messageID: getStringField(props, "messageID"),
       sessionID,
       role: getStringField(props, "role"),
       type: "tool",
@@ -138,6 +141,7 @@ export function resolveSessionNextPartInfo(eventType: string, properties: unknow
   const type = sessionNextType(eventType)
   return {
     id: getStringField(props, "callID"),
+    messageID: getStringField(props, "messageID"),
     sessionID,
     role: getStringField(props, "role"),
     type,

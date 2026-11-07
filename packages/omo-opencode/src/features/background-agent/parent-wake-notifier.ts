@@ -42,6 +42,7 @@ export class ParentWakeNotifier {
           requeueWake: (latestWake) => this.requeueWake(sessionID, latestWake),
           scheduleFlush: () => this.schedulePendingParentWakeFlush(sessionID),
           onWakeAcknowledged: (acknowledgedWake) => deps.onWakeAcknowledged?.(sessionID, acknowledgedWake),
+          onWakeDeliveryExhausted: (exhaustedWake) => deps.onWakeDeliveryExhausted?.(sessionID, exhaustedWake),
         }).catch((error: unknown) => {
           logParentWakeWindowRecoveryError(
             sessionID,

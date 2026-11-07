@@ -21,6 +21,7 @@ const FINAL_WAKE = "<system-reminder>\n[BACKGROUND TASK COMPLETED]\n[ALL BACKGRO
 
 function createNotifier(options: {
   readonly onPendingWakeRequeued?: (sessionID: string) => void
+  readonly onWakeDeliveryExhausted?: (sessionID: string, wake: { workerIDs?: string[] }) => void
 } = {}): {
   readonly notifier: ParentWakeNotifier
   readonly promptAsyncCalls: readonly PromptAsyncCall[]
@@ -53,6 +54,9 @@ function createNotifier(options: {
         await operation()
       },
       ...(options.onPendingWakeRequeued ? { onPendingWakeRequeued: options.onPendingWakeRequeued } : {}),
+      ...(options.onWakeDeliveryExhausted
+        ? { onWakeDeliveryExhausted: options.onWakeDeliveryExhausted }
+        : {}),
     },
     {
       pendingRetryMs: 1_000,
@@ -134,9 +138,14 @@ describe("ParentWakeNotifier dispatched wake recovery", () => {
 
   test("#given a requeued parent wake still produces no assistant output #when the retry window elapses #then the wake is not retried forever", async () => {
     // given
-    const { notifier, promptAsyncCalls } = createNotifier()
+    const exhaustedWorkers: string[][] = []
+    const { notifier, promptAsyncCalls } = createNotifier({
+      onWakeDeliveryExhausted: (_sessionID, wake) => {
+        exhaustedWorkers.push([...(wake.workerIDs ?? [])])
+      },
+    })
     const sessionID = "parent-window-no-continuation-retry-budget"
-    notifier.queuePendingParentWake(sessionID, FINAL_WAKE, { agent: "sisyphus" }, true)
+    notifier.queuePendingParentWake(sessionID, FINAL_WAKE, { agent: "sisyphus" }, true, undefined, ["bg_terminal"])
 
     try {
       await notifier.flushPendingParentWake(sessionID)
@@ -156,6 +165,7 @@ describe("ParentWakeNotifier dispatched wake recovery", () => {
       expect(notifier.getPendingParentWakes().has(sessionID)).toBe(false)
       expect(notifier.getPendingParentWakeTimers().has(sessionID)).toBe(false)
       expect(promptAsyncCalls).toHaveLength(2)
+      expect(exhaustedWorkers).toEqual([["bg_terminal"]])
     } finally {
       notifier.shutdown()
       releaseAllPromptAsyncReservationsForTesting()

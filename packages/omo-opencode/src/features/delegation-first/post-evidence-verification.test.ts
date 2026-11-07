@@ -61,7 +61,8 @@ describe("POST-EVIDENCE ROOT VERIFICATION (worker-first lifecycle)", () => {
       const blocked = r.rt.preGruntCheck("root", "glob", { target: "**/*.ts" })
       expect(blocked.block).toBe(true)
       expect(r.rt.rootPhase("root")).toBe("worker_required")
-      expect(r.rt.preGruntCheck("root", "read", { target: "bar.ts" }).block).toBe(true)
+      expect(r.rt.preGruntCheck("root", "read", { target: "bar.ts" }).block).toBe(false)
+      expect(r.rt.preGruntCheck("root", "read", { target: "baz.ts" }).block).toBe(true)
     } finally {
       cleanup(r)
     }
@@ -223,7 +224,8 @@ describe("POST-EVIDENCE ROOT VERIFICATION (worker-first lifecycle)", () => {
       const decision = r.rt.preGruntCheck("root", "bash", { command: "grep -R x ." })
       expect(decision.block).toBe(true)
       expect(r.rt.rootPhase("root")).toBe("worker_required")
-      expect(r.rt.preGruntCheck("root", "read", { target: "bar.ts" }).block).toBe(true)
+      expect(r.rt.preGruntCheck("root", "read", { target: "bar.ts" }).block).toBe(false)
+      expect(r.rt.preGruntCheck("root", "read", { target: "baz.ts" }).block).toBe(true)
     } finally {
       cleanup(r)
     }

@@ -50,9 +50,10 @@ ${truncated}
 
 > **Interrupted**: The task was interrupted by a prompt error. The session may contain partial results.`
    } else if (task.status === "blocked") {
+     const blockedReason = truncateText(task.error ?? "The task was blocked without a terminal reason.", 500)
      statusNote = `
 
-> **BLOCKED**: Automatic recovery is exhausted or the worker disappeared. Read-only diagnostics and result retrieval are still permitted; new dispatch requires operator action.`
+> **BLOCKED**: ${blockedReason}`
    }
 
   const durationLabel = task.status === "pending" ? "Queued for" : "Duration"

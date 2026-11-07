@@ -3,7 +3,7 @@ set -uo pipefail
 
 SCENARIO="${1:-${OMO_RUNTIME_SCENARIO:-normal}}"
 case "$SCENARIO" in
-  normal|stall|empty|cancel|compact) ;;
+  normal|stall|empty|cancel|compact|incident) ;;
   *) printf 'unknown scenario: %s\n' "$SCENARIO" >&2; exit 2 ;;
 esac
 
@@ -24,6 +24,7 @@ FAKE_PID=""
 LAUNCH_PID=""
 OPENCODE_PID=""
 SENTINEL_PID=""
+SSE_PID=""
 ROOT_SESSION=""
 FAILS=0
 START_SECONDS=$(date +%s)
@@ -74,15 +75,34 @@ stop_sentinel() {
   fi
 }
 
+stop_sse_probe() {
+  if [ -n "$SSE_PID" ] && kill -0 "$SSE_PID" 2>/dev/null; then
+    kill -TERM "$SSE_PID" 2>/dev/null || true
+    wait "$SSE_PID" 2>/dev/null || true
+  fi
+}
+
 capture_evidence() {
   cp "$SANDBOX/fake.log" "$EVID/fake-provider.log" 2>/dev/null || true
   cp "$SANDBOX/opencode.log" "$EVID/opencode.log" 2>/dev/null || true
   cp "$SANDBOX/summary.txt" "$EVID/summary.txt" 2>/dev/null || true
   tail -c "+$((OMO_LOG_OFFSET + 1))" "$OMO_LOG" >"$EVID/plugin.log" 2>/dev/null || true
   [ -f "$SANDBOX/compact-response.json" ]     && cp "$SANDBOX/compact-response.json" "$EVID/compact-response.json" 2>/dev/null || true
+  [ -f "$SANDBOX/pre-wake-messages.json" ]     && cp "$SANDBOX/pre-wake-messages.json" "$EVID/pre-wake-messages.json" 2>/dev/null || true
+  [ -f "$SANDBOX/pre-wake-status.json" ]     && cp "$SANDBOX/pre-wake-status.json" "$EVID/pre-wake-status.json" 2>/dev/null || true
+  [ -f "$SANDBOX/sse-session-idle.txt" ]     && cp "$SANDBOX/sse-session-idle.txt" "$EVID/sse-session-idle.txt" 2>/dev/null || true
+  if [ -d "$WORKER_DIR" ]; then
+    mkdir -p "$EVID/worker-records"
+    cp "$WORKER_DIR"/*.json "$EVID/worker-records/" 2>/dev/null || true
+  fi
+  if [ -d "$GOV_DIR" ]; then
+    mkdir -p "$EVID/governance"
+    cp -R "$GOV_DIR"/. "$EVID/governance/" 2>/dev/null || true
+  fi
 }
 
 cleanup() {
+  stop_sse_probe
   stop_runtime
   stop_sentinel
   if [ -d "$SANDBOX" ]; then capture_evidence; fi
@@ -104,13 +124,35 @@ REAL_BEFORE=$(real_db_count)
 REAL_WORKERS_BEFORE=$(real_worker_count)
 note "scenario=$SCENARIO"
 note "sandbox=$SANDBOX"
-note "plugin_dist=$PLUGIN_DIST sha256=$(sha256sum "$PLUGIN_DIST" | awk '{print $1}')"
+PLUGIN_SHA256=$(sha256sum "$PLUGIN_DIST" | awk '{print $1}')
+SOURCE_COMMIT=$(GIT_MASTER=1 git -C "$REPO" rev-parse HEAD)
+SOURCE_FINGERPRINT=$(cd "$REPO" && find packages/omo-opencode/src -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')
+note "plugin_dist=$PLUGIN_DIST sha256=$PLUGIN_SHA256"
+note "source_commit=$SOURCE_COMMIT source_fingerprint=$SOURCE_FINGERPRINT"
+if [ "$SCENARIO" = "incident" ]; then
+  if [ -z "${EXPECTED_PLUGIN_SHA256:-}" ] || [ "$EXPECTED_PLUGIN_SHA256" != "$PLUGIN_SHA256" ]; then
+    fail "incident candidate digest is not explicitly bound to the tested bundle"
+    exit 1
+  fi
+  if [ -z "${EXPECTED_SOURCE_FINGERPRINT:-}" ] || [ "$EXPECTED_SOURCE_FINGERPRINT" != "$SOURCE_FINGERPRINT" ]; then
+    fail "incident candidate source fingerprint is not explicitly bound to the tested tree"
+    exit 1
+  fi
+  pass "incident candidate is bound to the tested source tree and bundle"
+fi
 note "real_db_sessions_before=$REAL_BEFORE"
 note "real_worker_records_before=$REAL_WORKERS_BEFORE"
 
-cat >"$PROJECT/.omo/omo.jsonc" <<'JSON'
+DISABLE_LIVE_PARENT_WAKE_ROUTING=false
+[ "$SCENARIO" = "incident" ] && DISABLE_LIVE_PARENT_WAKE_ROUTING=true
+PROVIDER_RESPONSE_TIMEOUT_MS=3000
+[ "$SCENARIO" = "incident" ] && PROVIDER_RESPONSE_TIMEOUT_MS=10000
+cat >"$PROJECT/.omo/omo.jsonc" <<JSON
 {
   "[opencode]": {
+    "experimental": {
+      "disable_live_parent_wake_routing": $DISABLE_LIVE_PARENT_WAKE_ROUTING
+    },
     "categories": {
       "quick": { "model": "openai/gpt-fake-free" }
     },
@@ -122,7 +164,7 @@ cat >"$PROJECT/.omo/omo.jsonc" <<'JSON'
       "watchdog": {
         "dispatch_timeout_ms": 3000,
         "request_start_timeout_ms": 3000,
-        "provider_response_timeout_ms": 3000,
+        "provider_response_timeout_ms": $PROVIDER_RESPONSE_TIMEOUT_MS,
         "quiet_stall_threshold_ms": 4500,
         "wedged_threshold_ms": 7000
       }
@@ -175,7 +217,7 @@ cat >"$SANDBOX/config/opencode/opencode.jsonc" <<JSONC
 JSONC
 
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
-setsid env -u OPENCODE -u OPENCODE_PID -u OPENCODE_CONFIG_DIR   -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u OPENROUTER_API_KEY -u GEMINI_API_KEY   HOME="$HOME_DIR" OPENCODE_TEST_HOME="$HOME_DIR"   XDG_DATA_HOME="$SANDBOX/data" XDG_CONFIG_HOME="$SANDBOX/config"   XDG_CACHE_HOME="$SANDBOX/cache" XDG_STATE_HOME="$SANDBOX/state"   OPENCODE_CONFIG_DIR="$SANDBOX/config/opencode" OPENCODE_DB="$DB"   OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_MODELS_FETCH=1   OPENCODE_DISABLE_TELEMETRY=1 OMO_DISABLE_POSTHOG=1   /bin/bash -lc "cd '$PROJECT' && exec '$OPENCODE' serve --hostname 127.0.0.1 --port $PORT --print-logs --log-level INFO"   >"$SANDBOX/opencode.log" 2>&1 &
+setsid env -u OPENCODE -u OPENCODE_PID -u OPENCODE_CONFIG_DIR   -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u OPENROUTER_API_KEY -u GEMINI_API_KEY   HOME="$HOME_DIR" OPENCODE_TEST_HOME="$HOME_DIR"   XDG_DATA_HOME="$SANDBOX/data" XDG_CONFIG_HOME="$SANDBOX/config"   XDG_CACHE_HOME="$SANDBOX/cache" XDG_STATE_HOME="$SANDBOX/state"   OPENCODE_CONFIG_DIR="$SANDBOX/config/opencode" OPENCODE_DB="$DB" OMO_GOVERNANCE_DIR="$GOV_DIR"   OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_MODELS_FETCH=1   OPENCODE_DISABLE_TELEMETRY=1 OMO_DISABLE_POSTHOG=1   /bin/bash -lc "cd '$PROJECT' && exec '$OPENCODE' serve --hostname 127.0.0.1 --port $PORT --print-logs --log-level INFO"   >"$SANDBOX/opencode.log" 2>&1 &
 LAUNCH_PID=$!
 
 for _ in $(seq 1 120); do
@@ -187,6 +229,15 @@ if ! curl -sf --max-time 1 "http://127.0.0.1:$PORT/global/health" >/dev/null 2>&
   exit 1
 fi
 pass "isolated opencode server healthy on port $PORT"
+
+if [ "$SCENARIO" = "incident" ]; then
+  bash "$REPO/.agents/skills/opencode-qa/scripts/sse-hook-probe.sh" \
+    --attach "http://127.0.0.1:$PORT" \
+    --directory "$PROJECT" \
+    --event session.idle \
+    --timeout 30 >"$SANDBOX/sse-session-idle.txt" 2>&1 &
+  SSE_PID=$!
+fi
 
 OPENCODE_PID=$(for p in $(pgrep -f "serve --hostname 127.0.0.1 --port $PORT" 2>/dev/null); do
   [ "$(cat "/proc/$p/comm" 2>/dev/null)" = "opencode" ] && { printf '%s' "$p"; break; }
@@ -214,6 +265,41 @@ for _ in $(seq 1 240); do
 done
 grep -q 'child=true' "$SANDBOX/fake.log" 2>/dev/null   && pass "child provider request observed" || fail "child provider request not observed"
 
+if [ "$SCENARIO" = "incident" ]; then
+  for _ in $(seq 1 80); do
+    grep -q 'question_issued' "$SANDBOX/fake.log" 2>/dev/null && break
+    sleep 0.25
+  done
+  if grep -q 'question_issued' "$SANDBOX/fake.log" 2>/dev/null; then
+    pass "parent entered the production unanswered-question state"
+  else
+    fail "parent did not enter the unanswered-question state"
+  fi
+  ABORT_STATUS=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
+    -X POST "http://127.0.0.1:$PORT/session/$ROOT_SESSION/abort?directory=$PROJECT" || printf '000')
+  [ "$ABORT_STATUS" = "200" ] && pass "parent question turn aborted to the production idle state" \
+    || fail "parent question turn abort status=$ABORT_STATUS"
+  for _ in $(seq 1 80); do
+    curl -sf --max-time 2 "http://127.0.0.1:$PORT/session/status?directory=$PROJECT" \
+      -o "$SANDBOX/pre-wake-status.json" 2>/dev/null || true
+    jq -e --arg id "$ROOT_SESSION" '.[$id].type == "idle"' "$SANDBOX/pre-wake-status.json" >/dev/null 2>&1 && break
+    sleep 0.25
+  done
+  curl -sf --max-time 5 "http://127.0.0.1:$PORT/session/$ROOT_SESSION/message?directory=$PROJECT" \
+    -o "$SANDBOX/pre-wake-messages.json" 2>/dev/null || true
+  jq -e '[.[] | select(.info.role == "assistant")][-1].parts[]
+    | select((.tool // .name // .toolName) == "question")
+    | .state.status != "completed"' "$SANDBOX/pre-wake-messages.json" >/dev/null 2>&1 \
+    && pass "idle parent retained an unanswered question in real OpenCode history" \
+    || fail "idle parent did not retain the unanswered question history"
+  if wait "$SSE_PID"; then
+    pass "session.idle lifecycle event was observed on the isolated SSE stream"
+  else
+    fail "session.idle lifecycle event was not observed on the isolated SSE stream"
+  fi
+  SSE_PID=""
+fi
+
 if [ "$SCENARIO" = "compact" ]; then
   curl -sf -X POST "http://127.0.0.1:$FAKE_PORT/control/expect-summary" >/dev/null     || fail "could not arm fake compaction response"
   COMPACT_STATUS=$(curl -sS --max-time 30 -o "$SANDBOX/compact-response.json" -w '%{http_code}'     -X POST "http://127.0.0.1:$PORT/session/$ROOT_SESSION/summarize?directory=$PROJECT"     -H 'content-type: application/json'     -d '{"providerID":"openai","modelID":"gpt-fake-free","auto":true}' || printf '000')
@@ -224,7 +310,7 @@ if [ "$SCENARIO" = "compact" ]; then
   fi
 fi
 
-for _ in $(seq 1 320); do
+for _ in $(seq 1 340); do
   if [ "$SCENARIO" = "cancel" ]; then
     grep -q 'cancellation_confirmed' "$SANDBOX/fake.log" 2>/dev/null && break
   else
@@ -232,6 +318,13 @@ for _ in $(seq 1 320); do
   fi
   sleep 0.25
 done
+
+if [ "$SCENARIO" = "incident" ] && grep -q 'parent_resumed' "$SANDBOX/fake.log" 2>/dev/null; then
+  for _ in $(seq 1 1040); do
+    grep -q 'definitive_exit' "$SANDBOX/fake.log" 2>/dev/null && break
+    sleep 0.25
+  done
+fi
 
 WORKER_TERMINALS=$(python3 - "$WORKER_DIR" <<'PY'
 import json, os, sys
@@ -267,6 +360,86 @@ case "$SCENARIO" in
       fail "empty response left no defined terminal state"
     fi
     grep -q 'empty_response' "$SANDBOX/fake.log" 2>/dev/null       && pass "provider emitted an empty response" || fail "empty response was not exercised"
+    ;;
+  incident)
+    INCIDENT_RECORD_CHECK=$(python3 - "$WORKER_DIR" <<'PY'
+import json, os, sys
+root = sys.argv[1]
+records = []
+if os.path.isdir(root):
+    for name in sorted(os.listdir(root)):
+        if not name.endswith(".json"):
+            continue
+        try:
+            record = json.load(open(os.path.join(root, name), encoding="utf-8"))
+        except Exception:
+            continue
+        records.append(record)
+reason = "BLOCKED: assistant turn completed with no output"
+empty_records = [item for item in records if reason in str(item.get("terminalReason", ""))]
+valid = len(empty_records) == 4 and all(
+    item.get("terminalOutcome") == "blocked"
+    and item.get("terminalEventID")
+    and item.get("terminalAttemptID")
+    and item.get("wakeState") == "acknowledged"
+    and item.get("wakePendingAt") <= item.get("wakeDispatchedAt") <= item.get("wakeAcknowledgedAt")
+    for item in empty_records
+) and all(
+    item.get("state") not in {"pending", "running"}
+    and item.get("description") != "worker incident child 5"
+    for item in records
+)
+print("ok" if valid else f"bad total={len(records)} empty={len(empty_records)} states={[item.get('state') for item in records]}")
+PY
+)
+    [ "$INCIDENT_RECORD_CHECK" = "ok" ] \
+      && pass "four exact empty workers remained durably retrievable with monotonic acknowledged wakes" \
+      || fail "incident terminal record invariant failed: $INCIDENT_RECORD_CHECK"
+    RETRIEVED_COUNT=$(grep -c 'terminal_result_retrieved=true' "$SANDBOX/fake.log" 2>/dev/null || true)
+    [ "$RETRIEVED_COUNT" -eq 4 ] \
+      && pass "parent retrieved each exact terminal worker before its next action" \
+      || fail "parent exact terminal retrieval count=$RETRIEVED_COUNT expected=4"
+    GOVERNANCE_CHECK=$(python3 - "$GOV_DIR" "$ROOT_SESSION" <<'PY'
+import json, os, sys
+root, session = sys.argv[1:]
+events = []
+for base, _, names in os.walk(root):
+    for name in names:
+        if name != "events.jsonl":
+            continue
+        with open(os.path.join(base, name), encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    item = json.loads(line)
+                except Exception:
+                    continue
+                if item.get("session_id") == session:
+                    events.append(item)
+provider_failures = [item for item in events if item.get("event") == "delegation_failure_recorded" and item.get("kind") == "provider_empty_output" and item.get("accepted") is True]
+probe_started = [item for item in events if item.get("event") == "recovery_probe_started"]
+probe_failed = [item for item in events if item.get("event") == "recovery_probe_failed"]
+halted = [item for item in events if item.get("event") == "recovery_halted"]
+valid = (
+    len(provider_failures) == 2
+    and len(probe_started) == 2
+    and len(probe_failed) == 2
+    and probe_failed[-1].get("after_phase") == "halt"
+    and len(halted) == 1
+)
+print("ok" if valid else f"bad failures={len(provider_failures)} started={len(probe_started)} failed={len(probe_failed)} halted={len(halted)}")
+PY
+)
+    [ "$GOVERNANCE_CHECK" = "ok" ] \
+      && pass "governance journal proves two failures, two bounded probes, and terminal halt" \
+      || fail "delegation recovery journal invariant failed: $GOVERNANCE_CHECK"
+    CHILD_REQUEST_COUNT=$(grep -c 'empty_response child_attempt=' "$SANDBOX/fake.log" 2>/dev/null || true)
+    FIFTH_RECORD_COUNT=$(grep -l '"description": "worker incident child 5"' "$WORKER_DIR"/*.json 2>/dev/null | wc -l)
+    [ "$CHILD_REQUEST_COUNT" -eq 4 ] && [ "$FIFTH_RECORD_COUNT" -eq 0 ] \
+      && pass "recovery halt rejected the fifth dispatch without creating an orphan worker" \
+      || fail "incident child request count=$CHILD_REQUEST_COUNT expected=4 fifth_records=$FIFTH_RECORD_COUNT expected=0"
+    grep -q 'definitive_exit' "$SANDBOX/fake.log" 2>/dev/null \
+      && pass "root exited definitively after bounded recovery exhaustion" \
+      || fail "root did not exit definitively after bounded recovery exhaustion"
     ;;
   cancel)
     [[ "$WORKER_TERMINALS" == *":cancelled:"* ]]       && pass "explicit background cancellation persisted cancelled state"       || fail "explicit cancellation did not persist cancelled state"

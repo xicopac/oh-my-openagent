@@ -10,6 +10,7 @@ type PromptAsyncCall = Parameters<ParentWakeNotifierClientForTest["session"]["pr
 
 type SessionMessageStub = {
   readonly info?: {
+    readonly id?: string
     readonly role?: string
     readonly finish?: string
     readonly error?: unknown
@@ -227,13 +228,22 @@ describe("ParentWakeNotifier late error recovery", () => {
         data: [
           {
             info: {
+              id: "msg_before_wake",
               role: "assistant",
               finish: "stop",
               time: { created: Date.now() - 10_000 },
             },
           },
           ...(showAcceptedAssistantOutput
-            ? [{ info: { role: "assistant", finish: "stop", time: { created: Date.now() } } }]
+            ? [{
+                info: {
+                  id: "msg_after_wake",
+                  role: "assistant",
+                  finish: "stop",
+                  time: { created: Date.now() },
+                },
+                parts: [{ type: "text", text: "accepted wake output" }],
+              }]
             : []),
         ] satisfies readonly SessionMessageStub[],
       }),

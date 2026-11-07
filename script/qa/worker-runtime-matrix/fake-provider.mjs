@@ -11,6 +11,23 @@ let childRequests = 0
 let rootTaskIssued = false
 let cancelIssued = false
 let expectSummary = false
+let incidentQuestionIssued = false
+let incidentAwaitingBackgroundOutput = false
+let incidentAwaitingTaskResult = false
+let incidentTaskCalls = 0
+const incidentRetrievedWorkers = new Set()
+const incidentTopics = [
+  "authentication telemetry parser",
+  "storage migration schema",
+  "recovery transport nonce",
+  "terminal ledger outbox",
+  "definitive halt verification",
+]
+
+function incidentPrompt(index) {
+  const topic = incidentTopics[index - 1] ?? `independent incident shard ${index}`
+  return `CHILD_PROBE scenario=incident; independently inspect ${topic} and report the assigned result.`
+}
 
 function append(line) {
   try {
@@ -88,6 +105,12 @@ const server = http.createServer(async (req, res) => {
   const isChild = input.includes("CHILD_PROBE") && !isRootProbe
   const isWake = input.includes("BACKGROUND TASK") || input.includes("ALL BACKGROUND TASKS")
   const hasToolResult = input.includes("function_call_output") || input.includes("tool_result")
+  const emptyTerminalReason = "BLOCKED: assistant turn completed with no output"
+  const incidentWakeWorkers = isWake
+    ? [...input.matchAll(/bg_[A-Za-z0-9]+/g)].map((match) => match[0])
+    : []
+  const incidentWakeWorker = incidentWakeWorkers.find((workerID) => !incidentRetrievedWorkers.has(workerID))
+    ?? incidentWakeWorkers.at(-1)
   append(
     `[worker-matrix] call=${calls} scenario=${scenario} model=${model} title=${isTitle} root=${isRootProbe} child=${isChild} wake=${isWake} wake_blocked=${isWake && input.includes("BLOCKED")} tool_result=${hasToolResult}\n`,
   )
@@ -102,7 +125,7 @@ const server = http.createServer(async (req, res) => {
     events.sendSse(res, events.textEvents(calls, "COMPACTION_SUMMARY_PRESERVED"))
     return
   }
-  if (isWake) {
+  if (isWake && scenario !== "incident") {
     append(`[worker-matrix] parent_resumed call=${calls}\n`)
     events.sendSse(res, events.textEvents(calls, "PARENT_RESUMED"))
     return
@@ -117,7 +140,7 @@ const server = http.createServer(async (req, res) => {
       holdResponse(res, `cancel-child-${childRequests}`)
       return
     }
-    if (scenario === "empty" && childRequests === 1) {
+    if ((scenario === "empty" && childRequests === 1) || scenario === "incident") {
       append(`[worker-matrix] empty_response child_attempt=${childRequests}\n`)
       events.sendSse(res, emptyEvents(calls))
       return
@@ -127,6 +150,96 @@ const server = http.createServer(async (req, res) => {
       return
     }
     events.sendSse(res, events.textEvents(calls, "CHILD_RECOVERED"))
+    return
+  }
+  if (scenario === "incident") {
+    if (incidentAwaitingBackgroundOutput && hasToolResult) {
+      incidentAwaitingBackgroundOutput = false
+      const retrieved = input.includes(emptyTerminalReason)
+      append(`[worker-matrix] terminal_result_retrieved=${retrieved} workers=${incidentRetrievedWorkers.size}\n`)
+      incidentTaskCalls += 1
+      incidentAwaitingTaskResult = true
+      events.sendSse(
+        res,
+        events.toolCallEvents(calls, "task", `call_incident_child_${incidentTaskCalls}`, {
+          description: `worker incident child ${incidentTaskCalls}`,
+          prompt: incidentPrompt(incidentTaskCalls),
+          category: "quick",
+          run_in_background: true,
+          load_skills: [],
+        }),
+      )
+      return
+    }
+    if (incidentAwaitingTaskResult && hasToolResult) {
+      incidentAwaitingTaskResult = false
+      if (incidentTaskCalls >= 5) {
+        const halted = input.toLowerCase().includes("delegation_recovery_halted")
+        append(`[worker-matrix] terminal_dispatch_blocked=${halted} call=${calls}\n`)
+        if (halted) {
+          append(`[worker-matrix] definitive_exit call=${calls}\n`)
+          events.sendSse(res, events.textEvents(calls, "ROOT_EXIT_BLOCKED"))
+        } else {
+          events.sendSse(res, events.textEvents(calls, "ROOT_EXIT_INVALID_NOT_HALTED"))
+        }
+        return
+      }
+      events.sendSse(res, events.textEvents(calls, "ROOT_WAITING"))
+      return
+    }
+    if (isWake && incidentWakeWorker && !incidentRetrievedWorkers.has(incidentWakeWorker)) {
+      incidentRetrievedWorkers.add(incidentWakeWorker)
+      incidentAwaitingBackgroundOutput = true
+      append(`[worker-matrix] parent_resumed call=${calls} worker=${incidentWakeWorker}\n`)
+      events.sendSse(
+        res,
+        events.toolCallEvents(calls, "background_output", `call_output_${incidentRetrievedWorkers.size}`, {
+          task_id: incidentWakeWorker,
+          block: false,
+          full_session: false,
+          include_thinking: false,
+          include_tool_results: true,
+          message_limit: 20,
+        }),
+      )
+      return
+    }
+    if (rootTaskIssued && !incidentQuestionIssued && hasToolResult) {
+      incidentQuestionIssued = true
+      append(`[worker-matrix] question_issued call=${calls}\n`)
+      events.sendSse(
+        res,
+        events.toolCallEvents(calls, "question", "call_incident_unanswered_question", {
+          questions: [
+            {
+              header: "Worker",
+              question: "Wait for a human before handling the failed delegated worker?",
+              options: [
+                { label: "Wait", description: "Leave the parent waiting for input." },
+                { label: "Recover", description: "Continue autonomous recovery." },
+              ],
+            },
+          ],
+        }),
+      )
+      return
+    }
+    if (!rootTaskIssued) {
+      rootTaskIssued = true
+      incidentTaskCalls = 1
+      events.sendSse(
+        res,
+        events.toolCallEvents(calls, "task", "call_root_incident_child_1", {
+          description: "worker incident child 1",
+          prompt: incidentPrompt(1),
+          category: "quick",
+          run_in_background: true,
+          load_skills: [],
+        }),
+      )
+      return
+    }
+    events.sendSse(res, events.textEvents(calls, "ROOT_WAITING"))
     return
   }
   if (isRootProbe) {

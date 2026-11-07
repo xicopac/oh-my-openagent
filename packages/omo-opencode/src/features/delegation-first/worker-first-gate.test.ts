@@ -388,7 +388,7 @@ describe("worker lifecycle (successful dispatch requirement)", () => {
     }
   })
 
-  test("11. automatic replacement child can satisfy it", () => {
+  test("11. replacement request start preserves failure evidence until a validated result heals it", () => {
     const r = makeRuntime()
     try {
       r.rt.preGruntCheck("m", "bash", { command: "grep -R TODO ." })
@@ -400,7 +400,7 @@ describe("worker lifecycle (successful dispatch requirement)", () => {
 
       r.rt.attachChildSession("m", "child-2")
       r.rt.markRequestStarted("child-2")
-      expect(r.rt.rootPhase("m")).toBe("worker_active")
+      expect(r.rt.rootPhase("m")).toBe("delegation_degraded")
 
       r.rt.recordWorkerResult("job", adequateResult())
       expect(r.rt.rootPhase("m")).toBe("worker_evidence_available")

@@ -20,6 +20,14 @@ type CleanupSessionTeamRunsFn = typeof import("./features/team-mode/team-runtime
 const markServerRunningInProcess = mock(() => {})
 let backgroundManagerOptions: {
   onSubagentSessionCreated?: (event: { sessionID: string; parentID: string; title: string }) => Promise<void>
+  onTaskTerminal?: (event: {
+    taskId: string
+    sessionId?: string
+    parentSessionId?: string
+    status: string
+    reason?: string
+    recoveryProbe?: boolean
+  }) => void
   onShutdown?: () => void | Promise<void>
 } | null = null
 const trackedPaneBySession = new Map<string, string>()
@@ -40,6 +48,14 @@ let tuiMirrorStopCount = 0
 class MockBackgroundManager {
   constructor(config: {
     onSubagentSessionCreated?: (event: { sessionID: string; parentID: string; title: string }) => Promise<void>
+    onTaskTerminal?: (event: {
+      taskId: string
+      sessionId?: string
+      parentSessionId?: string
+      status: string
+      reason?: string
+      recoveryProbe?: boolean
+    }) => void
     onShutdown?: () => void | Promise<void>
   }) {
     backgroundManagerOptions = config
@@ -456,6 +472,122 @@ describe("createManagers", () => {
     // then: the runtime's negative availability cache records it (auto re-dispatch is governed by the runtime)
     expect(managers.delegationFirstRuntime?.unavailableModels()).toContain("opencode/gpt-5.4")
     rmSync(availabilityDir, { recursive: true, force: true })
+  })
+
+  it("#given two ordinary workers exhaust bounded fallbacks on empty output #when terminal callbacks fire #then the root enters recovery mode", () => {
+    const managers = createManagers({
+      ctx: createContext("/tmp/project"),
+      pluginConfig: OhMyOpenCodeConfigSchema.parse({}),
+      tmuxConfig: createTmuxConfig(false),
+      modelCacheState: createModelCacheState(),
+      backgroundNotificationHookEnabled: false,
+      deps: createDeps(),
+    })
+    const onTaskTerminal = backgroundManagerOptions?.onTaskTerminal
+    expect(onTaskTerminal).toBeTypeOf("function")
+
+    onTaskTerminal?.({
+      taskId: "bg-empty-1",
+      sessionId: "ses-empty-1",
+      parentSessionId: "ses-root",
+      status: "blocked",
+      reason: "BLOCKED: assistant turn completed with no output",
+    })
+    expect(managers.delegationFirstRuntime?.rootPhase("ses-root")).toBe("delegation_degraded")
+
+    managers.delegationFirstRuntime?.attachChildSession("ses-root", "ses-empty-2")
+    managers.delegationFirstRuntime?.markRequestStarted("ses-empty-2")
+    expect(managers.delegationFirstRuntime?.rootPhase("ses-root")).toBe("delegation_degraded")
+
+    onTaskTerminal?.({
+      taskId: "bg-empty-2",
+      sessionId: "ses-empty-2",
+      parentSessionId: "ses-root",
+      status: "blocked",
+      reason: "BLOCKED: assistant turn ended without output: provider returned an empty response",
+    })
+
+    expect(managers.delegationFirstRuntime?.rootPhase("ses-root")).toBe("recovery_mode")
+    expect(managers.delegationFirstRuntime?.recoverySnapshot("ses-root").evidence).toMatchObject([
+      { id: "provider-empty-output:bg-empty-1", kind: "provider_empty_output", taskID: "bg-empty-1" },
+      { id: "provider-empty-output:bg-empty-2", kind: "provider_empty_output", taskID: "bg-empty-2" },
+    ])
+
+    expect(managers.delegationFirstRuntime?.beginRecoveryProbe("ses-root", "probe-1", "nonce-1")).toBe(true)
+    onTaskTerminal?.({
+      taskId: "bg-probe-1",
+      parentSessionId: "ses-root",
+      status: "blocked",
+      reason: "BLOCKED: assistant turn completed with no output",
+      recoveryProbe: true,
+    })
+    expect(managers.delegationFirstRuntime?.rootPhase("ses-root")).toBe("recovery_mode")
+
+    expect(managers.delegationFirstRuntime?.beginRecoveryProbe("ses-root", "probe-2", "nonce-2")).toBe(true)
+    onTaskTerminal?.({
+      taskId: "bg-probe-2",
+      parentSessionId: "ses-root",
+      status: "blocked",
+      reason: "BLOCKED: assistant turn completed with no output",
+      recoveryProbe: true,
+    })
+
+    expect(managers.delegationFirstRuntime?.rootPhase("ses-root")).toBe("halt")
+    expect(managers.delegationFirstRuntime?.recoverySnapshot("ses-root")).toMatchObject({
+      phase: "halt",
+      verificationAttempts: 2,
+      verified: false,
+    })
+  })
+
+  it("#given degraded delegation #when a validated non-empty worker completes #then the failure evidence heals", () => {
+    const managers = createManagers({
+      ctx: createContext("/tmp/project"),
+      pluginConfig: OhMyOpenCodeConfigSchema.parse({}),
+      tmuxConfig: createTmuxConfig(false),
+      modelCacheState: createModelCacheState(),
+      backgroundNotificationHookEnabled: false,
+      deps: createDeps(),
+    })
+
+    backgroundManagerOptions?.onTaskTerminal?.({
+      taskId: "bg-empty",
+      parentSessionId: "ses-root",
+      status: "blocked",
+      reason: "BLOCKED: assistant turn completed with no output",
+    })
+    expect(managers.delegationFirstRuntime?.rootPhase("ses-root")).toBe("delegation_degraded")
+
+    backgroundManagerOptions?.onTaskTerminal?.({
+      taskId: "bg-success",
+      parentSessionId: "ses-root",
+      status: "completed",
+    })
+
+    expect(managers.delegationFirstRuntime?.recoverySnapshot("ses-root")).toMatchObject({
+      phase: "normal",
+      evidence: [],
+    })
+  })
+
+  it("#given a non-empty blocked terminal #when the terminal callback fires #then it does not invent empty-provider recovery evidence", () => {
+    const managers = createManagers({
+      ctx: createContext("/tmp/project"),
+      pluginConfig: OhMyOpenCodeConfigSchema.parse({}),
+      tmuxConfig: createTmuxConfig(false),
+      modelCacheState: createModelCacheState(),
+      backgroundNotificationHookEnabled: false,
+      deps: createDeps(),
+    })
+
+    backgroundManagerOptions?.onTaskTerminal?.({
+      taskId: "bg-blocked-other",
+      parentSessionId: "ses-root-other",
+      status: "blocked",
+      reason: "BLOCKED: policy denied the worker",
+    })
+
+    expect(managers.delegationFirstRuntime?.recoverySnapshot("ses-root-other").evidence).toEqual([])
   })
 
   it("#given a timed-out worker whose recovery authority declines reclaim #when the independent sweep runs #then it does not invent a cleanup or terminal action", () => {

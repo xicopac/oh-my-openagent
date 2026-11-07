@@ -14,6 +14,7 @@ export type PendingParentWake = {
   workerIDs?: string[]
   queuedAt?: number
   dispatchedAt?: number
+  preDispatchAssistantMessageID?: string
   noReplyAdmittedAt?: number
   toolCallDeferralStartedAt?: number
   allowEmptyAssistantTurnRetry?: boolean
@@ -40,6 +41,9 @@ export function cloneParentWake(wake: PendingParentWake): PendingParentWake {
     ...(wake.workerIDs !== undefined ? { workerIDs: [...wake.workerIDs] } : {}),
     ...(wake.queuedAt !== undefined ? { queuedAt: wake.queuedAt } : {}),
     ...(wake.dispatchedAt !== undefined ? { dispatchedAt: wake.dispatchedAt } : {}),
+    ...(wake.preDispatchAssistantMessageID !== undefined
+      ? { preDispatchAssistantMessageID: wake.preDispatchAssistantMessageID }
+      : {}),
     ...(wake.noReplyAdmittedAt !== undefined ? { noReplyAdmittedAt: wake.noReplyAdmittedAt } : {}),
     ...(wake.toolCallDeferralStartedAt !== undefined
       ? { toolCallDeferralStartedAt: wake.toolCallDeferralStartedAt }

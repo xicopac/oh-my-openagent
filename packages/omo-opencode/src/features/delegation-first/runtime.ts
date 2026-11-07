@@ -326,17 +326,10 @@ export function createDelegationFirstRuntime(
 
   function satisfyWorkerRequirement(sessionID: string): void {
     const before = rootState.phase(sessionID)
-    // DELEGATION_DEGRADED: a replacement/retry child that reaches request-started
-    // proves the delegation path works again; return to normal worker-first.
-    if (before === "delegation_degraded") {
-      rootState.noteDelegationHealthy(sessionID)
-      audit?.write(sessionID, {
-        subsystem: "delegation",
-        event: "delegation_healthy",
-        session_id: sessionID,
-      })
-      return
-    }
+    // A provider request starting proves only transport liveness. It does not
+    // prove the delegated turn can produce output, so it must not erase prior
+    // terminal-failure evidence. A validated worker result heals degraded
+    // delegation in recordWorkerResult/onTaskTerminal instead.
     rootState.noteWorkerRunning(sessionID)
     if (rootState.phase(sessionID) === "worker_active" && before !== "worker_active") {
       audit?.write(sessionID, {
@@ -688,7 +681,17 @@ export function createDelegationFirstRuntime(
           .filter((f) => f.type === "file" || f.type === "symbol")
           .map((f) => f.summary)
         if (result.adequate || anchors.length > 0 || locations.length > 0) {
+          const before = rootState.phase(parent)
+          rootState.noteDelegationHealthy(parent)
           rootState.noteWorkerEvidence(parent, [...anchors, ...locations])
+          if (before === "delegation_degraded") {
+            audit?.write(parent, {
+              subsystem: "delegation",
+              event: "delegation_healthy",
+              proof: "validated_worker_result",
+              session_id: parent,
+            })
+          }
           audit?.write(parent, {
             subsystem: "delegation",
             event: "worker_evidence_available",
@@ -1486,6 +1489,14 @@ export function createDelegationFirstRuntime(
         after_phase: after,
         session_id: sessionID,
       })
+      if (after === "halt") {
+        audit?.write(sessionID, {
+          subsystem: "delegation",
+          event: "recovery_halted",
+          reason: "recovery_probe_attempts_exhausted",
+          session_id: sessionID,
+        })
+      }
       return after
     },
     markRecoveryHandoff(sessionID, path) {
