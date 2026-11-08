@@ -43,6 +43,16 @@ export const BUILD_PROFILES: Record<string, readonly string[]> = {
 	"omo-native": ["lsp-daemon", "ast-grep-mcp", "service-auth"],
 }
 
+/**
+ * Nested build steps must run on the same toolchain as the parent build. Resolving a
+ * bare `bun` through PATH can silently select a different host Bun (for example a
+ * 1.4.3 parent spawning a 1.3.14 child), which bypasses the exact-version contract
+ * every tracked generator enforces. Pin `bun` steps to the running executable.
+ */
+export function resolveBuildCommand(command: string, execPath: string): string {
+  return command === "bun" ? execPath : command
+}
+
 export function selectBuildNodes(
 	graph: readonly BuildNode[],
 	profile: string | undefined,
