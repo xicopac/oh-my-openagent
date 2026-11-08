@@ -12,6 +12,7 @@
  *     `~/.config/opencode/` (governor config, omo config, skill/agent state)
  *   - repairs to the delegation/watchdog/supervisor source and to config/state
  *   - evidence writes under `/tmp` and `~/.omo`
+ *   - the real-runtime acceptance harness under `script/qa/worker-runtime-matrix/`
  *   - the single machine-consumed recovery `task` probe (never ordinary delegation)
  *   - orchestration-unit cleanup (restart/stop the scoped opencode/omo/senpi systemd units;
  *     process-wide signals such as pkill are never in scope because they can kill another
@@ -88,6 +89,7 @@ const RECOVERY_PATH_MARKERS = [
   "packages/senpi-task/src/",
   "script/e2e-routing",
   "script/agent/",
+  "script/qa/worker-runtime-matrix",
   "/proc/",
   "/sys/fs/cgroup/",
   "/run/user/",
@@ -112,6 +114,8 @@ const SAFE_VALIDATION_COMMANDS = [
   /^(?:env\s+\S+=\S+\s+)*bun\s+run\s+(?:build|typecheck|typecheck:packages|test:e2e-routing|test:fast)(?:\s|$)/,
   /^(?:env\s+\S+=\S+\s+)*(?:tsgo|tsc)\s+/,
   /^bash\s+\.agents\/skills\/opencode-qa\/scripts\//,
+  /^(?:env\s+\S+=\S+\s+)*bash\s+script\/qa\/worker-runtime-matrix\/run\.sh(?:\s+(?:normal|stall|empty|cancel|compact|incident|provider-quota))?$/,
+  /^(?:env\s+\S+=\S+\s+)*bash\s+script\/qa\/worker-runtime-matrix\/matrix\.sh$/,
 ] as const
 
 const SAFE_INSPECTION_COMMANDS = [

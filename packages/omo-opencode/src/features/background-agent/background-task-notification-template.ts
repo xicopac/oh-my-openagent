@@ -1,3 +1,5 @@
+import { providerErrorModelLabel } from "./provider-error"
+import type { ProviderErrorSnapshot } from "./provider-error-types"
 import type { BackgroundTaskAttempt, BackgroundTaskStatus } from "./types"
 
 export type BackgroundTaskNotificationStatus = "COMPLETED" | "CANCELLED" | "INTERRUPTED" | "ERROR" | "BLOCKED"
@@ -7,7 +9,24 @@ export interface BackgroundTaskNotificationTask {
   description: string
   status: BackgroundTaskStatus
   error?: string
+  terminalReasonCode?: string
+  providerError?: ProviderErrorSnapshot
   attempts?: BackgroundTaskAttempt[]
+}
+
+function formatProviderErrorDetails(task: BackgroundTaskNotificationTask): string {
+  const error = task.providerError
+  if (!error) return ""
+
+  const model = providerErrorModelLabel(error)
+  const lines = [
+    `  - Provider: ${model ?? "unknown"}`,
+    `  - Code: ${error.code ?? error.name ?? "unknown"}`,
+    `  - Message: ${error.message}`,
+    `  - Retryable: ${error.retryable ? "true" : "false"}`,
+    `  - Quota exhausted: ${error.quotaExhausted ? "true" : "false"}`,
+  ]
+  return `\n**Provider Error:**\n${lines.join("\n")}`
 }
 
 function formatAttemptModel(attempt: BackgroundTaskAttempt): string {
@@ -54,8 +73,9 @@ function formatTaskSummaryLine(task: BackgroundTaskNotificationTask): string {
     ? ""
     : ` [${task.status.toUpperCase()}]${task.error ? ` - ${task.error}` : ""}`
   const timeline = formatAttemptTimeline(task)
+  const providerDetails = task.status === "completed" ? "" : formatProviderErrorDetails(task)
 
-  return `${baseLine}${statusSuffix}${timeline ? `\n${timeline}` : ""}`
+  return `${baseLine}${statusSuffix}${providerDetails}${timeline ? `\n${timeline}` : ""}`
 }
 
 export function buildBackgroundTaskNotificationText(input: {
@@ -69,7 +89,7 @@ export function buildBackgroundTaskNotificationText(input: {
   const { task, duration, statusText, allComplete, remainingCount, completedTasks } = input
 
   const safeDescription = (t: BackgroundTaskNotificationTask): string => t.description || t.id
-  const errorInfo = task.error ? `\n**Error:** ${task.error}` : ""
+  const errorInfo = `${task.error ? `\n**Error:** ${task.error}` : ""}${formatProviderErrorDetails(task)}`
 
   if (allComplete) {
     const succeededTasks = completedTasks.filter((t) => t.status === "completed")

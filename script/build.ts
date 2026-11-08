@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
 import { spawn, spawnSync } from "node:child_process";
-import { availableParallelism } from "node:os";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { availableParallelism, tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BUILD_NODES, resolveBuildConcurrency, selectBuildNodes, type BuildNode } from "./build-nodes";
+import { BUILD_NODES, resolveBuildCommand, resolveBuildConcurrency, selectBuildNodes, type BuildNode } from "./build-nodes";
 import { assertCurrentBunVersion } from "./bun-toolchain.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -46,14 +48,35 @@ const nodes: BuildNode[] = selectBuildNodes(BUILD_NODES, process.env.OMO_BUILD_P
 async function run() {
 	const profile = process.env.OMO_BUILD_PROFILE;
 	if (profile) process.stdout.write(`build: profile ${profile} selected ${nodes.length} of ${BUILD_NODES.length} nodes\n`);
-	await materializeOnce();
-	const childEnv = { ...process.env, OMO_SKIP_MATERIALIZE: "1" };
-	await runGraph(nodes, childEnv);
+	const shim = await createBunPathShim();
+	try {
+		const env = { ...process.env, PATH: shim.path, BUN_BINARY: process.execPath };
+		await materializeOnce(env);
+		await runGraph(nodes, { ...env, OMO_SKIP_MATERIALIZE: "1" });
+	} finally {
+		await shim.cleanup();
+	}
 	process.stdout.write("build: all steps completed\n");
 }
 
-async function materializeOnce() {
-	await runNode({ id: "materialize", command: "bun", args: ["run", "build:materialize-frontend"], deps: [] }, process.env);
+async function createBunPathShim(): Promise<{ path: string; cleanup: () => Promise<void> }> {
+	const directory = await mkdtemp(join(tmpdir(), "omo-build-bin-"));
+	if (process.platform === "win32") {
+		await writeFile(join(directory, "bun.cmd"), `@"${process.execPath}" %*\r\n`);
+	} else {
+		await symlink(process.execPath, join(directory, "bun"));
+	}
+	return {
+		path: `${directory}${delimiter}${process.env.PATH ?? ""}`,
+		cleanup: () => rm(directory, { recursive: true, force: true }),
+	};
+}
+
+async function materializeOnce(env: NodeJS.ProcessEnv) {
+	await runNode(
+		{ id: "materialize", command: "bun", args: ["run", "build:materialize-frontend"], deps: [] },
+		env,
+	);
 }
 
 async function runGraph(graph: BuildNode[], env: NodeJS.ProcessEnv) {
@@ -102,7 +125,7 @@ const MAX_RETAINED_OUTPUT_BYTES = 1024 * 1024;
 // non-zero code and a named error.
 function runNode(node: BuildNode, env: NodeJS.ProcessEnv, liveChildren?: Set<ReturnType<typeof spawn>>): Promise<void> {
 	return new Promise((resolve, reject) => {
-		const child = spawn(node.command, node.args, {
+		const child = spawn(resolveBuildCommand(node.command, process.execPath, repoRoot), node.args, {
 			cwd: repoRoot,
 			env,
 			shell: isWindows,

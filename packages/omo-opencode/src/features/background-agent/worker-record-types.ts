@@ -1,3 +1,5 @@
+import type { ProviderErrorSnapshot } from "./provider-error-types"
+
 export type WorkerRecordState =
   | "dispatched"
   | "starting"
@@ -37,6 +39,8 @@ export type WorkerRecord = {
   terminalEventID?: string
   terminalAttemptID?: string
   terminalReason?: string
+  terminalReasonCode?: string
+  providerError?: ProviderErrorSnapshot
   result?: string
   resultTruncated?: boolean
   attempts?: number
@@ -61,6 +65,8 @@ export type WorkerTerminalTransition = {
   terminalAt: string
   terminalAttemptID?: string
   terminalReason?: string
+  terminalReasonCode?: string
+  providerError?: ProviderErrorSnapshot
   result?: string
   attempts?: number
   recoveryEpisodeID?: string

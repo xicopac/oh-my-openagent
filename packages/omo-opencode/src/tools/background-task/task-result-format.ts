@@ -1,5 +1,6 @@
 import type { BackgroundTask } from "../../features/background-agent"
 import { extractErrorMessage } from "../../features/background-agent/error-classifier"
+import { providerErrorModelLabel } from "../../features/background-agent/provider-error"
 import { consumeNewMessages } from "../../shared/session-cursor"
 import type { BackgroundOutputClient, BackgroundOutputMessagesResult } from "./clients"
 import { extractMessages, getErrorMessage } from "./session-messages"
@@ -84,7 +85,7 @@ Session ID: ${task.sessionId}
 
 ---
 
-Session error: ${sessionError}`
+Session error: ${sessionError}${formatProviderErrorBlock(task)}`
   }
 
   const newMessages = consumeNewMessages(task.sessionId, sortedMessages)
@@ -148,6 +149,21 @@ ${textContent || "(No text output)"}`
 }
 
 
+function formatProviderErrorBlock(task: BackgroundTask): string {
+  const error = task.providerError
+  if (!error) return ""
+
+  const model = providerErrorModelLabel(error) ?? "unknown"
+  return `
+
+Provider Error:
+- Model: ${model}
+- Code: ${error.code ?? error.name ?? "unknown"}
+- Message: ${error.message}
+- Retryable: ${error.retryable ? "true" : "false"}
+- Quota exhausted: ${error.quotaExhausted ? "true" : "false"}`
+}
+
 function formatDurableResult(task: BackgroundTask): string {
   const duration = formatDuration(task.startedAt ?? new Date(), task.completedAt)
   return `Task Result
@@ -159,7 +175,7 @@ Session ID: ${task.sessionId ?? "unavailable"}
 
 ---
 
-${task.result?.trim() || task.error?.trim() || "(No terminal result was persisted before the worker session was cleaned up)"}`
+${task.result?.trim() || task.error?.trim() || "(No terminal result was persisted before the worker session was cleaned up)"}${formatProviderErrorBlock(task)}`
 }
 
 function hasDurableTerminalResult(task: BackgroundTask): boolean {

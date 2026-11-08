@@ -48,10 +48,20 @@ describe("checkExtensionCurrent", () => {
     expect(await readFile(outputs.rollbackRuntimeOutputPath, "utf8")).toContain("host_session_migrated")
   })
 
-  test("#given the host platform #when resolving the Bun executable #then Windows bypasses the command shell", () => {
-    expect(resolveBunExecutable("win32")).toBe("bun.exe")
-    expect(resolveBunExecutable("darwin")).toBe("bun")
-    expect(resolveBunExecutable("linux")).toBe("bun")
+  test("#given an explicit build toolchain #when resolving the Bun executable #then it wins over PATH", () => {
+    expect(resolveBunExecutable("linux", "", false, "/opt/bun-1.4.3/bun")).toBe("/opt/bun-1.4.3/bun")
+  })
+
+  test("#given the host platform #when resolving the Bun executable #then the running build toolchain is preferred", () => {
+    expect(resolveBunExecutable("win32", "/opt/bun-1.4.3/bun", true, undefined)).toBe("/opt/bun-1.4.3/bun")
+    expect(resolveBunExecutable("darwin", "/opt/bun-1.4.3/bun", true, undefined)).toBe("/opt/bun-1.4.3/bun")
+    expect(resolveBunExecutable("linux", "/opt/bun-1.4.3/bun", true, undefined)).toBe("/opt/bun-1.4.3/bun")
+  })
+
+  test("#given a non-Bun host #when resolving the Bun executable #then Windows bypasses the command shell", () => {
+    expect(resolveBunExecutable("win32", "", false, undefined)).toBe("bun.exe")
+    expect(resolveBunExecutable("darwin", "", false, undefined)).toBe("bun")
+    expect(resolveBunExecutable("linux", "", false, undefined)).toBe("bun")
   })
 
   test("#given freshly built outputs #when the executable bundles are inspected #then the shebang stays the first bytes and the marker still parses", async () => {

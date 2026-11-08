@@ -157,6 +157,39 @@ Status markers: `[ ]` pending, `[>]` in progress, `[x]` complete, `[!]` blocked.
 - [x] Write reviewer-readable QA artifacts under `.omo/evidence/20261105-blocked-worker-incident/`, including commands, observations, sufficiency, omissions, and SHA-256 digests.
 - [x] Correct the staged PLAN_UPDATE and update PLAN.md, STATE.md, and TODO.md with the verified root cause, fix, gate results, residual risk, and explicit production-deployment omission.
 - [x] Commit only the intended source, regression, harness, and checkpoint files in atomic commits; never add `.omo/evidence/`.
-- [ ] Open a reviewer-readable English PR against the canonical release branch, complete CI and review loops, merge with a merge commit, and verify the merged release candidate without deploying it.
+- [x] Open a reviewer-readable English PR against the canonical release branch, complete CI and review loops, merge with a merge commit, and verify the merged release candidate without deploying it. PR #8 merged as `0ca44477e`; its deployment sanity is recorded separately.
 
 - [ ] Publish the prepared deployment SOP/change record to Wiki.js after an operator grants executable access to the root-owned wiki helper scripts; this does not block the verified runtime deployment.
+
+## Slice E incident follow-up — provider quota
+
+- [x] Preserve and review the existing uncommitted provider-quota diff and its focused tests before continuing.
+- [x] Add structured provider-error classification, including the exact Garmin message, retryability, quota signal, and a canonical `insufficient_quota` code for message-only retry envelopes.
+- [x] Persist `providerError` and `terminalReasonCode` atomically with the blocked terminal record and wake outbox.
+- [x] Add a synchronous terminal claim so late empty-turn/completion paths cannot overwrite the quota outcome during result-capture teardown.
+- [x] Exclude the exhausted provider from fallback candidates while keeping a different authorized free provider eligible.
+- [x] Carry the structured provider error into the immediate parent wake and all-complete summaries.
+- [x] Render the durable provider error from `background_output` and task status after the child session is gone.
+- [x] Authorize exactly the worker-runtime harness commands in the delegation recovery scope and add allow/deny regressions.
+- [x] Implement the `provider-quota` scenario in `run.sh` / `fake-provider.mjs` per `REGRESSION_SPEC.md` (429 body, ledger, no retry/paid fallback, durable/wake/retrieval assertions, evidence retention).
+- [x] Fix Bun 1.4.3 propagation so nested build steps and the Senpi generator use the running pinned executable.
+- [x] Run focused tests (291 pass / 975 assertions), wider affected suites (883 + 303 + 24 pass), and scoped OpenCode typecheck (exit 0).
+- [x] Build the candidate with Bun 1.4.3 and run the real isolated OpenCode `provider-quota` scenario: one child request, durable acknowledged quota terminal, structured retrieval, autonomous parent resume, definitive exit, unchanged real stores, no orphan.
+- [x] Run the `empty` negative control on the same bundle and confirm it still produces the generic empty-output terminal with no provider error.
+- [x] Freeze reviewer-readable evidence under `.omo/evidence/20261107-provider-quota-incident/` (`green/`, `negative-control/`, `focused/`, `RESOLUTION_20261108.md`, `SHA256SUMS`).
+- [x] Update `STATE.md`, `PLAN.md`, and this todo with the observed verification and remaining delivery steps.
+- [x] Commit the intended source/test/harness/checkpoint files in atomic units and leave `.omo/evidence/` and `dist/` untracked.
+- [ ] Push the follow-up branch and open/verify the PR against `release/canonical-20261029` when delivery is authorized; do not deploy.
+
+## Final consolidated release candidate
+
+- [x] Identify remaining Slice E acceptance criteria: the Garmin review/merge was complete, but provider-quota delivery, final matrix coverage, and the reproducible candidate were still outstanding.
+- [x] Reproduce the nested-toolchain failure: package scripts resolved host Bun 1.3.14, the Codex installer rejected it, and the host wrapper masked the non-zero status.
+- [x] Pin nested package scripts to the running Bun through a temporary executable shim; pin declarations to lockfile-local `node_modules/.bin/tsc`.
+- [x] Add focused regressions for Bun and TypeScript command resolution (13 pass across the build and release-candidate tests).
+- [x] Include `provider-quota` in the committed sequential runtime matrix.
+- [x] Move the incident `session.idle` probe to the abort transition so it observes the production idle event rather than an earlier instance stream.
+- [x] Run the final nine-scenario matrix on bundle `26de4238...`: all pass, `fails=0`, unchanged real stores, bounded resources, no orphan test process.
+- [x] Run two clean release-candidate builds at `d38c1d037`: identical artifact `26de4238...` (6,551,869 bytes), identical manifests after output-path normalization, rollback target `0ca44477e`.
+- [x] Build/verify the documentation-only release-candidate commit with the same artifact identity and produce `.omo/evidence/20261108-final-release-candidate/RELEASE_READINESS.md`.
+- [x] Update `STATE.md`, `PLAN.md`, and this todo with the final gate, residual risks, and explicit no-deploy decision.

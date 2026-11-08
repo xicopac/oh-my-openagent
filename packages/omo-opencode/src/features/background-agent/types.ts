@@ -1,6 +1,7 @@
 import type { FallbackEntry } from "../../shared/model-requirements"
 import type { DelegatedModelConfig } from "../../shared/model-resolution-types"
 import type { SessionPermissionRule } from "../../shared/question-denied-session-permission"
+import type { ProviderErrorSnapshot } from "./provider-error-types"
 
 export type BackgroundTaskStatus =
   | "pending"
@@ -61,6 +62,8 @@ export interface BackgroundTask {
   completedAt?: Date
   result?: string
   error?: string
+  providerError?: ProviderErrorSnapshot
+  terminalReasonCode?: string
   progress?: TaskProgress
   parentModel?: { providerID: string; modelID: string }
   model?: DelegatedModelConfig

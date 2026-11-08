@@ -60,7 +60,52 @@ function createRetryArgs(overrides: Partial<BackgroundTask> = {}) {
   }
 }
 
+const quotaProviderError = {
+  providerID: "provider-a",
+  modelID: "original-model",
+  message: "Free usage exceeded, subscribe to Go",
+  retryable: false,
+  quotaExhausted: true,
+}
+
 describe("tryFallbackRetry provider-exhaustion opt-in", () => {
+  test("#given quota exhaustion #when a fallback stays on the exhausted provider #then it is skipped and never queued", async () => {
+    const sameProviderChain: FallbackEntry[] = [
+      { model: "same-provider-model", providers: ["provider-a"], variant: undefined },
+    ]
+    const args = createRetryArgs({ fallbackChain: sameProviderChain })
+
+    const result = await tryFallbackRetry({
+      ...args,
+      providerError: quotaProviderError,
+    })
+
+    expect(result).toBe(false)
+    expect(args.task.attemptCount).toBe(0)
+    expect(args.task.model).toEqual({ providerID: "provider-a", modelID: "original-model" })
+    expect(args.queuesByKey.size).toBe(0)
+  })
+
+  test("#given quota exhaustion #when a different provider offers a free fallback #then only that provider is selected", async () => {
+    const mixedProviderChain: FallbackEntry[] = [
+      { model: "same-provider-model", providers: ["provider-a", "provider-b"], variant: undefined },
+    ]
+    const args = createRetryArgs({ fallbackChain: mixedProviderChain })
+
+    const result = await tryFallbackRetry({
+      ...args,
+      providerError: quotaProviderError,
+    })
+
+    expect(result).toBe(true)
+    expect(args.task.model).toEqual({
+      providerID: "provider-b",
+      modelID: "same-provider-model",
+      variant: undefined,
+    })
+    expect(args.queuesByKey.get("provider-b/same-provider-model")).toHaveLength(1)
+  })
+
   test("#given legacy STOP semantics reject provider exhaustion #when background retry opts in #then it queues the fallback", async () => {
     const args = createRetryArgs()
 

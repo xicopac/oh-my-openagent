@@ -1,3 +1,5 @@
+import { join, win32 } from "node:path"
+
 export type BuildNode = {
 	id: string
 	command: string
@@ -41,6 +43,26 @@ export const BUILD_NODES: BuildNode[] = [
  */
 export const BUILD_PROFILES: Record<string, readonly string[]> = {
 	"omo-native": ["lsp-daemon", "ast-grep-mcp", "service-auth"],
+}
+
+/**
+ * Nested build steps must run on the same toolchain as the parent build. Resolving a
+ * bare `bun` through PATH can silently select a different host Bun (for example a
+ * 1.4.3 parent spawning a 1.3.14 child), which bypasses the exact-version contract
+ * every tracked generator enforces. Pin `bun` steps to the running executable.
+ */
+export function resolveBuildCommand(
+	command: string,
+	execPath: string,
+	repositoryRoot: string,
+	platform: NodeJS.Platform = process.platform,
+): string {
+	if (command === "bun") return execPath
+	if (command === "tsc") {
+		const path = platform === "win32" ? win32 : { join }
+		return path.join(repositoryRoot, "node_modules", ".bin", platform === "win32" ? "tsc.cmd" : "tsc")
+	}
+	return command
 }
 
 export function selectBuildNodes(

@@ -3,13 +3,13 @@ set -uo pipefail
 
 SCENARIO="${1:-${OMO_RUNTIME_SCENARIO:-normal}}"
 case "$SCENARIO" in
-  normal|stall|empty|cancel|compact|incident) ;;
+  normal|stall|empty|cancel|compact|incident|provider-quota) ;;
   *) printf 'unknown scenario: %s\n' "$SCENARIO" >&2; exit 2 ;;
 esac
 
 REPO="${OMO_REPO:-$(GIT_MASTER=1 git rev-parse --show-toplevel)}"
 PLUGIN_DIST="${PLUGIN_DIST:-$REPO/dist/index.js}"
-OPENCODE="${OPENCODE:-/home/xicopac/.opencode/bin/opencode}"
+OPENCODE="${OMO_OPENCODE_BIN:-/home/xicopac/.opencode/bin/opencode}"
 NODE="${NODE:-$(command -v node)}"
 HARNESS="$REPO/script/qa/worker-runtime-matrix"
 EVID="${EVID:-$REPO/.omo/evidence/$(date +%Y%m%d)-worker-runtime-matrix/$SCENARIO}"
@@ -129,24 +129,26 @@ SOURCE_COMMIT=$(GIT_MASTER=1 git -C "$REPO" rev-parse HEAD)
 SOURCE_FINGERPRINT=$(cd "$REPO" && find packages/omo-opencode/src -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')
 note "plugin_dist=$PLUGIN_DIST sha256=$PLUGIN_SHA256"
 note "source_commit=$SOURCE_COMMIT source_fingerprint=$SOURCE_FINGERPRINT"
-if [ "$SCENARIO" = "incident" ]; then
+if [ "$SCENARIO" = "incident" ] || [ "$SCENARIO" = "provider-quota" ]; then
   if [ -z "${EXPECTED_PLUGIN_SHA256:-}" ] || [ "$EXPECTED_PLUGIN_SHA256" != "$PLUGIN_SHA256" ]; then
-    fail "incident candidate digest is not explicitly bound to the tested bundle"
+    fail "$SCENARIO candidate digest is not explicitly bound to the tested bundle"
     exit 1
   fi
   if [ -z "${EXPECTED_SOURCE_FINGERPRINT:-}" ] || [ "$EXPECTED_SOURCE_FINGERPRINT" != "$SOURCE_FINGERPRINT" ]; then
-    fail "incident candidate source fingerprint is not explicitly bound to the tested tree"
+    fail "$SCENARIO candidate source fingerprint is not explicitly bound to the tested tree"
     exit 1
   fi
-  pass "incident candidate is bound to the tested source tree and bundle"
+  pass "$SCENARIO candidate is bound to the tested source tree and bundle"
 fi
 note "real_db_sessions_before=$REAL_BEFORE"
 note "real_worker_records_before=$REAL_WORKERS_BEFORE"
 
 DISABLE_LIVE_PARENT_WAKE_ROUTING=false
 [ "$SCENARIO" = "incident" ] && DISABLE_LIVE_PARENT_WAKE_ROUTING=true
+[ "$SCENARIO" = "provider-quota" ] && DISABLE_LIVE_PARENT_WAKE_ROUTING=true
 PROVIDER_RESPONSE_TIMEOUT_MS=3000
 [ "$SCENARIO" = "incident" ] && PROVIDER_RESPONSE_TIMEOUT_MS=10000
+[ "$SCENARIO" = "provider-quota" ] && PROVIDER_RESPONSE_TIMEOUT_MS=10000
 cat >"$PROJECT/.omo/omo.jsonc" <<JSON
 {
   "[opencode]": {
@@ -176,10 +178,15 @@ JSON
 MODELS_JSON='{"gpt-fake-free":{"tool_call":true,"cost":{"input":0,"output":0,"cache":{"read":0,"write":0}},"limit":{"context":200000,"output":8192}}}'
 ALT_MODELS_JSON='{"nemotron-3-ultra-free":{"tool_call":true,"cost":{"input":0,"output":0,"cache":{"read":0,"write":0}},"limit":{"context":200000,"output":8192}}}'
 CACHE_MODELS='{"openai":[{"id":"gpt-fake-free","cost":{"input":0,"output":0,"cache":{"read":0,"write":0}},"tool_call":true}],"opencode":[{"id":"nemotron-3-ultra-free","cost":{"input":0,"output":0,"cache":{"read":0,"write":0}},"tool_call":true}]}'
+CONNECTED_PROVIDERS='["openai","opencode"]'
+if [ "$SCENARIO" = "provider-quota" ]; then
+  CACHE_MODELS='{"openai":[{"id":"gpt-fake-free","cost":{"input":0,"output":0,"cache":{"read":0,"write":0}},"tool_call":true}]}'
+  CONNECTED_PROVIDERS='["openai"]'
+fi
 
 printf '%s' '{"openai":{"type":"api","key":"fake-key"},"opencode":{"type":"api","key":"fake-key"}}' >"$SANDBOX/data/opencode/auth.json"
-printf '%s' '{"connected":["openai","opencode"],"updatedAt":"2026-11-05T00:00:00.000Z"}'   >"$SANDBOX/cache/oh-my-opencode/connected-providers.json"
-printf '%s' "{\"connected\":[\"openai\",\"opencode\"],\"updatedAt\":\"2026-11-05T00:00:00.000Z\",\"models\":$CACHE_MODELS}"   >"$SANDBOX/cache/oh-my-opencode/provider-models.json"
+printf '%s' "{\"connected\":$CONNECTED_PROVIDERS,\"updatedAt\":\"2026-11-05T00:00:00.000Z\"}"   >"$SANDBOX/cache/oh-my-opencode/connected-providers.json"
+printf '%s' "{\"connected\":$CONNECTED_PROVIDERS,\"updatedAt\":\"2026-11-05T00:00:00.000Z\",\"models\":$CACHE_MODELS}"   >"$SANDBOX/cache/oh-my-opencode/provider-models.json"
 
 OMO_REPO="$REPO" OMO_RUNTIME_SCENARIO="$SCENARIO" FAKE_LLM_LOG="$SANDBOX/fake.log"   setsid "$NODE" "$HARNESS/fake-provider.mjs" >"$SANDBOX/fake-stdout.log" 2>&1 &
 FAKE_PID=$!
@@ -197,12 +204,12 @@ cat >"$SANDBOX/config/opencode/opencode.jsonc" <<JSONC
   "model": "openai/gpt-fake-free",
   "provider": {
     "openai": {
-      "options": {"apiKey":"fake-key","baseURL":"http://127.0.0.1:$FAKE_PORT/v1","timeout":60000},
+      "options": {"apiKey":"fake-key","baseURL":"http://127.0.0.1:$FAKE_PORT/v1","timeout":60000,"maxRetries":0},
       "models": $MODELS_JSON
     },
     "opencode": {
       "npm": "@ai-sdk/openai",
-      "options": {"apiKey":"fake-key","baseURL":"http://127.0.0.1:$FAKE_PORT/v1","timeout":60000},
+      "options": {"apiKey":"fake-key","baseURL":"http://127.0.0.1:$FAKE_PORT/v1","timeout":60000,"maxRetries":0},
       "models": $ALT_MODELS_JSON
     }
   },
@@ -217,7 +224,7 @@ cat >"$SANDBOX/config/opencode/opencode.jsonc" <<JSONC
 JSONC
 
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
-setsid env -u OPENCODE -u OPENCODE_PID -u OPENCODE_CONFIG_DIR   -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u OPENROUTER_API_KEY -u GEMINI_API_KEY   HOME="$HOME_DIR" OPENCODE_TEST_HOME="$HOME_DIR"   XDG_DATA_HOME="$SANDBOX/data" XDG_CONFIG_HOME="$SANDBOX/config"   XDG_CACHE_HOME="$SANDBOX/cache" XDG_STATE_HOME="$SANDBOX/state"   OPENCODE_CONFIG_DIR="$SANDBOX/config/opencode" OPENCODE_DB="$DB" OMO_GOVERNANCE_DIR="$GOV_DIR"   OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_MODELS_FETCH=1   OPENCODE_DISABLE_TELEMETRY=1 OMO_DISABLE_POSTHOG=1   /bin/bash -lc "cd '$PROJECT' && exec '$OPENCODE' serve --hostname 127.0.0.1 --port $PORT --print-logs --log-level INFO"   >"$SANDBOX/opencode.log" 2>&1 &
+setsid env -u OPENCODE -u OPENCODE_PID -u OPENCODE_CONFIG_DIR -u OPENCODE_PURE -u OPENCODE_DISABLE_PROJECT_CONFIG   -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u OPENROUTER_API_KEY -u GEMINI_API_KEY   HOME="$HOME_DIR" OPENCODE_TEST_HOME="$HOME_DIR"   XDG_DATA_HOME="$SANDBOX/data" XDG_CONFIG_HOME="$SANDBOX/config"   XDG_CACHE_HOME="$SANDBOX/cache" XDG_STATE_HOME="$SANDBOX/state"   OPENCODE_CONFIG_DIR="$SANDBOX/config/opencode" OPENCODE_DB="$DB" OMO_GOVERNANCE_DIR="$GOV_DIR"   OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_MODELS_FETCH=1   OPENCODE_DISABLE_TELEMETRY=1 OMO_DISABLE_POSTHOG=1   /bin/bash -lc "cd '$PROJECT' && exec '$OPENCODE' serve --hostname 127.0.0.1 --port $PORT --print-logs --log-level INFO"   >"$SANDBOX/opencode.log" 2>&1 &
 LAUNCH_PID=$!
 
 for _ in $(seq 1 120); do
@@ -229,15 +236,6 @@ if ! curl -sf --max-time 1 "http://127.0.0.1:$PORT/global/health" >/dev/null 2>&
   exit 1
 fi
 pass "isolated opencode server healthy on port $PORT"
-
-if [ "$SCENARIO" = "incident" ]; then
-  bash "$REPO/.agents/skills/opencode-qa/scripts/sse-hook-probe.sh" \
-    --attach "http://127.0.0.1:$PORT" \
-    --directory "$PROJECT" \
-    --event session.idle \
-    --timeout 30 >"$SANDBOX/sse-session-idle.txt" 2>&1 &
-  SSE_PID=$!
-fi
 
 OPENCODE_PID=$(for p in $(pgrep -f "serve --hostname 127.0.0.1 --port $PORT" 2>/dev/null); do
   [ "$(cat "/proc/$p/comm" 2>/dev/null)" = "opencode" ] && { printf '%s' "$p"; break; }
@@ -265,6 +263,16 @@ for _ in $(seq 1 240); do
 done
 grep -q 'child=true' "$SANDBOX/fake.log" 2>/dev/null   && pass "child provider request observed" || fail "child provider request not observed"
 
+if [ "$SCENARIO" = "provider-quota" ]; then
+  for _ in $(seq 1 80); do
+    grep -q 'quota_exhausted' "$SANDBOX/fake.log" 2>/dev/null && break
+    sleep 0.25
+  done
+  grep -q 'quota_exhausted child_attempt=1' "$SANDBOX/fake.log" 2>/dev/null \
+    && pass "fake provider returned the exact quota-exhaustion error" \
+    || fail "fake provider did not record the quota-exhaustion response"
+fi
+
 if [ "$SCENARIO" = "incident" ]; then
   for _ in $(seq 1 80); do
     grep -q 'question_issued' "$SANDBOX/fake.log" 2>/dev/null && break
@@ -275,6 +283,12 @@ if [ "$SCENARIO" = "incident" ]; then
   else
     fail "parent did not enter the unanswered-question state"
   fi
+  bash "$REPO/.agents/skills/opencode-qa/scripts/sse-hook-probe.sh" \
+    --attach "http://127.0.0.1:$PORT" \
+    --directory "$PROJECT" \
+    --event session.idle \
+    --timeout 30 >"$SANDBOX/sse-session-idle.txt" 2>&1 &
+  SSE_PID=$!
   ABORT_STATUS=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
     -X POST "http://127.0.0.1:$PORT/session/$ROOT_SESSION/abort?directory=$PROJECT" || printf '000')
   [ "$ABORT_STATUS" = "200" ] && pass "parent question turn aborted to the production idle state" \
@@ -321,6 +335,13 @@ done
 
 if [ "$SCENARIO" = "incident" ] && grep -q 'parent_resumed' "$SANDBOX/fake.log" 2>/dev/null; then
   for _ in $(seq 1 1040); do
+    grep -q 'definitive_exit' "$SANDBOX/fake.log" 2>/dev/null && break
+    sleep 0.25
+  done
+fi
+
+if [ "$SCENARIO" = "provider-quota" ] && grep -q 'parent_resumed' "$SANDBOX/fake.log" 2>/dev/null; then
+  for _ in $(seq 1 200); do
     grep -q 'definitive_exit' "$SANDBOX/fake.log" 2>/dev/null && break
     sleep 0.25
   done
@@ -441,6 +462,83 @@ PY
       && pass "root exited definitively after bounded recovery exhaustion" \
       || fail "root did not exit definitively after bounded recovery exhaustion"
     ;;
+  provider-quota)
+    QUOTA_RECORD_CHECK=$(python3 - "$WORKER_DIR" <<'PY'
+import json, os, sys
+root = sys.argv[1]
+records = []
+if os.path.isdir(root):
+    for name in sorted(os.listdir(root)):
+        if not name.endswith(".json"):
+            continue
+        try:
+            records.append(json.load(open(os.path.join(root, name), encoding="utf-8")))
+        except Exception:
+            continue
+quota = [item for item in records if item.get("terminalReasonCode") == "provider_quota_exhausted"]
+valid = len(records) == 1 and len(quota) == 1 and all(
+    item.get("state") == "blocked"
+    and item.get("terminalOutcome") == "blocked"
+    and item.get("terminalReasonCode") == "provider_quota_exhausted"
+    and "Free usage exceeded, subscribe to Go" in str(item.get("terminalReason", ""))
+    and item.get("terminalEventID")
+    and item.get("terminalAttemptID")
+    and item.get("attempts") == 1
+    and item.get("wakeState") == "acknowledged"
+    and item.get("wakePendingAt") <= item.get("wakeDispatchedAt") <= item.get("wakeAcknowledgedAt")
+    and (item.get("providerError") or {}).get("providerID") == "openai"
+    and (item.get("providerError") or {}).get("modelID") == "gpt-fake-free"
+    and (item.get("providerError") or {}).get("code") == "insufficient_quota"
+    and (item.get("providerError") or {}).get("message") == "Free usage exceeded, subscribe to Go"
+    and (item.get("providerError") or {}).get("retryable") is False
+    and (item.get("providerError") or {}).get("quotaExhausted") is True
+    for item in quota
+)
+print("ok" if valid else f"bad total={len(records)} quota={len(quota)} records={records}")
+PY
+)
+    [ "$QUOTA_RECORD_CHECK" = "ok" ] \
+      && pass "durable worker record carries the exact structured quota terminal" \
+      || fail "provider-quota record invariant failed: $QUOTA_RECORD_CHECK"
+    grep -q 'parent_resumed' "$SANDBOX/fake.log" 2>/dev/null \
+      && pass "parent resumed on the quota wake without another human message" \
+      || fail "parent did not resume on the quota wake"
+    grep -q 'terminal_result_retrieved=true' "$SANDBOX/fake.log" 2>/dev/null \
+      && pass "background_output returned the structured quota terminal result" \
+      || fail "background_output did not return the structured quota terminal result"
+    grep -q 'definitive_exit' "$SANDBOX/fake.log" 2>/dev/null \
+      && pass "root exited definitively after the quota terminal" \
+      || fail "root did not exit definitively after the quota terminal"
+    QUOTA_CHILD_REQUESTS=$(grep -c 'child=true' "$SANDBOX/fake.log" 2>/dev/null || true)
+    [ "$QUOTA_CHILD_REQUESTS" -eq 1 ] \
+      && pass "exhausted provider received exactly one request" \
+      || fail "exhausted provider request count=$QUOTA_CHILD_REQUESTS expected=1"
+    QUOTA_GOVERNANCE_CHECK=$(python3 - "$GOV_DIR" "$ROOT_SESSION" <<'PY'
+import json, os, sys
+root, session = sys.argv[1:]
+events = []
+for base, _, names in os.walk(root):
+    for name in names:
+        if name != "events.jsonl":
+            continue
+        with open(os.path.join(base, name), encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    item = json.loads(line)
+                except Exception:
+                    continue
+                if item.get("session_id") == session:
+                    events.append(item)
+probe_started = [item for item in events if item.get("event") == "recovery_probe_started"]
+empty_failures = [item for item in events if item.get("event") == "delegation_failure_recorded" and item.get("kind") == "provider_empty_output"]
+valid = not probe_started and not empty_failures
+print("ok" if valid else f"bad probes={len(probe_started)} empty_failures={len(empty_failures)}")
+PY
+)
+    [ "$QUOTA_GOVERNANCE_CHECK" = "ok" ] \
+      && pass "quota exhaustion did not enter empty-output recovery or a recovery probe" \
+      || fail "quota exhaustion incorrectly entered recovery: $QUOTA_GOVERNANCE_CHECK"
+    ;;
   cancel)
     [[ "$WORKER_TERMINALS" == *":cancelled:"* ]]       && pass "explicit background cancellation persisted cancelled state"       || fail "explicit cancellation did not persist cancelled state"
     grep -q 'cancellation_confirmed' "$SANDBOX/fake.log" 2>/dev/null       && pass "root continued after cancellation without another human message"       || fail "root did not continue after cancellation"
@@ -463,7 +561,11 @@ if [ "$SCENARIO" != "cancel" ]; then
 fi
 
 REQUESTED_MODELS=$(sed -n 's/.* model=\([^ ]*\).*/\1/p' "$SANDBOX/fake.log" | sort -u | paste -sd, -)
-if [ "$REQUESTED_MODELS" = "gpt-fake-free" ]   || [ "$REQUESTED_MODELS" = "gpt-fake-free,nemotron-3-ultra-free" ]; then
+if [ "$SCENARIO" = "provider-quota" ]; then
+  [ "$REQUESTED_MODELS" = "gpt-fake-free" ] \
+    && pass "provider ledger contains only the exhausted free fake model" \
+    || fail "unexpected provider models requested: ${REQUESTED_MODELS:-none}"
+elif [ "$REQUESTED_MODELS" = "gpt-fake-free" ]   || [ "$REQUESTED_MODELS" = "gpt-fake-free,nemotron-3-ultra-free" ]; then
   pass "provider ledger contains only configured free fake models"
 else
   fail "unexpected provider models requested: ${REQUESTED_MODELS:-none}"

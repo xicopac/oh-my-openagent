@@ -1,10 +1,10 @@
 # OMO Stabilization Plan
 
-Last updated: 2026-11-06 (Europe/Madrid)
-Owner: Codex
+Last updated: 2026-11-08 (Europe/Madrid)
+Owner: Codex / vanilla OpenCode continuation
 Canonical base: `d4e2979b80de9d04768f380828bfca4b428276ae` (merged PR stack on `release/canonical-20261029`)
 Implementation worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-slice-e-release-gate` (Slice E, based directly on the merged release head)
-Production boundary: `/srv/dev/oh-my-openagent` remains untouched. The Garmin incident follow-up explicitly prohibits deployment; production Git history must not be rewritten or synchronized.
+Production boundary: `/srv/dev/oh-my-openagent` remains on the Garmin-fix artifact `cef322b8...` from `0ca44477e`. This task prohibits deployment; production Git history must not be rewritten or synchronized.
 
 ## Objective
 
@@ -237,6 +237,55 @@ Verification:
 - Final eight-scenario runtime matrix passes with unchanged real DB/worker stores, bounded repeated resources, and no process leak.
 - Evidence stays ignored at `.omo/evidence/20261105-blocked-worker-incident/`. Production deployment is prohibited for this follow-up.
 
+### Slice E follow-up — provider quota
+
+Files:
+
+- `packages/omo-opencode/src/features/background-agent/provider-error.ts` and `provider-error-types.ts`.
+- Background manager fallback, terminal-claim, notification, worker-record, and result/status formatting modules.
+- `packages/omo-opencode/src/features/delegation-first/recovery-scope.ts`.
+- `script/qa/worker-runtime-matrix/run.sh` and `fake-provider.mjs`.
+- `script/build.ts`, `script/build-nodes.ts`, and the Senpi extension build entry.
+
+Changes:
+
+- Preserve quota exhaustion as a distinct terminal class with structured provider/model/code/message/retryability/quota fields; keep the exact provider message.
+- Persist the structured snapshot and reason code atomically with the blocked terminal record and wake outbox.
+- Claim the terminal state synchronously before awaited result capture so empty-turn/completion paths cannot overwrite the quota reason.
+- Exclude the exhausted provider from fallback while still allowing a different authorized free provider; dispatch no paid/unknown model unattended.
+- Render the provider error in the parent wake, all-complete summary, `background_output`, and task status.
+- Authorize the exact regression-harness commands in recovery scope without opening traversal, `-c`, extra arguments, or compound mutations.
+- Implement the real `provider-quota` scenario and propagate the pinned Bun 1.4.3 executable to nested build steps.
+
+Verification checkpoint (2026-11-08):
+
+- Focused scope: 291 tests pass / 0 fail / 975 assertions across 12 files.
+- Wider affected suites: background-agent 883 pass; delegation-first + background-task 303 pass; Senpi build-extension 24 pass; scoped OpenCode typecheck exits 0.
+- Candidate bundle SHA-256 `26de42383d292a14935e18b175c542297df1248999222ab14c28b7c82795306d` (6,551,869 bytes) on source fingerprint `0ba3f5ba7190435543fbae3cbda9ff38dac9f87cc725bf1cecb1987fc8ed8e41`.
+- Real OpenCode 1.19.3 `provider-quota`: exactly one request to the exhausted free fake model; durable `blocked` / `provider_quota_exhausted`; exact message and structured snapshot; monotonic acknowledged wake; `background_output` retrieval; autonomous parent resume; definitive exit; no recovery probe; unchanged real DB (2,391 sessions) and worker store (278 records); no orphan process.
+- `empty` negative control on the same bundle still yields `BLOCKED: assistant turn completed with no output` with no provider error.
+- Evidence: ignored `.omo/evidence/20261107-provider-quota-incident/`. No production deployment.
+
+### Final consolidated release candidate
+
+Remaining acceptance before this checkpoint was limited to provider-quota delivery readiness, final matrix coverage, and a reproducible consolidated artifact. The Garmin PR/merge was already complete as PR #8 (`0ca44477e`).
+
+Changes:
+
+- Preserve the exact Bun 1.4.3 boundary for nested package scripts. The parent build supplies a temporary `bun` shim pointing at the running executable, and declarations resolve the lockfile-pinned `node_modules/.bin/tsc`. This removes the host-Bun fallback that made the Codex generator fail while an environment wrapper returned success.
+- Add `provider-quota` to the committed matrix and attach the incident `session.idle` probe immediately before the abort, after the unanswered-question state exists.
+- Build the final release candidate twice from one clean commit and run the full matrix on the resulting bundle.
+
+Verification checkpoint (2026-11-08):
+
+- Final code commit before documentation: `d38c1d037`; build fixes `48276ceed`, matrix coverage `80f5180f3`.
+- Build/command tests: 13 pass, 0 fail, 56 assertions. The `script/` typecheck still reports only the pre-existing missing Markdown-module declarations.
+- Final nine-scenario matrix on bundle `26de4238...` and source fingerprint `0ba3f5ba...`: normal, stall, empty, provider quota, repeated-empty incident, cancellation, compaction, and three repeated normal runs all pass; `fails=0`.
+- Repeated bounds: RSS 688,888-779,116 KiB; FDs 85-87; inotify FDs 2; sandbox bytes 228,616,879-228,618,340; CPU <=2,810 ticks; wall <=48 seconds; no orphan test process. Real stores remained at 2,391 sessions / 278 worker records.
+- Two clean candidate builds produce artifact SHA-256 `26de42383d292a14935e18b175c542297df1248999222ab14c28b7c82795306d` (6,551,869 bytes), with identical manifests after output-path normalization. Toolchain: Bun 1.4.3 / Node 26.3.0; lockfile `fa2976ce...`; rollback target `0ca44477e`.
+- Evidence: ignored `.omo/evidence/20261108-final-runtime-matrix-v2/`, `.omo/evidence/20261108-final-rc-a/`, `.omo/evidence/20261108-final-rc-b/`, and the final readiness report under `.omo/evidence/20261108-final-release-candidate/`.
+- Delivery remains unperformed: no push, PR, merge, or production deployment. Current production is unchanged.
+
 ## Execution rules
 
 - Work only in fresh task-owned worktrees based on the canonical release line.
@@ -261,4 +310,4 @@ Milestone 2 exits only when the core invariants above are implemented and every 
 
 Milestone 3 exits only when the full controlled-provider matrix passes repeatedly without human input, lost results, abandoned tasks, unauthorized paid routes, orphan processes, or resource growth.
 
-Milestone 4 exits when a clean commit reproducibly builds a versioned artifact and rollback manifest. Deployment remains a separate operation and is explicitly omitted from this incident follow-up.
+Milestone 4 exits when a clean commit reproducibly builds a versioned artifact and rollback manifest. Deployment remains a separate operation and is explicitly omitted from this incident follow-up. The acceptance is met by the `d38c1d037` candidate and its documentation-only successor; the final manifest is recorded in ignored evidence.

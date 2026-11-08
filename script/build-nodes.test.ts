@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { BUILD_NODES, BUILD_PROFILES, resolveBuildConcurrency, selectBuildNodes } from "./build-nodes"
+import { BUILD_NODES, BUILD_PROFILES, resolveBuildCommand, resolveBuildConcurrency, selectBuildNodes } from "./build-nodes"
 
 describe("selectBuildNodes", () => {
 	test("#given no profile #when the graph is selected #then every node runs", () => {
@@ -44,6 +44,21 @@ describe("selectBuildNodes", () => {
 		for (const node of BUILD_NODES) {
 			for (const dep of node.deps) expect(ids).toContain(dep)
 		}
+	})
+})
+
+describe("resolveBuildCommand", () => {
+	test("#given a nested bun step #when resolved #then it uses the running pinned executable instead of PATH", () => {
+		expect(resolveBuildCommand("bun", "/opt/bun-1.4.3/bun", "/repo")).toBe("/opt/bun-1.4.3/bun")
+	})
+
+	test("#given a TypeScript declaration step #when resolved #then it uses the lockfile-pinned local compiler instead of PATH", () => {
+		expect(resolveBuildCommand("tsc", "/opt/bun-1.4.3/bun", "/repo", "linux")).toBe("/repo/node_modules/.bin/tsc")
+		expect(resolveBuildCommand("tsc", "/opt/bun-1.4.3/bun", "C:\\repo", "win32")).toBe("C:\\repo\\node_modules\\.bin\\tsc.cmd")
+	})
+
+	test("#given a non-pinned step #when resolved #then its command is preserved", () => {
+		expect(resolveBuildCommand("node", "/opt/bun-1.4.3/bun", "/repo")).toBe("node")
 	})
 })
 

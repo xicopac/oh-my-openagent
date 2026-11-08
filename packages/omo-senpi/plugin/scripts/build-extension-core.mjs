@@ -12,7 +12,14 @@ import {
 import { stageRuntimePersonas } from "./persona-artifacts.mjs"
 import { assertBunExecutableVersion, expectedBunVersion } from "../../../../script/bun-toolchain.mjs"
 
-export function resolveBunExecutable(platform = process.platform) {
+export function resolveBunExecutable(
+  platform = process.platform,
+  execPath = process.execPath,
+  isBun = process.versions.bun !== undefined,
+  configured = process.env.BUN_BINARY,
+) {
+  if (typeof configured === "string" && configured.length > 0) return configured
+  if (isBun && typeof execPath === "string" && execPath.length > 0) return execPath
   return platform === "win32" ? "bun.exe" : "bun"
 }
 
