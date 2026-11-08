@@ -237,15 +237,6 @@ if ! curl -sf --max-time 1 "http://127.0.0.1:$PORT/global/health" >/dev/null 2>&
 fi
 pass "isolated opencode server healthy on port $PORT"
 
-if [ "$SCENARIO" = "incident" ]; then
-  bash "$REPO/.agents/skills/opencode-qa/scripts/sse-hook-probe.sh" \
-    --attach "http://127.0.0.1:$PORT" \
-    --directory "$PROJECT" \
-    --event session.idle \
-    --timeout 30 >"$SANDBOX/sse-session-idle.txt" 2>&1 &
-  SSE_PID=$!
-fi
-
 OPENCODE_PID=$(for p in $(pgrep -f "serve --hostname 127.0.0.1 --port $PORT" 2>/dev/null); do
   [ "$(cat "/proc/$p/comm" 2>/dev/null)" = "opencode" ] && { printf '%s' "$p"; break; }
 done)
@@ -292,6 +283,12 @@ if [ "$SCENARIO" = "incident" ]; then
   else
     fail "parent did not enter the unanswered-question state"
   fi
+  bash "$REPO/.agents/skills/opencode-qa/scripts/sse-hook-probe.sh" \
+    --attach "http://127.0.0.1:$PORT" \
+    --directory "$PROJECT" \
+    --event session.idle \
+    --timeout 30 >"$SANDBOX/sse-session-idle.txt" 2>&1 &
+  SSE_PID=$!
   ABORT_STATUS=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
     -X POST "http://127.0.0.1:$PORT/session/$ROOT_SESSION/abort?directory=$PROJECT" || printf '000')
   [ "$ABORT_STATUS" = "200" ] && pass "parent question turn aborted to the production idle state" \
