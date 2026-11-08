@@ -9,9 +9,14 @@ describe("delegation recovery scope", () => {
       ["grep", { target: "packages/omo-opencode/src/features/background-agent" }],
       ["edit", { target: "packages/omo-opencode/src/features/worker-supervisor/watchdog.ts" }],
       ["write", { target: ".omo/omo.jsonc" }],
+      ["read", { target: "script/qa/worker-runtime-matrix/run.sh" }],
+      ["edit", { target: "script/qa/worker-runtime-matrix/fake-provider.mjs" }],
       ["bash", { command: "journalctl --user -u opencode.service -n 100" }],
       ["bash", { command: "systemctl --user restart opencode.service" }],
       ["bash", { command: "bun test packages/omo-opencode/src/features/delegation-first" }],
+      ["bash", { command: "bash script/qa/worker-runtime-matrix/run.sh provider-quota" }],
+      ["bash", { command: "bash script/qa/worker-runtime-matrix/run.sh" }],
+      ["bash", { command: "bash script/qa/worker-runtime-matrix/matrix.sh" }],
       ["background_output", {}],
       ["background_cancel", {}],
       ["session_info", {}],
@@ -130,6 +135,7 @@ describe("delegation recovery scope", () => {
       ["write", { target: "/tmp/omo-evidence/probe.txt" }],
       ["write", { target: "/var/tmp/omo-recovery/probe.json" }],
       ["write", { target: "~/.omo/evidence/probe.txt" }],
+      ["write", { target: ".omo/evidence/20261107-provider-quota-incident/README.md" }],
       ["edit", { target: "/tmp/omo-evidence/recovery.md" }],
     ] as const
 
@@ -142,5 +148,34 @@ describe("delegation recovery scope", () => {
     expect(evaluateRecoveryScope("write", { target: "packages/web/src/app/page.tsx" })).toMatchObject({ allowed: false })
     expect(evaluateRecoveryScope("read", { target: "apps/storefront/src/cart.ts" })).toMatchObject({ allowed: false })
     expect(evaluateRecoveryScope("bash", { command: "rm -rf packages/web" })).toMatchObject({ allowed: false })
+  })
+
+  test("allows only the exact worker-runtime harness invocation", () => {
+    // given the authorized acceptance harness commands
+    // when evaluated, then they are validation work
+    for (const command of [
+      "bash script/qa/worker-runtime-matrix/run.sh provider-quota",
+      "bash script/qa/worker-runtime-matrix/run.sh incident",
+      "bash script/qa/worker-runtime-matrix/matrix.sh",
+      "env OMO_BUILD_JOBS=1 bash script/qa/worker-runtime-matrix/run.sh provider-quota",
+    ]) {
+      expect(evaluateRecoveryScope("bash", { command }), command).toMatchObject({
+        allowed: true,
+        category: "validation",
+      })
+    }
+
+    // given traversal, shell-eval, unknown scenarios, or an appended mutation
+    // when evaluated, then they are denied
+    for (const command of [
+      "bash script/qa/worker-runtime-matrix/../../etc/passwd",
+      "bash script/qa/worker-runtime-matrix/run.sh --help",
+      "bash script/qa/worker-runtime-matrix/run.sh provider-quota extra",
+      "bash -c 'bash script/qa/worker-runtime-matrix/run.sh provider-quota'",
+      "bash script/qa/worker-runtime-matrix/run.sh provider-quota; rm -rf packages/web",
+      "bash script/qa/worker-runtime-matrix/run.sh provider-quota && curl http://example.invalid",
+    ]) {
+      expect(evaluateRecoveryScope("bash", { command }), command).toMatchObject({ allowed: false })
+    }
   })
 })

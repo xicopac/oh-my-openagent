@@ -16,6 +16,8 @@ let incidentAwaitingBackgroundOutput = false
 let incidentAwaitingTaskResult = false
 let incidentTaskCalls = 0
 const incidentRetrievedWorkers = new Set()
+let quotaWakeWorker = null
+let quotaAwaitingOutput = false
 const incidentTopics = [
   "authentication telemetry parser",
   "storage migration schema",
@@ -112,7 +114,7 @@ const server = http.createServer(async (req, res) => {
   const incidentWakeWorker = incidentWakeWorkers.find((workerID) => !incidentRetrievedWorkers.has(workerID))
     ?? incidentWakeWorkers.at(-1)
   append(
-    `[worker-matrix] call=${calls} scenario=${scenario} model=${model} title=${isTitle} root=${isRootProbe} child=${isChild} wake=${isWake} wake_blocked=${isWake && input.includes("BLOCKED")} tool_result=${hasToolResult}\n`,
+    `[worker-matrix] call=${calls} at=${Date.now()} scenario=${scenario} model=${model} title=${isTitle} root=${isRootProbe} child=${isChild} wake=${isWake} wake_blocked=${isWake && input.includes("BLOCKED")} tool_result=${hasToolResult} input_chars=${input.length}\n`,
   )
 
   if (isTitle) {
@@ -125,6 +127,43 @@ const server = http.createServer(async (req, res) => {
     events.sendSse(res, events.textEvents(calls, "COMPACTION_SUMMARY_PRESERVED"))
     return
   }
+  if (scenario === "provider-quota" && quotaAwaitingOutput && hasToolResult) {
+    quotaAwaitingOutput = false
+    const retrieved = input.includes("provider quota exhausted")
+      && input.includes("Free usage exceeded, subscribe to Go")
+    append(`[worker-matrix] terminal_result_retrieved=${retrieved} worker=${quotaWakeWorker}\n`)
+    if (retrieved) {
+      append(`[worker-matrix] definitive_exit call=${calls}\n`)
+      events.sendSse(res, events.textEvents(calls, "ROOT_EXIT_QUOTA_BLOCKED"))
+    } else {
+      events.sendSse(res, events.textEvents(calls, "ROOT_EXIT_QUOTA_MISSING"))
+    }
+    return
+  }
+  if (isWake && scenario === "provider-quota") {
+    const wakeWorkers = [...input.matchAll(/bg_[A-Za-z0-9]+/g)].map((match) => match[0])
+    const workerID = quotaWakeWorker ?? wakeWorkers.at(-1)
+    if (workerID) {
+      quotaWakeWorker = workerID
+      quotaAwaitingOutput = true
+      append(`[worker-matrix] parent_resumed call=${calls} worker=${workerID}\n`)
+      events.sendSse(
+        res,
+        events.toolCallEvents(calls, "background_output", "call_quota_output", {
+          task_id: workerID,
+          block: false,
+          full_session: false,
+          include_thinking: false,
+          include_tool_results: true,
+          message_limit: 20,
+        }),
+      )
+      return
+    }
+    append(`[worker-matrix] parent_resumed call=${calls} worker=missing\n`)
+    events.sendSse(res, events.textEvents(calls, "PARENT_RESUMED"))
+    return
+  }
   if (isWake && scenario !== "incident") {
     append(`[worker-matrix] parent_resumed call=${calls}\n`)
     events.sendSse(res, events.textEvents(calls, "PARENT_RESUMED"))
@@ -132,6 +171,19 @@ const server = http.createServer(async (req, res) => {
   }
   if (isChild) {
     childRequests += 1
+    if (scenario === "provider-quota") {
+      append(`[worker-matrix] quota_exhausted child_attempt=${childRequests}\n`)
+      res
+        .writeHead(429, { "content-type": "application/json", "retry-after": "60" })
+        .end(JSON.stringify({
+          error: {
+            message: "Free usage exceeded, subscribe to Go",
+            type: "insufficient_quota",
+            code: "insufficient_quota",
+          },
+        }))
+      return
+    }
     if (scenario === "normal") {
       events.sendSse(res, events.textEvents(calls, "CHILD_COMPLETED"))
       return
