@@ -38,6 +38,7 @@ note "started_at=$(date --iso-8601=seconds)"
 run_case normal normal-1
 run_case stall stall
 run_case empty empty
+run_case provider-quota provider-quota
 run_case incident repeated-empty-incident 360
 run_case cancel cancel
 run_case compact compact

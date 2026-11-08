@@ -11,9 +11,9 @@ bash script/qa/worker-runtime-matrix/matrix.sh
 ```
 
 The cases cover normal completion, a stalled provider with bounded free recovery,
-an empty provider response, the Garmin repeated-empty incident, explicit background
-cancellation, compaction while a worker is in flight, and three repeated unattended
-normal runs. The suite rejects
+an empty provider response, structured provider-quota exhaustion, the Garmin
+repeated-empty incident, explicit background cancellation, compaction while a
+worker is in flight, and three repeated unattended normal runs. The suite rejects
 real-store mutation, paid or unknown model requests, missing terminal states,
 human-message-dependent wake-up, orphan processes, unbounded wall time, and
 material growth in RSS, file descriptors, inotify descriptors, or evidence size.
