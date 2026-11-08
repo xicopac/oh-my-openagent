@@ -1,7 +1,7 @@
 # OMO Stabilization State
 
 Last updated: 2026-11-08 Europe/Madrid
-Status: Slices A-E are merged and the PR #5 artifact was deployed and verified before this incident task. The Garmin repeated-empty-worker follow-up is fixed and green on a real isolated OpenCode runtime. The provider-quota follow-up is now implemented, focused-tested, and green on a real isolated OpenCode runtime, including its empty negative control. This task has not changed production and does not deploy.
+Status: Slices A-E and both incident follow-ups are implemented and verified. The provider-quota change, the final build-toolchain fixes, and the consolidated nine-scenario runtime matrix are green on one reproducible candidate bundle. The final release candidate is prepared for delivery; it is not pushed, merged, or deployed by this task. Production remains on the Garmin-fix release.
 
 ## Git and release state
 
@@ -9,12 +9,14 @@ Status: Slices A-E are merged and the PR #5 artifact was deployed and verified b
 - Integrated merge commits: PR #1 `876cff5e0`, PR #2 `61f887117`, PR #3 `d4e2979b8`, PR #5 `4ed0ee31d`.
 - PR #4 is included exactly once: original #4 head `63e83c488`, integrated #3 head `1dbe9fcfe`, and the release head share tree `d408007c6b21230dea0713e9cd62575cea4e9abe`.
 - Slice E PR #5 merged as `4ed0ee31d3c5676397b88507ff724f94a19d55fb`; its merge tree exactly matches verified feature head `ffef6e1023e3990317ce8165ea22b8a12b522a90`.
-- The deployed code-bearing release commit is `4ed0ee31d3c5676397b88507ff724f94a19d55fb`; subsequent documentation-only merge commits do not change the verified bundle identity.
+- The Garmin follow-up merged as PR #8 `0ca44477e2518301015cd0bc88435eed0239cea0`; its verified deployed bundle is `cef322b80a5310e2ac4aa1b9b7b0b92d459cba3899dc011d9b4d3400a32249c4` (6,542,814 bytes).
+- The previously deployed Slice E commit `4ed0ee31d3c5676397b88507ff724f94a19d55fb` remains the rollback predecessor for `0ca44477e`; its bundle is `e8553ce477384e4eccdbca6a558a6bcf3313b5147b87f170242a21edf73fc341`.
 - Active Slice E worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-slice-e-release-gate`.
-- Active branch: `fix/stabilize-slice-e-release-gate`; incident implementation commit `187574414` and checkpoint commit `026dda5fe` follow PR #5.
+- Active branch: `fix/stabilize-slice-e-release-gate`; Garmin commits `187574414` / `026dda5fe` were merged by PR #8, and provider-quota commits `b57364031`, `9b051b463`, `90db34fa8`, `89a94aaf5` follow it.
+- Final build/harness commits: `48276ceed` (pin nested Bun and local TypeScript), `80f5180f3` (include provider quota in the matrix), `d38c1d037` (attach the idle probe after the incident question state).
 - Slice E commits before the final runtime checkpoint: `707b6b4d8` (durable plan/state) and `eaba2c2de` (reproducible adapter builds).
-- Production plugin: `/srv/dev/oh-my-openagent`. Its source, Git history, configuration, and unrelated dirty files were not changed; only the ignored runtime bundle `dist/index.js` was replaced atomically.
-- That atomic deployment predates the Garmin incident follow-up. The current task explicitly prohibits another production deployment and does not authorize source/configuration mutation, Git-history rewriting, guard bypasses, or real paid-provider traffic.
+- Production plugin: `/srv/dev/oh-my-openagent`. Its live bundle is the Garmin-fix artifact `cef322b8...` from merge `0ca44477e`; the provider-quota candidate is not deployed. Its source, Git history, configuration, and unrelated dirty files were not changed by this task.
+- This task explicitly prohibits production deployment and does not authorize source/configuration mutation, Git-history rewriting, guard bypasses, or real paid-provider traffic.
 
 ## Core reliability architecture now implemented
 
@@ -36,10 +38,11 @@ Status: Slices A-E are merged and the PR #5 artifact was deployed and verified b
 - Package metadata and every tracked generator enforce exact Bun 1.4.3 before writing.
 - Build concurrency is bounded by `OMO_BUILD_JOBS`.
 - Declared Codex, native, service-auth, and Senpi generated artifacts were regenerated under Bun 1.4.3 and proved byte-stable.
+- The build now supplies a temporary `bun` shim for nested package scripts, so `bun run <script>` cannot fall through to a host Bun, and it resolves the declaration compiler from the lockfile-pinned `node_modules/.bin/tsc` instead of a PATH wrapper.
 - Codex cache installs remove cache-local build-only `node_modules` after dependency/skill preparation; Codex 0.166 no longer rejects npm shims or workspace symlinks before hooks execute.
 - Generated Senpi ESM fixtures create their own module boundary and no longer inherit unrelated ancestor `/tmp/package.json` metadata.
 - `script/release-candidate.ts` requires a clean checkout, validates the rollback ancestor, runs the pinned build, rechecks cleanliness, and emits a versioned artifact plus deterministic manifest with commit, Bun/Node, lockfile, generated artifacts, evidence hashes, and rollback target.
-- `script/qa/worker-runtime-matrix/` is the one committed, sequential real-OpenCode runtime gate for normal, stall, empty, cancellation, compaction, and repeated unattended scenarios.
+- `script/qa/worker-runtime-matrix/` is the one committed, sequential real-OpenCode runtime gate for normal, stall, empty, provider quota, the repeated-empty incident, cancellation, compaction, and repeated unattended scenarios. The idle SSE probe attaches immediately before the incident abort so it observes the production idle transition instead of an earlier instance lifecycle stream.
 
 ## Garmin repeated-empty-worker incident follow-up
 
@@ -95,6 +98,17 @@ Status: Slices A-E are merged and the PR #5 artifact was deployed and verified b
 - Negative control `empty` on the same bundle still produces `BLOCKED: assistant turn completed with no output` with no `providerError`.
 - Evidence: ignored `.omo/evidence/20261107-provider-quota-incident/`.
 
+### Final consolidated release candidate
+
+- Build boundary fix: nested package scripts previously fell through to the host Bun 1.3.14 even when the parent build ran under 1.4.3; the Codex installer correctly rejected that toolchain, but the host `ai-job` wrapper masked the non-zero status. The build now prepends a temporary `bun` shim for the running executable and runs declarations from `node_modules/.bin/tsc`.
+- Harness fix: the incident SSE probe now attaches immediately before the abort, after the unanswered-question state exists. This observes the actual `session.idle` transition instead of an earlier per-instance lifecycle stream that can close during startup.
+- The committed matrix now includes `provider-quota`, so the final gate runs normal, stall, empty, provider quota, repeated-empty incident, cancellation, compaction, and three repeated unattended normal runs.
+- Final nine-scenario matrix on bundle `26de4238...` / source fingerprint `0ba3f5ba...`: all scenarios pass, `fails=0`; repeated bounds RSS 688,888-779,116 KiB, FDs 85-87, inotify FDs 2, sandbox bytes 228,616,879-228,618,340, CPU <=2,810 ticks, wall <=48 seconds, no orphan process. Real store counts stayed at 2,391 sessions / 278 worker records; only local free fake models were requested.
+- Evidence: ignored `.omo/evidence/20261108-final-runtime-matrix-v2/`.
+- Two clean release-candidate builds at code commit `d38c1d037` produce byte-identical artifact SHA-256 `26de42383d292a14935e18b175c542297df1248999222ab14c28b7c82795306d` (6,551,869 bytes), with identical manifests after normalizing the intentional output path.
+- Final manifest identity: Bun 1.4.3, Node 26.3.0, lockfile `fa2976ce...`, rollback target `0ca44477e` (current production). The candidate is not deployed.
+- Evidence: ignored `.omo/evidence/20261108-final-rc-a/`, `.omo/evidence/20261108-final-rc-b/`.
+
 ### Codex
 
 - Source/generated focused tests pass.
@@ -119,15 +133,16 @@ Status: Slices A-E are merged and the PR #5 artifact was deployed and verified b
 - The versioned deployed artifact is `/srv/dev/omo-releases/oh-my-openagent/4ed0ee31d3c5676397b88507ff724f94a19d55fb/index.js`; its hash is byte-identical to `/srv/dev/oh-my-openagent/dist/index.js`.
 - The previous live bundle is preserved at `/srv/dev/omo-releases/oh-my-openagent/rollback-e5b545d70b0686bbb560381c46ed7005d4953e06939e66190f581f44f032f94a/index.js`.
 - Post-deployment real OpenCode smoke passed normal completion, durable acknowledged wake, autonomous parent continuation, free local fake-provider enforcement, unchanged real stores, and no orphan processes. Evidence: ignored `.omo/evidence/20261105-production-deploy/normal/`.
+- Current production is the Garmin fix `0ca44477e` with live SHA-256 `cef322b80a5310e2ac4aa1b9b7b0b92d459cba3899dc011d9b4d3400a32249c4`; the preserved rollback is `e8553ce4...`. The provider-quota candidate has not replaced it.
 
 ## Current decision and next actions
 
-1. Commit the verified provider-quota source, harness, test, and checkpoint changes in atomic units; do not include `.omo/evidence/` or `dist/`.
-2. Push the follow-up branch and open reviewer-readable PR(s) against `release/canonical-20261029` when delivery is authorized.
-3. Verify the intended diff, CLA, CI, review, and merge readiness; merge with a merge commit only after every required check passes.
-4. Build and verify the exact merged follow-up commit with the pre-follow-up release head as rollback target.
-5. Stop before production deployment. Do not reconcile `dev`, mutate production source/configuration, bypass guards, allow unbounded retries, or contact a real paid provider.
-6. Wiki.js publication for the earlier PR #5 deployment remains a separate operational-documentation follow-up.
+1. Push the verified follow-up branch and open a reviewer-readable PR against `release/canonical-20261029` when delivery is authorized.
+2. Verify the intended diff, CLA, CI, review, and merge readiness; merge with a merge commit only after every required check passes.
+3. Rebuild the exact merged commit with current production `0ca44477e` as rollback target and recheck the artifact hash before any deployment decision.
+4. Stop before production deployment. Do not reconcile `dev`, mutate production source/configuration, bypass guards, allow unbounded retries, or contact a real paid provider.
+5. Wiki.js publication for the PR #5/Garmin deployment records remains a separate operational-documentation follow-up; the root-owned helper access is still unavailable.
+6. A host `tsc` wrapper process from the pre-fix PATH failure remains outside the release artifact and test ownership; it should be terminated during host cleanup. The fixed build no longer invokes that wrapper.
 
 ## Separate housekeeping and deferred work
 

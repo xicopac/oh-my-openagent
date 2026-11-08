@@ -230,6 +230,7 @@ The controlled local provider must exercise these scenarios sequentially:
 | Stall before first response | Coordinator detects deadline without parent activity; bounded retry or blocked outcome. |
 | Stall mid-response | Partial output is preserved; retry policy is bounded and deduplicated. |
 | Empty assistant response | No indefinite running task; failed or blocked terminal outcome. |
+| Provider quota exhaustion | One request, structured quota terminal, no recovery probe, parent wake. |
 | Worker/session disappearance | Durable blocked/failed result and parent wake survive deletion. |
 | Plugin restart | Live attempt reattaches or expires once; terminal outbox replays once. |
 | Cancellation | Exact owned resources released; unrelated processes remain alive. |
