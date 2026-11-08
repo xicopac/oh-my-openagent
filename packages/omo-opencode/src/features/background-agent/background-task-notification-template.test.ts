@@ -183,6 +183,73 @@ describe("buildBackgroundTaskNotificationText", () => {
     })
   })
 
+  describe("#given a blocked task with a structured provider error", () => {
+    const providerError = {
+      providerID: "openai",
+      modelID: "gpt-fake-free",
+      code: "insufficient_quota",
+      message: "Free usage exceeded, subscribe to Go",
+      statusCode: 429,
+      retryable: false,
+      quotaExhausted: true,
+    }
+
+    test("#when building the single-task notification #then it carries the exact provider error", () => {
+      const notification = buildBackgroundTaskNotificationText({
+        task: {
+          id: "bg_quota",
+          description: "quota worker",
+          status: "blocked",
+          error: "BLOCKED: provider quota exhausted: Free usage exceeded, subscribe to Go",
+          terminalReasonCode: "provider_quota_exhausted",
+          providerError,
+        },
+        duration: "3s",
+        statusText: "BLOCKED",
+        allComplete: false,
+        remainingCount: 1,
+        completedTasks: [],
+      })
+
+      expect(notification).toContain("[BACKGROUND TASK BLOCKED]")
+      expect(notification).toContain("**Provider Error:**")
+      expect(notification).toContain("Provider: openai/gpt-fake-free")
+      expect(notification).toContain("Code: insufficient_quota")
+      expect(notification).toContain("Message: Free usage exceeded, subscribe to Go")
+      expect(notification).toContain("Retryable: false")
+      expect(notification).toContain("Quota exhausted: true")
+    })
+
+    test("#when building the all-complete notification #then the failed summary keeps the provider error", () => {
+      const notification = buildBackgroundTaskNotificationText({
+        task: {
+          id: "bg_quota",
+          description: "quota worker",
+          status: "blocked",
+          error: "BLOCKED: provider quota exhausted: Free usage exceeded, subscribe to Go",
+          terminalReasonCode: "provider_quota_exhausted",
+          providerError,
+        },
+        duration: "3s",
+        statusText: "BLOCKED",
+        allComplete: true,
+        remainingCount: 0,
+        completedTasks: [{
+          id: "bg_quota",
+          description: "quota worker",
+          status: "blocked",
+          error: "BLOCKED: provider quota exhausted: Free usage exceeded, subscribe to Go",
+          terminalReasonCode: "provider_quota_exhausted",
+          providerError,
+        }],
+      })
+
+      expect(notification).toContain("[ALL BACKGROUND TASKS FINISHED - 1 FAILED]")
+      expect(notification).toContain("Provider: openai/gpt-fake-free")
+      expect(notification).toContain("Quota exhausted: true")
+    })
+  })
+
   describe("#given a single task notification with undefined description", () => {
     test("#when building the partial notification #then it uses task ID as fallback", () => {
       // given

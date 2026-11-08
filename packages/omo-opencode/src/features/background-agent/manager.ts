@@ -82,6 +82,8 @@ import {
 } from "./error-classifier"
 import { isEmptyNoProgressAssistantTurnInfo } from "./empty-assistant-turn"
 import { tryFallbackRetry } from "./fallback-retry-handler"
+import { buildProviderErrorSnapshot, formatProviderBlockedReason } from "./provider-error"
+import type { ProviderErrorSnapshot } from "./provider-error-types"
 import {
   messageUpdatedInfoHasParentWakeOutput,
   parentWakeOutputIsCausallyNewer,
@@ -1435,6 +1437,8 @@ The fallback retry session is now created and can be inspected directly.
       ...(record.terminalAt ? { completedAt: new Date(record.terminalAt) } : {}),
       ...(record.result ? { result: record.result } : {}),
       ...(record.terminalReason ? { error: record.terminalReason } : {}),
+      ...(record.terminalReasonCode ? { terminalReasonCode: record.terminalReasonCode } : {}),
+      ...(record.providerError ? { providerError: record.providerError } : {}),
       ...(record.model ? { model: record.model } : {}),
     }
   }
@@ -2132,13 +2136,15 @@ The fallback retry session is now created and can be inspected directly.
       const assistantError = info.error
       if (!assistantError) return
 
+      const errorName = extractErrorName(assistantError)
+      const errorMessage = extractErrorMessage(assistantError)
       const errorInfo = {
-        name: extractErrorName(assistantError),
-        message: extractErrorMessage(assistantError),
+        name: errorName,
+        message: errorMessage,
         statusCode: extractErrorStatusCode(assistantError),
       }
-      void this.tryFallbackRetry(task, errorInfo, "message.updated").catch((error) => {
-        log("[background-agent] Error handling message.updated fallback retry:", {
+      void this.handleAssistantMessageError(task, errorInfo, assistantError, errorName, errorMessage).catch((error) => {
+        log("[background-agent] Error handling message.updated error:", {
           error,
           taskId: task.id,
         })
@@ -2419,8 +2425,8 @@ The fallback retry session is now created and can be inspected directly.
 
       const errorMessage = typeof status.message === "string" ? status.message : undefined
       const errorInfo = { name: "SessionRetry", message: errorMessage }
-      void this.tryFallbackRetry(task, errorInfo, "session.status").catch((error) => {
-        log("[background-agent] Error handling session.status fallback retry:", {
+      void this.handleSessionRetryStatus(task, errorInfo, "session.status").catch((error) => {
+        log("[background-agent] Error handling session.status retry:", {
           error,
           taskId: task.id,
         })
@@ -2510,13 +2516,99 @@ The fallback retry session is now created and can be inspected directly.
     }).finally(releaseNotificationPreparation)
   }
 
+  private async handleAssistantMessageError(
+    task: BackgroundTask,
+    errorInfo: { name?: string; message?: string; statusCode?: number },
+    rawError: unknown,
+    errorName: string | undefined,
+    errorMessage: string | undefined,
+  ): Promise<void> {
+    if (task.status !== "running") return
+
+    const providerError = buildProviderErrorSnapshot(task, errorInfo, rawError)
+
+    if (await this.tryFallbackRetry(task, errorInfo, "message.updated", undefined, providerError)) return
+    if (task.status !== "running") return
+
+    if (providerError?.quotaExhausted) {
+      task.providerError = providerError
+      task.terminalReasonCode = "provider_quota_exhausted"
+      await this.failCrashedTask(task, formatProviderBlockedReason(providerError), "blocked")
+      return
+    }
+
+    if (isTerminalSessionError(errorInfo)) {
+      await this.handleSessionErrorEvent({
+        task,
+        errorInfo,
+        errorName,
+        errorMessage,
+        ...(providerError ? { providerError } : {}),
+        skipFallback: true,
+      })
+    }
+  }
+
+  private async handleSessionRetryStatus(
+    task: BackgroundTask,
+    errorInfo: { name?: string; message?: string; statusCode?: number },
+    source: string,
+  ): Promise<boolean> {
+    if (task.status !== "running") return false
+
+    const providerError = buildProviderErrorSnapshot(task, errorInfo)
+
+    if (await this.tryFallbackRetry(task, errorInfo, source, undefined, providerError)) return true
+    if (task.status !== "running") return true
+
+    if (providerError?.quotaExhausted) {
+      task.providerError = providerError
+      task.terminalReasonCode = "provider_quota_exhausted"
+      await this.failCrashedTask(task, formatProviderBlockedReason(providerError), "blocked")
+      return true
+    }
+
+    return false
+  }
+
+  private async handleTerminalEmptyTurn(
+    task: BackgroundTask,
+    terminalTurn: { empty?: boolean; error?: string },
+    source: string,
+  ): Promise<boolean> {
+    if (task.status !== "running") return true
+
+    const providerError = task.providerError
+      ?? (terminalTurn.error ? buildProviderErrorSnapshot(task, { message: terminalTurn.error }) : undefined)
+    if (providerError && !task.providerError) task.providerError = providerError
+    const terminalError = terminalTurn.error ?? providerError?.message
+    const terminalReason = providerError?.quotaExhausted
+      ? formatProviderBlockedReason(providerError)
+      : formatTerminalEmptyAssistantTurnReason(terminalError)
+    if (await this.tryFallbackRetry(
+      task,
+      { name: "TerminalEmptyAssistantTurn", message: terminalReason },
+      source,
+      "terminal_empty_output",
+      providerError,
+    )) {
+      return true
+    }
+
+    if (providerError?.quotaExhausted) task.terminalReasonCode = "provider_quota_exhausted"
+    await this.failCrashedTask(task, terminalReason, "blocked")
+    return true
+  }
+
   private async handleSessionErrorEvent(args: {
     task: BackgroundTask
     errorInfo: { name?: string; message?: string; statusCode?: number }
     errorName: string | undefined
     errorMessage: string | undefined
+    providerError?: ProviderErrorSnapshot
+    skipFallback?: boolean
   }): Promise<void> {
-    const { task, errorInfo, errorMessage, errorName } = args
+    const { task, errorInfo, errorMessage, errorName, providerError, skipFallback } = args
 
     if (!task.fallbackChain && task.sessionId) {
       const sessionFallbackChain = this.modelFallbackControllerAccessor?.getSessionFallbackChain(task.sessionId)
@@ -2549,7 +2641,14 @@ The fallback retry session is now created and can be inspected directly.
       )
     }
 
-    if (await this.tryFallbackRetry(task, errorInfo, "session.error")) {
+    const resolvedProviderError = providerError ?? buildProviderErrorSnapshot(task, errorInfo)
+    if (!skipFallback && await this.tryFallbackRetry(task, errorInfo, "session.error", undefined, resolvedProviderError)) {
+      return
+    }
+    if (resolvedProviderError) task.providerError = resolvedProviderError
+    if (resolvedProviderError?.quotaExhausted) {
+      task.terminalReasonCode = "provider_quota_exhausted"
+      await this.failCrashedTask(task, formatProviderBlockedReason(resolvedProviderError), "blocked")
       return
     }
 
@@ -2587,15 +2686,9 @@ The fallback retry session is now created and can be inspected directly.
       }
     }
 
+    if (!this.claimTerminalTask(task, "error", errorMsg)) return
     const partialResult = await this.captureTerminalResult(task)
     if (partialResult !== undefined) task.result = partialResult
-    if (task.currentAttemptID) {
-      finalizeAttempt(task, task.currentAttemptID, "error", errorMsg)
-    } else {
-      task.status = "error"
-      task.error = errorMsg
-      task.completedAt = new Date()
-    }
     if (task.rootSessionId) {
       this.unregisterRootDescendant(task.rootSessionId)
     }
@@ -2648,6 +2741,7 @@ The fallback retry session is now created and can be inspected directly.
     errorInfo: { name?: string; message?: string; statusCode?: number },
     source: string,
     eligibility?: "terminal_empty_output",
+    providerError?: ProviderErrorSnapshot,
   ): Promise<boolean> {
     const previousSessionID = task.sessionId
     let retryingNotification: string | undefined
@@ -2656,6 +2750,7 @@ The fallback retry session is now created and can be inspected directly.
       errorInfo,
       source,
       ...(eligibility ? { eligibility } : {}),
+      ...(providerError ? { providerError } : {}),
       concurrencyManager: this.concurrencyManager,
       client: this.client,
       idleDeferralTimers: this.idleDeferralTimers,
@@ -2681,6 +2776,10 @@ The task was re-queued on a fallback model after a retryable failure.
       },
     })
     const retried = await result
+    if (retried) {
+      task.providerError = undefined
+      task.terminalReasonCode = undefined
+    }
     if (retried && retryingNotification) {
       const parentPromptContext = await this.resolveParentWakePromptContext(task)
       this.queuePendingParentWake(
@@ -2756,6 +2855,8 @@ The task was re-queued on a fallback model after a retryable failure.
       terminalOutcome: outcome,
       ...(task.currentAttemptID ? { terminalAttemptID: task.currentAttemptID } : {}),
       ...(reason !== undefined ? { terminalReason: reason } : task.error !== undefined ? { terminalReason: task.error } : {}),
+      ...(task.terminalReasonCode ? { terminalReasonCode: task.terminalReasonCode } : {}),
+      ...(task.providerError ? { providerError: task.providerError } : {}),
       ...(task.result !== undefined ? { result: task.result } : {}),
       ...(task.attempts !== undefined ? { attempts: task.attempts.length } : {}),
     }
@@ -3448,6 +3549,8 @@ This worker reached a terminal blocked state for the exact reason above. Read-on
       description: task.description,
       status: task.status,
       error: task.error,
+      terminalReasonCode: task.terminalReasonCode,
+      providerError: task.providerError,
       attempts: cloneAttempts(task),
     })
 
@@ -3470,7 +3573,15 @@ This worker reached a terminal blocked state for the exact reason above. Read-on
     }
 
     const completedTasks = allComplete
-      ? (this.completedTaskSummaries.get(task.parentSessionId) ?? [{ id: task.id, description: task.description, status: task.status, error: task.error, attempts: cloneAttempts(task) }])
+      ? (this.completedTaskSummaries.get(task.parentSessionId) ?? [{
+        id: task.id,
+        description: task.description,
+        status: task.status,
+        error: task.error,
+        terminalReasonCode: task.terminalReasonCode,
+        providerError: task.providerError,
+        attempts: cloneAttempts(task),
+      }])
       : []
 
     if (allComplete) {
@@ -3771,21 +3882,38 @@ This worker reached a terminal blocked state for the exact reason above. Read-on
     return verifySessionStillExists(this.client, sessionID, this.directory)
   }
 
+  private claimTerminalTask(
+    task: BackgroundTask,
+    status: "error" | "blocked" | "interrupt",
+    errorMessage: string,
+  ): boolean {
+    if (task.status !== "running") {
+      log("[background-agent] Terminal state already claimed; skipping duplicate transition:", {
+        taskId: task.id,
+        currentStatus: task.status,
+        attemptedStatus: status,
+      })
+      return false
+    }
+    if (task.currentAttemptID) {
+      const attempt = finalizeAttempt(task, task.currentAttemptID, status, errorMessage)
+      if (attempt) return true
+    }
+    task.status = status
+    task.error = errorMessage
+    task.completedAt = new Date()
+    return true
+  }
+
   private async failCrashedTask(
     task: BackgroundTask,
     errorMessage: string,
     outcome: "failed" | "blocked" = "failed",
   ): Promise<void> {
+    const terminalStatus = outcome === "blocked" ? "blocked" : "error"
+    if (!this.claimTerminalTask(task, terminalStatus, errorMessage)) return
     const partialResult = await this.captureTerminalResult(task)
     if (partialResult !== undefined) task.result = partialResult
-    const terminalStatus = outcome === "blocked" ? "blocked" : "error"
-    if (task.currentAttemptID) {
-      finalizeAttempt(task, task.currentAttemptID, terminalStatus, errorMessage)
-    } else {
-      task.status = terminalStatus
-      task.error = errorMessage
-      task.completedAt = new Date()
-    }
     if (task.rootSessionId) {
       this.unregisterRootDescendant(task.rootSessionId)
     }
@@ -3885,7 +4013,7 @@ This worker reached a terminal blocked state for the exact reason above. Read-on
               ? (sessionStatus as { message?: string }).message
               : undefined
             const errorInfo = { name: "SessionRetry", message: retryMessage }
-            if (await this.tryFallbackRetry(task, errorInfo, "polling:session.status")) {
+            if (await this.handleSessionRetryStatus(task, errorInfo, "polling:session.status")) {
               continue
             }
           }
@@ -3899,16 +4027,7 @@ This worker reached a terminal blocked state for the exact reason above. Read-on
               const terminalTurn = await this.detectTerminalAssistantTurn(sessionID)
               if (terminalTurn.error || terminalTurn.empty) {
                 if (quietMs >= EMPTY_TURN_TERMINAL_MS) {
-                  const terminalReason = formatTerminalEmptyAssistantTurnReason(terminalTurn.error)
-                  if (await this.tryFallbackRetry(
-                    task,
-                    { name: "TerminalEmptyAssistantTurn", message: terminalReason },
-                    "polling:active-empty-turn",
-                    "terminal_empty_output",
-                  )) {
-                    continue
-                  }
-                  await this.failCrashedTask(task, terminalReason, "blocked")
+                  await this.handleTerminalEmptyTurn(task, terminalTurn, "polling:active-empty-turn")
                   continue
                 }
                 log("[background-agent] Active session ended on an empty/aborted assistant turn; bounded wait:", {
@@ -3960,16 +4079,7 @@ This worker reached a terminal blocked state for the exact reason above. Read-on
             const quietMs = lastProgressAt > 0 ? Date.now() - lastProgressAt : 0
             const terminalTurn = await this.detectTerminalAssistantTurn(sessionID)
             if ((terminalTurn.empty || terminalTurn.error) && quietMs >= EMPTY_TURN_TERMINAL_MS) {
-              const terminalReason = formatTerminalEmptyAssistantTurnReason(terminalTurn.error)
-              if (await this.tryFallbackRetry(
-                task,
-                { name: "TerminalEmptyAssistantTurn", message: terminalReason },
-                "polling:idle-empty-turn",
-                "terminal_empty_output",
-              )) {
-                continue
-              }
-              await this.failCrashedTask(task, terminalReason, "blocked")
+              await this.handleTerminalEmptyTurn(task, terminalTurn, "polling:idle-empty-turn")
               continue
             }
             if (sessionGoneThresholdReached) {

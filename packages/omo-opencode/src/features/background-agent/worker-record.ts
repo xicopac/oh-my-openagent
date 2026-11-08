@@ -39,6 +39,8 @@ const TERMINAL_RECORD_FIELDS = new Set<keyof WorkerRecord>([
   "terminalEventID",
   "terminalAttemptID",
   "terminalReason",
+  "terminalReasonCode",
+  "providerError",
   "result",
   "resultTruncated",
   "attempts",

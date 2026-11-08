@@ -1,4 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, test, expect, beforeEach, afterEach, afterAll, spyOn, mock } from "bun:test"
 import type { PluginInput } from "@opencode-ai/plugin"
 import * as sharedModule from "../../shared"
@@ -20,6 +22,7 @@ import type { ConcurrencyManager } from "./concurrency"
 import { MIN_IDLE_TIME_MS } from "./constants"
 import { BackgroundManager } from "./manager"
 import { _resetForTesting as resetProcessCleanupState } from "./process-cleanup"
+import { createWorkerRecordStore, type WorkerRecordStore } from "./worker-record"
 import { clearBackgroundTaskRegistryForTesting } from "./task-registry"
 import type { BackgroundTask, ResumeInput } from "./types"
 
@@ -535,6 +538,340 @@ describe("BackgroundManager session.error fallback hydration", () => {
     expect(getSessionFallbackChain).toHaveBeenCalledWith("child-session")
     expect(task.fallbackChain).toEqual(fallbackChain)
     expect(capturedFallbackChain).toEqual(fallbackChain)
+  })
+})
+
+describe("BackgroundManager provider quota terminalization", () => {
+  test("session.error quota exhaustion becomes a structured blocked terminal", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "omo-quota-manager-"))
+    const workerRecordStore: WorkerRecordStore = createWorkerRecordStore({ rootDir })
+    workerRecordStore.save({
+      schemaVersion: 1,
+      workerID: "bg_quota",
+      parentSessionID: "parent-session",
+      parentMessageID: "msg-parent",
+      agent: "test-agent",
+      description: "quota worker",
+      state: "running",
+      createdAt: "2026-11-07T00:00:00.000Z",
+      updatedAt: "2026-11-07T00:00:00.000Z",
+    })
+    const manager = createBackgroundManagerWithOptions({
+      enableParentSessionNotifications: false,
+      workerRecordStore,
+    })
+    const task = createMockTask({
+      id: "bg_quota",
+      parentSessionId: "parent-session",
+      sessionId: undefined,
+      status: "running",
+      model: { providerID: "openai", modelID: "gpt-fake-free" },
+    })
+
+    try {
+      await (cast<{
+        handleSessionErrorEvent: (args: {
+          task: BackgroundTask
+          errorInfo: { name?: string; message?: string; statusCode?: number }
+          errorName: string | undefined
+          errorMessage: string | undefined
+        }) => Promise<void>
+      }>(manager)).handleSessionErrorEvent({
+        task,
+        errorInfo: {
+          name: "APIError",
+          message: "Free usage exceeded, subscribe to Go",
+          statusCode: 429,
+        },
+        errorName: "APIError",
+        errorMessage: "Free usage exceeded, subscribe to Go",
+      })
+
+      expect(task.status).toBe("blocked")
+      expect(task.error).toContain("Free usage exceeded, subscribe to Go")
+      expect(task.terminalReasonCode).toBe("provider_quota_exhausted")
+      expect(task.attemptCount).toBeUndefined()
+      expect(task.providerError).toMatchObject({
+        providerID: "openai",
+        modelID: "gpt-fake-free",
+        message: "Free usage exceeded, subscribe to Go",
+        statusCode: 429,
+        retryable: false,
+        quotaExhausted: true,
+      })
+      expect(workerRecordStore.get("bg_quota")).toMatchObject({
+        state: "blocked",
+        terminalOutcome: "blocked",
+        terminalReasonCode: "provider_quota_exhausted",
+        providerError: {
+          providerID: "openai",
+          modelID: "gpt-fake-free",
+          message: "Free usage exceeded, subscribe to Go",
+          retryable: false,
+          quotaExhausted: true,
+        },
+      })
+    } finally {
+      manager.shutdown()
+      rmSync(rootDir, { recursive: true, force: true })
+    }
+  })
+
+  test("message.updated quota error without assistant output reaches the parent notification", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "omo-quota-event-"))
+    const workerRecordStore: WorkerRecordStore = createWorkerRecordStore({ rootDir })
+    workerRecordStore.save({
+      schemaVersion: 1,
+      workerID: "bg_quota_event",
+      sessionID: "ses_quota_event",
+      parentSessionID: "parent-session",
+      parentMessageID: "msg-parent",
+      agent: "test-agent",
+      description: "quota event worker",
+      state: "running",
+      createdAt: "2026-11-07T00:00:00.000Z",
+      updatedAt: "2026-11-07T00:00:00.000Z",
+    })
+    const manager = createBackgroundManagerWithOptions({ workerRecordStore })
+    const notifyParentSession = mock(async (_task: BackgroundTask) => {})
+    ;(cast<{ notifyParentSession: (task: BackgroundTask) => Promise<void> }>(manager)).notifyParentSession = notifyParentSession
+    const task = createMockTask({
+      id: "bg_quota_event",
+      sessionId: "ses_quota_event",
+      parentSessionId: "parent-session",
+      status: "running",
+      model: { providerID: "openai", modelID: "gpt-fake-free" },
+    })
+    getTaskMap(manager).set(task.id, task)
+
+    try {
+      manager.handleEvent({
+        type: "message.updated",
+        properties: {
+          info: {
+            id: "msg_quota",
+            sessionID: "ses_quota_event",
+            role: "assistant",
+            error: {
+              name: "APIError",
+              data: { message: "Free usage exceeded, subscribe to Go", statusCode: 429 },
+            },
+          },
+        },
+      })
+      await flushBackgroundNotifications()
+
+      expect(task.status).toBe("blocked")
+      expect(task.terminalReasonCode).toBe("provider_quota_exhausted")
+      expect(task.providerError).toMatchObject({
+        message: "Free usage exceeded, subscribe to Go",
+        retryable: false,
+        quotaExhausted: true,
+      })
+      expect(notifyParentSession).toHaveBeenCalledTimes(1)
+      const notifiedTask = notifyParentSession.mock.calls[0]?.[0]
+      expect(notifiedTask?.error).toContain("Free usage exceeded, subscribe to Go")
+      expect(notifiedTask?.terminalReasonCode).toBe("provider_quota_exhausted")
+      expect(workerRecordStore.get("bg_quota_event")).toMatchObject({
+        state: "blocked",
+        terminalReasonCode: "provider_quota_exhausted",
+        providerError: {
+          message: "Free usage exceeded, subscribe to Go",
+          retryable: false,
+          quotaExhausted: true,
+        },
+      })
+    } finally {
+      manager.shutdown()
+      rmSync(rootDir, { recursive: true, force: true })
+    }
+  })
+
+  test("session.status retry quota error becomes a structured blocked terminal", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "omo-quota-status-"))
+    const workerRecordStore: WorkerRecordStore = createWorkerRecordStore({ rootDir })
+    workerRecordStore.save({
+      schemaVersion: 1,
+      workerID: "bg_quota_status",
+      sessionID: "ses_quota_status",
+      parentSessionID: "parent-session",
+      parentMessageID: "msg-parent",
+      agent: "test-agent",
+      description: "quota status worker",
+      state: "running",
+      createdAt: "2026-11-07T00:00:00.000Z",
+      updatedAt: "2026-11-07T00:00:00.000Z",
+    })
+    const manager = createBackgroundManagerWithOptions({
+      enableParentSessionNotifications: false,
+      workerRecordStore,
+    })
+    const task = createMockTask({
+      id: "bg_quota_status",
+      sessionId: "ses_quota_status",
+      parentSessionId: "parent-session",
+      status: "running",
+      model: { providerID: "openai", modelID: "gpt-fake-free" },
+    })
+    getTaskMap(manager).set(task.id, task)
+
+    try {
+      manager.handleEvent({
+        type: "session.status",
+        properties: {
+          sessionID: "ses_quota_status",
+          status: {
+            type: "retry",
+            message: "Free usage exceeded, subscribe to Go",
+          },
+        },
+      })
+      await flushBackgroundNotifications()
+
+      expect(task.status).toBe("blocked")
+      expect(task.terminalReasonCode).toBe("provider_quota_exhausted")
+      expect(task.providerError).toMatchObject({
+        message: "Free usage exceeded, subscribe to Go",
+        retryable: false,
+        quotaExhausted: true,
+      })
+      expect(workerRecordStore.get("bg_quota_status")).toMatchObject({
+        state: "blocked",
+        terminalOutcome: "blocked",
+        terminalReasonCode: "provider_quota_exhausted",
+      })
+    } finally {
+      manager.shutdown()
+      rmSync(rootDir, { recursive: true, force: true })
+    }
+  })
+
+  test("recovers structured quota fields from the durable worker record", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "omo-quota-durable-"))
+    const workerRecordStore: WorkerRecordStore = createWorkerRecordStore({ rootDir })
+    workerRecordStore.save({
+      schemaVersion: 1,
+      workerID: "bg_quota_durable",
+      sessionID: "ses_quota_durable",
+      parentSessionID: "parent-session",
+      parentMessageID: "msg-parent",
+      agent: "test-agent",
+      description: "durable quota worker",
+      state: "running",
+      createdAt: "2026-11-07T00:00:00.000Z",
+      updatedAt: "2026-11-07T00:00:00.000Z",
+    })
+    workerRecordStore.terminalize("bg_quota_durable", {
+      state: "blocked",
+      terminalOutcome: "blocked",
+      terminalAt: "2026-11-07T00:01:00.000Z",
+      terminalReason: "BLOCKED: provider quota exhausted: Free usage exceeded, subscribe to Go",
+      terminalReasonCode: "provider_quota_exhausted",
+      providerError: {
+        providerID: "openai",
+        modelID: "gpt-fake-free",
+        message: "Free usage exceeded, subscribe to Go",
+        retryable: false,
+        quotaExhausted: true,
+      },
+    })
+    const manager = createBackgroundManagerWithOptions({ workerRecordStore })
+
+    try {
+      const task = manager.getTask("bg_quota_durable")
+      expect(task).toMatchObject({
+        status: "blocked",
+        terminalReasonCode: "provider_quota_exhausted",
+        error: "BLOCKED: provider quota exhausted: Free usage exceeded, subscribe to Go",
+        providerError: {
+          providerID: "openai",
+          modelID: "gpt-fake-free",
+          message: "Free usage exceeded, subscribe to Go",
+          retryable: false,
+          quotaExhausted: true,
+        },
+      })
+    } finally {
+      manager.shutdown()
+      rmSync(rootDir, { recursive: true, force: true })
+    }
+  })
+
+  test("claims the blocked terminal synchronously before result capture settles", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "omo-quota-race-"))
+    const workerRecordStore = createWorkerRecordStore({ rootDir })
+    workerRecordStore.save({
+      schemaVersion: 1,
+      workerID: "bg_quota_race",
+      parentSessionID: "parent-session",
+      parentMessageID: "msg-parent",
+      agent: "test-agent",
+      description: "quota race worker",
+      state: "running",
+      createdAt: "2026-11-07T00:00:00.000Z",
+      updatedAt: "2026-11-07T00:00:00.000Z",
+    })
+    const manager = createBackgroundManagerWithOptions({
+      enableParentSessionNotifications: false,
+      workerRecordStore,
+    })
+    const task = createMockTask({
+      id: "bg_quota_race",
+      parentSessionId: "parent-session",
+      status: "running",
+      model: { providerID: "openai", modelID: "gpt-fake-free" },
+    })
+    task.terminalReasonCode = "provider_quota_exhausted"
+    task.providerError = {
+      providerID: "openai",
+      modelID: "gpt-fake-free",
+      message: "Free usage exceeded, subscribe to Go",
+      retryable: false,
+      quotaExhausted: true,
+    }
+    getTaskMap(manager).set(task.id, task)
+
+    let releaseCapture: () => void = () => {}
+    const capture = new Promise<string | undefined>((resolve) => {
+      releaseCapture = () => resolve(undefined)
+    })
+    ;(cast<{ captureTerminalResult: (task: BackgroundTask) => Promise<string | undefined> }>(manager))
+      .captureTerminalResult = () => capture
+
+    try {
+      const failure = (cast<{
+        failCrashedTask: (
+          task: BackgroundTask,
+          errorMessage: string,
+          outcome: "failed" | "blocked",
+        ) => Promise<void>
+      }>(manager)).failCrashedTask(
+        task,
+        "BLOCKED: provider quota exhausted: Free usage exceeded, subscribe to Go",
+        "blocked",
+      )
+
+      expect(task.status).toBe("blocked")
+      expect(task.terminalReasonCode).toBe("provider_quota_exhausted")
+      expect(await tryCompleteTaskForTest(manager, task)).toBe(false)
+
+      releaseCapture()
+      await failure
+
+      expect(workerRecordStore.get("bg_quota_race")).toMatchObject({
+        state: "blocked",
+        terminalOutcome: "blocked",
+        terminalReasonCode: "provider_quota_exhausted",
+        providerError: {
+          message: "Free usage exceeded, subscribe to Go",
+          retryable: false,
+          quotaExhausted: true,
+        },
+      })
+    } finally {
+      manager.shutdown()
+      rmSync(rootDir, { recursive: true, force: true })
+    }
   })
 })
 

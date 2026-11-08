@@ -203,8 +203,14 @@ describe("Atlas-spawned subagent runtime fallback", () => {
 
     //#then
     const task = manager.getTask(taskID)
-    expect(task?.status).toBe("error")
-    expect(task?.error).toBe("The usage limit has been reached")
+    expect(task?.status).toBe("blocked")
+    expect(task?.terminalReasonCode).toBe("provider_quota_exhausted")
+    expect(task?.error).toContain("The usage limit has been reached")
+    expect(task?.providerError).toMatchObject({
+      message: "The usage limit has been reached",
+      retryable: false,
+      quotaExhausted: true,
+    })
     expect(task?.attemptCount).toBe(1)
     expect(createdSessions).toHaveLength(2)
 

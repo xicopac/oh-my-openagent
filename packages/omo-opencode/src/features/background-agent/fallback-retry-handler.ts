@@ -14,6 +14,7 @@ import { transformModelForProvider } from "../../shared/provider-model-id-transf
 import { abortWithTimeout } from "./abort-with-timeout"
 import { ensureCurrentAttempt, scheduleRetryAttempt } from "./attempt-lifecycle"
 import { filterProvidersServingModel } from "./fallback-provider-model-filter"
+import type { ProviderErrorSnapshot } from "./provider-error-types"
 
 export class TeamModeFallbackError extends Error {
   constructor(message: string) {
@@ -57,6 +58,7 @@ export async function tryFallbackRetry(args: {
   errorInfo: { name?: string; message?: string; statusCode?: number }
   source: string
   eligibility?: FallbackRetryEligibility
+  providerError?: ProviderErrorSnapshot
   concurrencyManager: ConcurrencyManager
   client: OpencodeClient
   idleDeferralTimers: Map<string, ReturnType<typeof setTimeout>>
@@ -81,6 +83,9 @@ export async function tryFallbackRetry(args: {
   const { task, errorInfo, source, concurrencyManager, client, idleDeferralTimers, queuesByKey, processKey, onRetrying } = args
   const deps = { ...defaultFallbackRetryHandlerDeps, ...args.deps }
   const fallbackChain = task.fallbackChain
+  const exhaustedProviderID = args.providerError?.quotaExhausted
+    ? task.model?.providerID?.toLowerCase()
+    : undefined
   const canUseProviderExhaustionFallback = deps.isProviderExhaustionFallbackEligible(errorInfo)
   const retryEligible = args.eligibility === "terminal_empty_output"
     || deps.shouldRetryError(errorInfo)
@@ -126,18 +131,32 @@ export async function tryFallbackRetry(args: {
       modelsByProvider: providerModelsCache?.models,
       transformModelForProvider: deps.transformModelForProvider,
     })
-    if (!isReachable({ ...candidate, providers: servingProviders })) {
-      deps.log("[background-agent] Skipping fallback no connected provider serves:", {
+    const eligibleServingProviders = exhaustedProviderID
+      ? servingProviders.filter((provider) => provider.toLowerCase() !== exhaustedProviderID)
+      : servingProviders
+    if (eligibleServingProviders.length === 0) {
+      deps.log("[background-agent] Skipping fallback with no non-exhausted provider:", {
         taskId: task.id,
         source,
         model: candidate.model,
         providers: candidate.providers,
+        exhaustedProviderID,
+      })
+      continue
+    }
+    if (!isReachable({ ...candidate, providers: eligibleServingProviders })) {
+      deps.log("[background-agent] Skipping fallback on unreachable or exhausted provider:", {
+        taskId: task.id,
+        source,
+        model: candidate.model,
+        providers: candidate.providers,
+        exhaustedProviderID,
       })
       continue
     }
     const candidateProviderID = deps.selectFallbackProvider(
-      servingProviders,
-      task.model?.providerID,
+      eligibleServingProviders,
+      exhaustedProviderID ? undefined : task.model?.providerID,
     )
     const candidateModelID = deps.transformModelForProvider(candidateProviderID, candidate.model)
     const isNoOpFallback =

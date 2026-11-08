@@ -68,4 +68,36 @@ describe("formatTaskResult", () => {
     expect(output).not.toContain("Error fetching messages")
     expect(messageReads).toBe(0)
   })
+
+  test("returns durable provider quota details after the worker session is gone", async () => {
+    const task = createTask({
+      status: "blocked",
+      error: "BLOCKED: provider quota exhausted: Free usage exceeded, subscribe to Go",
+      terminalReasonCode: "provider_quota_exhausted",
+      providerError: {
+        providerID: "openai",
+        modelID: "gpt-fake-free",
+        code: "insufficient_quota",
+        message: "Free usage exceeded, subscribe to Go",
+        statusCode: 429,
+        retryable: false,
+        quotaExhausted: true,
+      },
+    })
+    const client: BackgroundOutputClient = {
+      session: {
+        messages: async () => {
+          throw new Error("session deleted")
+        },
+      },
+    }
+
+    const output = await formatTaskResult(task, client)
+
+    expect(output).toContain("BLOCKED: provider quota exhausted")
+    expect(output).toContain("Provider Error:")
+    expect(output).toContain("openai/gpt-fake-free")
+    expect(output).toContain("Retryable: false")
+    expect(output).toContain("Quota exhausted: true")
+  })
 })

@@ -90,6 +90,43 @@ describe("worker record terminal compare-and-set", () => {
     expect(disk.result).toBe("partial result")
   })
 
+  test("provider quota terminal fields persist atomically with the blocked wake", () => {
+    const store = createStore()
+    store.save(runningRecord("bg_quota"))
+
+    const committed = store.terminalize("bg_quota", {
+      state: "blocked",
+      terminalOutcome: "blocked",
+      terminalAt: "2026-10-30T08:00:00.000Z",
+      terminalAttemptID: "att_quota",
+      terminalReason: "BLOCKED: provider quota exhausted: Free usage exceeded, subscribe to Go",
+      terminalReasonCode: "provider_quota_exhausted",
+      providerError: {
+        providerID: "openai",
+        modelID: "gpt-fake-free",
+        code: "insufficient_quota",
+        message: "Free usage exceeded, subscribe to Go",
+        statusCode: 429,
+        retryable: false,
+        quotaExhausted: true,
+      },
+    })
+    const disk = JSON.parse(readFileSync(workerRecordPath(store.rootDir, "bg_quota"), "utf8")) as WorkerRecord
+
+    expect(committed?.committed).toBe(true)
+    expect(disk).toMatchObject({
+      state: "blocked",
+      terminalOutcome: "blocked",
+      terminalReasonCode: "provider_quota_exhausted",
+      providerError: {
+        message: "Free usage exceeded, subscribe to Go",
+        retryable: false,
+        quotaExhausted: true,
+      },
+      wakeState: "pending",
+    })
+  })
+
   test("wake delivery state is monotonic and pruning requires acknowledgement", () => {
     const store = createStore()
     store.save(runningRecord("bg_outbox"))
