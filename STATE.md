@@ -1,7 +1,7 @@
 # OMO Stabilization State
 
-Last updated: 2026-11-07 Europe/Madrid
-Status: Slices A-E are merged and the PR #5 artifact was deployed and verified before this incident task. The Garmin repeated-empty-worker follow-up is fixed and green on a real isolated OpenCode runtime; its follow-up PR and merge gates remain. This task has not changed production.
+Last updated: 2026-11-08 Europe/Madrid
+Status: Slices A-E are merged and the PR #5 artifact was deployed and verified before this incident task. The Garmin repeated-empty-worker follow-up is fixed and green on a real isolated OpenCode runtime. The provider-quota follow-up is now implemented, focused-tested, and green on a real isolated OpenCode runtime, including its empty negative control. This task has not changed production and does not deploy.
 
 ## Git and release state
 
@@ -49,6 +49,18 @@ Status: Slices A-E are merged and the PR #5 artifact was deployed and verified b
 - The exact incident harness now binds bundle/source fingerprints, drives the real HTTP session API and SSE stream in isolated XDG/HOME/DB state, retrieves four exact terminal results, proves two failures and two bounded probes, requires halt rejection with no fifth worker, and requires a model-visible definitive exit.
 - Garmin source, production configuration/source/bundle/service, real providers, and paid models remain untouched.
 
+## Provider-quota incident follow-up (2026-11-07/08)
+
+- A delegated provider can return quota exhaustion instead of an assistant turn. The lifecycle now preserves that as a distinct terminal class instead of collapsing it into generic empty-output or inactivity text.
+- Structured `providerError` and `terminalReasonCode=provider_quota_exhausted` persist atomically with the blocked terminal record and wake outbox. `providerError` carries provider/model, code, exact message, `retryable=false`, and `quotaExhausted=true`; a canonical `insufficient_quota` code is used when OpenCode's retry envelope omits the raw code.
+- Quota terminalization now wins the in-memory race: `claimTerminalTask` performs a synchronous first-writer claim before awaiting result capture in `failCrashedTask` and the terminal `session.error` path.
+- Fallback excludes the exhausted provider but still permits a different authorized free provider from the configured chain. The exhausted provider receives exactly one request; no paid/unknown model is dispatched without explicit approval.
+- Parent wake text and all-complete summaries render the structured provider error. `background_output` and task status serve the same durable fields after the child session is gone.
+- The delegation recovery scope authorizes exactly the worker-runtime harness invocations (`run.sh <known-scenario>` and `matrix.sh`) while traversal, `-c`, extra arguments, and compound mutations remain denied.
+- The harness now implements the `provider-quota` scenario: isolated real OpenCode 1.19.3, local fake provider returning HTTP 429 `Free usage exceeded, subscribe to Go` with `retry-after: 60`, exact bundle/source binding, one-request ledger, durable/wake/retrieval assertions, no recovery probe, unchanged real stores, and cleanup receipts.
+- The Bun 1.4.3 build boundary now propagates the running pinned executable into nested build steps and the Senpi generator instead of resolving a host Bun on PATH.
+- Evidence: ignored `.omo/evidence/20261107-provider-quota-incident/` (`green/`, `negative-control/`, `focused/`, `RESOLUTION_20261108.md`).
+
 ## Verification evidence
 
 ### OpenCode
@@ -72,6 +84,16 @@ Status: Slices A-E are merged and the PR #5 artifact was deployed and verified b
 - `session.idle` was observed through the isolated OpenCode QA SSE attach probe. The real DB stayed at 2,379 sessions and the real worker store at 155 records; isolated processes stopped.
 - Final eight-scenario matrix passes. Repeated normal bounds: RSS 685,008-793,180 KiB, FDs 83-87, inotify FDs 2, sandbox bytes 228,592,684-228,598,170, CPU <=2,115 ticks, wall <=39 seconds, no orphan process.
 - Evidence: ignored `.omo/evidence/20261105-blocked-worker-incident/`.
+
+### Provider-quota follow-up
+
+- Final focused scope on Bun 1.4.3: 291 pass, 0 fail, 975 assertions across 12 files.
+- Wider affected suites: background-agent 883 pass; delegation-first + background-task 303 pass; Senpi build-extension 24 pass.
+- Scoped `packages/omo-opencode` typecheck exits 0 (the `script/` tsconfig still reports its pre-existing missing-markdown-module declarations; no `script/` source error is introduced).
+- Candidate bundle: SHA-256 `26de42383d292a14935e18b175c542297df1248999222ab14c28b7c82795306d` (6,551,869 bytes), source fingerprint `0ba3f5ba7190435543fbae3cbda9ff38dac9f87cc725bf1cecb1987fc8ed8e41`.
+- Real OpenCode 1.19.3 `provider-quota`: exactly one request to the exhausted `openai/gpt-fake-free`; durable `blocked` terminal with `provider_quota_exhausted` and the exact message; structured `providerError`; monotonic acknowledged wake; `background_output` retrieval; autonomous parent resume; definitive root exit; no recovery probe; only local free fake models; real DB unchanged at 2,391 sessions and worker store at 278 records; no orphan process.
+- Negative control `empty` on the same bundle still produces `BLOCKED: assistant turn completed with no output` with no `providerError`.
+- Evidence: ignored `.omo/evidence/20261107-provider-quota-incident/`.
 
 ### Codex
 
@@ -100,11 +122,12 @@ Status: Slices A-E are merged and the PR #5 artifact was deployed and verified b
 
 ## Current decision and next actions
 
-1. Push the Garmin incident branch and open a follow-up PR against `release/canonical-20261029`.
-2. Verify the intended diff, CLA, CI, review, and merge readiness; merge with a merge commit only after every required check passes.
-3. Build and verify the exact merged follow-up commit with the pre-follow-up release head as rollback target.
-4. Stop before production deployment. Do not reconcile `dev`, mutate production source/configuration, bypass guards, allow unbounded retries, or contact a real paid provider.
-5. Wiki.js publication for the earlier PR #5 deployment remains a separate operational-documentation follow-up.
+1. Commit the verified provider-quota source, harness, test, and checkpoint changes in atomic units; do not include `.omo/evidence/` or `dist/`.
+2. Push the follow-up branch and open reviewer-readable PR(s) against `release/canonical-20261029` when delivery is authorized.
+3. Verify the intended diff, CLA, CI, review, and merge readiness; merge with a merge commit only after every required check passes.
+4. Build and verify the exact merged follow-up commit with the pre-follow-up release head as rollback target.
+5. Stop before production deployment. Do not reconcile `dev`, mutate production source/configuration, bypass guards, allow unbounded retries, or contact a real paid provider.
+6. Wiki.js publication for the earlier PR #5 deployment remains a separate operational-documentation follow-up.
 
 ## Separate housekeeping and deferred work
 

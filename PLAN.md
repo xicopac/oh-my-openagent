@@ -1,7 +1,7 @@
 # OMO Stabilization Plan
 
-Last updated: 2026-11-06 (Europe/Madrid)
-Owner: Codex
+Last updated: 2026-11-08 (Europe/Madrid)
+Owner: Codex / vanilla OpenCode continuation
 Canonical base: `d4e2979b80de9d04768f380828bfca4b428276ae` (merged PR stack on `release/canonical-20261029`)
 Implementation worktree: `/srv/dev/omo-canonical-release-rc-wt/fix/stabilize-slice-e-release-gate` (Slice E, based directly on the merged release head)
 Production boundary: `/srv/dev/oh-my-openagent` remains untouched. The Garmin incident follow-up explicitly prohibits deployment; production Git history must not be rewritten or synchronized.
@@ -236,6 +236,35 @@ Verification:
 - Matching `session.idle` observed on the isolated SSE stream; four durable acknowledged empty terminals; exact retrieval before each next action; two failures, two probes, one halt; no fifth provider request/record; definitive root exit.
 - Final eight-scenario runtime matrix passes with unchanged real DB/worker stores, bounded repeated resources, and no process leak.
 - Evidence stays ignored at `.omo/evidence/20261105-blocked-worker-incident/`. Production deployment is prohibited for this follow-up.
+
+### Slice E follow-up — provider quota
+
+Files:
+
+- `packages/omo-opencode/src/features/background-agent/provider-error.ts` and `provider-error-types.ts`.
+- Background manager fallback, terminal-claim, notification, worker-record, and result/status formatting modules.
+- `packages/omo-opencode/src/features/delegation-first/recovery-scope.ts`.
+- `script/qa/worker-runtime-matrix/run.sh` and `fake-provider.mjs`.
+- `script/build.ts`, `script/build-nodes.ts`, and the Senpi extension build entry.
+
+Changes:
+
+- Preserve quota exhaustion as a distinct terminal class with structured provider/model/code/message/retryability/quota fields; keep the exact provider message.
+- Persist the structured snapshot and reason code atomically with the blocked terminal record and wake outbox.
+- Claim the terminal state synchronously before awaited result capture so empty-turn/completion paths cannot overwrite the quota reason.
+- Exclude the exhausted provider from fallback while still allowing a different authorized free provider; dispatch no paid/unknown model unattended.
+- Render the provider error in the parent wake, all-complete summary, `background_output`, and task status.
+- Authorize the exact regression-harness commands in recovery scope without opening traversal, `-c`, extra arguments, or compound mutations.
+- Implement the real `provider-quota` scenario and propagate the pinned Bun 1.4.3 executable to nested build steps.
+
+Verification checkpoint (2026-11-08):
+
+- Focused scope: 291 tests pass / 0 fail / 975 assertions across 12 files.
+- Wider affected suites: background-agent 883 pass; delegation-first + background-task 303 pass; Senpi build-extension 24 pass; scoped OpenCode typecheck exits 0.
+- Candidate bundle SHA-256 `26de42383d292a14935e18b175c542297df1248999222ab14c28b7c82795306d` (6,551,869 bytes) on source fingerprint `0ba3f5ba7190435543fbae3cbda9ff38dac9f87cc725bf1cecb1987fc8ed8e41`.
+- Real OpenCode 1.19.3 `provider-quota`: exactly one request to the exhausted free fake model; durable `blocked` / `provider_quota_exhausted`; exact message and structured snapshot; monotonic acknowledged wake; `background_output` retrieval; autonomous parent resume; definitive exit; no recovery probe; unchanged real DB (2,391 sessions) and worker store (278 records); no orphan process.
+- `empty` negative control on the same bundle still yields `BLOCKED: assistant turn completed with no output` with no provider error.
+- Evidence: ignored `.omo/evidence/20261107-provider-quota-incident/`. No production deployment.
 
 ## Execution rules
 
